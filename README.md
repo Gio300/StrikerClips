@@ -52,17 +52,18 @@ npm run dev
 
 ## GitHub Repo Setup
 
-1. Create a new repository on GitHub (e.g. `StrikerClips`)
-2. In your project folder:
+1. Create a new repository on GitHub (e.g. `StrikerClips`) – do **not** initialize with README
+2. Push from your project folder (Git Bash or PowerShell):
+   ```powershell
+   # PowerShell – replace YOUR_USERNAME with your GitHub username
+   .\push-to-github.ps1 -Username YOUR_USERNAME
+   ```
+   Or manually:
    ```bash
-   git init
-   git add .
-   git commit -m "Initial commit"
-   git branch -M main
    git remote add origin https://github.com/YOUR_USERNAME/StrikerClips.git
    git push -u origin main
    ```
-3. In repo Settings > Pages, set Source to "GitHub Actions"
+3. In repo **Settings > Pages**, set Source to **GitHub Actions**
 4. Add secrets: `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY`
 
 ## License
