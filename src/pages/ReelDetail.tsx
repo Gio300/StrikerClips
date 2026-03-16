@@ -14,7 +14,7 @@ export function ReelDetail() {
     async function fetch() {
       const { data: reelData } = await supabase
         .from('reels')
-        .select('*, profiles(username)')
+        .select('*, profiles(username, power_level)')
         .eq('id', id)
         .single()
       setReel(reelData)
@@ -61,7 +61,11 @@ export function ReelDetail() {
         <div className="p-6">
           <h1 className="text-2xl font-bold">{reel.title}</h1>
           <p className="text-gray-400 mt-2">
-            by {reel.profiles?.username ?? 'Unknown'} • {reel.clip_ids?.length ?? 0} clips
+            by <Link to={`/profile/${reel.user_id}`} className="text-accent hover:underline">{reel.profiles?.username ?? 'Unknown'}</Link>
+            {(reel.profiles as { power_level?: number })?.power_level != null && (reel.profiles as { power_level?: number }).power_level! > 0 && (
+              <> · PL {(reel.profiles as { power_level?: number }).power_level}</>
+            )}
+            {' • '}{reel.clip_ids?.length ?? 0} clips
           </p>
         </div>
       </div>

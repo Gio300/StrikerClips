@@ -14,6 +14,13 @@ import { MatchDetail } from '@/pages/MatchDetail'
 import { Boards } from '@/pages/Boards'
 import { BoardDetail } from '@/pages/BoardDetail'
 import { Profile } from '@/pages/Profile'
+import { Tournaments } from '@/pages/Tournaments'
+import { Live } from '@/pages/Live'
+import { AI } from '@/pages/AI'
+import { CreateHighlight } from '@/pages/CreateHighlight'
+import { Rankings } from '@/pages/Rankings'
+import { StatCheck } from '@/pages/StatCheck'
+import { SubmitResult } from '@/pages/SubmitResult'
 
 export default function App() {
   return (
@@ -24,14 +31,22 @@ export default function App() {
         <Route path="signup" element={<Signup />} />
         <Route path="reels" element={<Reels />} />
         <Route path="reels/:id" element={<ReelDetail />} />
-        <Route path="reels/create" element={<AuthGuard><CreateReel /></AuthGuard>} />
+        <Route path="reels/create" element={<AuthGuard><CreateHighlight /></AuthGuard>} />
+        <Route path="highlight/create" element={<AuthGuard><CreateHighlight /></AuthGuard>} />
         <Route path="matches" element={<Matches />} />
         <Route path="matches/create" element={<AuthGuard><CreateMatch /></AuthGuard>} />
         <Route path="matches/:id" element={<MatchDetail />} />
+        <Route path="tournaments" element={<Tournaments />} />
         <Route path="boards" element={<Boards />} />
+        <Route path="live" element={<Live />} />
+        <Route path="ai" element={<AI />} />
+        <Route path="rankings" element={<Rankings />} />
+        <Route path="stat-check" element={<StatCheck />} />
+        <Route path="submit-result" element={<SubmitResult />} />
         <Route path="boards/create" element={<AuthGuard><CreateServer /></AuthGuard>} />
         <Route path="boards/:serverId/:channelId?" element={<BoardDetail />} />
         <Route path="profile" element={<Profile />} />
+        <Route path="profile/:userId" element={<Profile />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

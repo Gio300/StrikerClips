@@ -11,7 +11,7 @@ export function Reels() {
     async function fetch() {
       const { data } = await supabase
         .from('reels')
-        .select('*, profiles(username)')
+        .select('*, profiles(username, power_level)')
         .order('created_at', { ascending: false })
       setReels(data ?? [])
       setLoading(false)
@@ -59,7 +59,11 @@ export function Reels() {
             <div className="p-4">
               <h2 className="font-semibold truncate">{reel.title}</h2>
               <p className="text-sm text-gray-400 mt-1">
-                {(reel as Reel & { profiles?: { username: string } }).profiles?.username ?? 'Unknown'} • {reel.clip_ids?.length ?? 0} clips
+                <Link to={`/profile/${reel.user_id}`} className="text-accent hover:underline">{(reel as Reel & { profiles?: { username: string; power_level?: number } }).profiles?.username ?? 'Unknown'}</Link>
+                {((reel as Reel & { profiles?: { power_level?: number } }).profiles?.power_level != null && (reel as Reel & { profiles?: { power_level?: number } }).profiles!.power_level! > 0) && (
+                  <> · PL {(reel as Reel & { profiles?: { power_level?: number } }).profiles!.power_level}</>
+                )}
+                {' • '}{reel.clip_ids?.length ?? 0} clips
               </p>
             </div>
           </Link>

@@ -1,0 +1,12 @@
+---
+description: ss-tournaments project context - deploy target and repo identity
+alwaysApply: true
+---
+
+# ss-tournaments Project
+
+- The project/repo we update is **ss-tournaments** (GitHub: Gio300/SS-Tournaments)
+- The workspace folder may be named StrikerClips, but the project is ss-tournaments
+- Deploy target: **Gio300/SS-Tournaments** (https://github.com/Gio300/SS-Tournaments)
+- When the user says "update ss-tournaments" or "deploy ss-tournaments", they mean this codebase
+- Deployment: Push to `main` triggers GitHub Actions (`pages-build-deployment`) to deploy to GitHub Pages

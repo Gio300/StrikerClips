@@ -37,7 +37,7 @@ export function BoardDetail() {
     async function fetchMessages() {
       const { data } = await supabase
         .from('messages')
-        .select('*, profiles(username)')
+        .select('*, profiles(username, power_level)')
         .eq('channel_id', activeChannel.id)
         .order('created_at', { ascending: true })
       setMessages(data ?? [])
@@ -110,6 +110,9 @@ export function BoardDetail() {
                   <div>
                     <span className="text-accent text-sm font-medium">
                       {(msg.profiles as { username?: string })?.username ?? 'Unknown'}
+                      {(msg.profiles as { power_level?: number })?.power_level != null && (msg.profiles as { power_level?: number }).power_level! > 0 && (
+                        <span className="text-gray-500 font-normal ml-1">· PL {(msg.profiles as { power_level?: number }).power_level}</span>
+                      )}
                     </span>
                     <span className="text-gray-500 text-sm ml-2">
                       {new Date(msg.created_at).toLocaleTimeString()}

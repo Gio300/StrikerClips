@@ -6,6 +6,9 @@ export interface Profile {
   avatar_url: string | null
   bio: string | null
   social_links: Json | null
+  power_level?: number
+  country?: string | null
+  dashboard_override?: Json | null
   created_at: string
   updated_at: string
 }
@@ -40,6 +43,38 @@ export interface Match {
   created_at: string
 }
 
+export interface LiveStream {
+  id: string
+  user_id: string
+  youtube_url: string
+  title: string | null
+  is_live: boolean
+  created_at: string
+}
+
+export interface LiveGroup {
+  id: string
+  name: string
+  creator_id: string | null
+  created_at: string
+}
+
+export interface LiveGroupMember {
+  id: string
+  group_id: string
+  user_id: string
+  stream_id: string | null
+  accepted: boolean
+}
+
+export interface UserYoutubeLink {
+  id: string
+  user_id: string
+  url: string
+  title: string | null
+  created_at: string
+}
+
 export interface Server {
   id: string
   name: string
@@ -64,10 +99,71 @@ export interface Message {
   created_at: string
 }
 
-export interface Reaction {
+export interface DmConversation {
   id: string
-  message_id: string
+  name: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface DmParticipant {
+  id: string
+  conversation_id: string
+  user_id: string
+  joined_at: string
+}
+
+export interface DmMessage {
+  id: string
+  conversation_id: string
+  user_id: string
+  content: string
+  created_at: string
+}
+
+export interface Poll {
+  id: string
+  user_id: string
+  question: string
+  created_at: string
+  ends_at: string | null
+}
+
+export interface PollOption {
+  id: string
+  poll_id: string
+  text: string
+  order: number
+}
+
+export interface PollVote {
+  id: string
+  poll_id: string
+  poll_option_id: string
+  user_id: string
+  created_at: string
+}
+
+export interface Activity {
+  id: string
+  user_id: string
+  type: 'reel_created' | 'follow' | 'reel_like' | 'poll_created'
+  target_id: string | null
+  target_meta: Json
+  created_at: string
+}
+
+export interface ReelReaction {
+  id: string
+  reel_id: string
   user_id: string
   emoji: string
+  created_at: string
+}
+
+export interface Follow {
+  id: string
+  follower_id: string
+  following_id: string
   created_at: string
 }
