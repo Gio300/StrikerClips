@@ -47,16 +47,25 @@ create table if not exists public.matches (
   name text not null,
   description text,
   reel_ids uuid[] default '{}',
+  scheduled_at timestamptz,
   created_at timestamptz default now()
 );
+alter table public.matches add column if not exists scheduled_at timestamptz;
 
--- Servers (Discord-style communities)
+-- Servers (Discord-style communities / clans)
 create table if not exists public.servers (
   id uuid default uuid_generate_v4() primary key,
   name text not null,
   icon_url text,
+  total_points integer default 0,
+  updated_at timestamptz default now(),
   created_at timestamptz default now()
 );
+alter table public.servers add column if not exists total_points integer default 0;
+alter table public.servers add column if not exists updated_at timestamptz default now();
+alter table public.servers add column if not exists owner_id uuid references public.profiles(id) on delete set null;
+alter table public.servers add column if not exists clan_tag text;
+alter table public.servers add column if not exists join_mode text default 'open';
 
 -- Server members
 create table if not exists public.server_members (
@@ -182,6 +191,15 @@ drop policy if exists "Users can join servers" on public.server_members;
 create policy "Users can join servers" on public.server_members for insert with check (auth.uid() = user_id);
 drop policy if exists "Users can leave servers" on public.server_members;
 create policy "Users can leave servers" on public.server_members for delete using (auth.uid() = user_id);
+drop policy if exists "Admins can update server member roles" on public.server_members;
+create policy "Admins can update server member roles" on public.server_members for update using (
+  exists (
+    select 1 from public.server_members sm
+    join public.servers s on s.id = sm.server_id
+    where sm.server_id = server_id and sm.user_id = auth.uid()
+    and (sm.role in ('owner', 'admin') or s.owner_id = auth.uid())
+  )
+);
 
 -- RLS Policies: Channels
 drop policy if exists "Channels viewable by everyone" on public.channels;
@@ -253,12 +271,22 @@ create trigger on_auth_user_created
   after insert on auth.users
   for each row execute procedure public.handle_new_user();
 
+-- Backfill profiles for users who signed up before handle_new_user existed (one-time, idempotent)
+-- Uses id-based username to guarantee uniqueness; users can change it later
+insert into public.profiles (id, username)
+select u.id, 'user_' || replace(u.id::text, '-', '')
+from auth.users u
+left join public.profiles p on p.id = u.id
+where p.id is null
+on conflict (id) do nothing;
+
 -- Storage buckets (idempotent; skip if storage schema not ready)
 do $$ begin
   insert into storage.buckets (id, name, public) values ('videos', 'videos', true) on conflict (id) do nothing;
   insert into storage.buckets (id, name, public) values ('avatars', 'avatars', true) on conflict (id) do nothing;
   insert into storage.buckets (id, name, public) values ('stat-check-videos', 'stat-check-videos', true) on conflict (id) do nothing;
   insert into storage.buckets (id, name, public) values ('match-screenshots', 'match-screenshots', true) on conflict (id) do nothing;
+  insert into storage.buckets (id, name, public) values ('post-images', 'post-images', true) on conflict (id) do nothing;
 exception when others then null;
 end $$;
 
@@ -298,6 +326,15 @@ drop policy if exists "Users can update own match screenshots" on storage.object
 create policy "Users can update own match screenshots" on storage.objects for update using (bucket_id = 'match-screenshots' and auth.uid()::text = (storage.foldername(name))[1]);
 drop policy if exists "Users can delete own match screenshots" on storage.objects;
 create policy "Users can delete own match screenshots" on storage.objects for delete using (bucket_id = 'match-screenshots' and auth.uid()::text = (storage.foldername(name))[1]);
+
+drop policy if exists "Post images viewable" on storage.objects;
+create policy "Post images viewable" on storage.objects for select using (bucket_id = 'post-images');
+drop policy if exists "Users upload post images" on storage.objects;
+create policy "Users upload post images" on storage.objects for insert with check (bucket_id = 'post-images' and auth.uid() is not null);
+drop policy if exists "Users update own post images" on storage.objects;
+create policy "Users update own post images" on storage.objects for update using (bucket_id = 'post-images' and auth.uid()::text = (storage.foldername(name))[1]);
+drop policy if exists "Users delete own post images" on storage.objects;
+create policy "Users delete own post images" on storage.objects for delete using (bucket_id = 'post-images' and auth.uid()::text = (storage.foldername(name))[1]);
 
 -- Seed default server and channels (unique index for ON CONFLICT)
 create unique index if not exists channels_server_name_idx on public.channels (server_id, name);
@@ -420,15 +457,117 @@ create trigger on_reel_like_activity after insert on public.reel_likes for each 
 drop trigger if exists on_poll_created_activity on public.polls;
 create trigger on_poll_created_activity after insert on public.polls for each row execute procedure public.record_poll_activity();
 
+-- Posts (feed, polls, attachments for Profile wall)
+create table if not exists public.posts (
+  id uuid default uuid_generate_v4() primary key,
+  user_id uuid references public.profiles(id) on delete cascade not null,
+  body text not null default '',
+  created_at timestamptz default now(),
+  updated_at timestamptz default now()
+);
+create table if not exists public.post_attachments (
+  id uuid default uuid_generate_v4() primary key,
+  post_id uuid references public.posts(id) on delete cascade not null,
+  type text check (type in ('image', 'reel')) not null,
+  url_or_id text not null,
+  sort_order integer default 0,
+  created_at timestamptz default now()
+);
+create table if not exists public.post_polls (
+  id uuid default uuid_generate_v4() primary key,
+  post_id uuid references public.posts(id) on delete cascade not null unique,
+  question text not null,
+  ends_at timestamptz,
+  created_at timestamptz default now()
+);
+create table if not exists public.post_poll_options (
+  id uuid default uuid_generate_v4() primary key,
+  poll_id uuid references public.post_polls(id) on delete cascade not null,
+  label text not null,
+  sort_order integer default 0,
+  created_at timestamptz default now()
+);
+create table if not exists public.post_poll_votes (
+  id uuid default uuid_generate_v4() primary key,
+  option_id uuid references public.post_poll_options(id) on delete cascade not null,
+  user_id uuid references public.profiles(id) on delete cascade not null,
+  created_at timestamptz default now(),
+  unique(option_id, user_id)
+);
+
+alter table public.posts enable row level security;
+alter table public.post_attachments enable row level security;
+alter table public.post_polls enable row level security;
+alter table public.post_poll_options enable row level security;
+alter table public.post_poll_votes enable row level security;
+
+drop policy if exists "Posts viewable by everyone" on public.posts;
+create policy "Posts viewable by everyone" on public.posts for select using (true);
+drop policy if exists "Users insert own posts" on public.posts;
+create policy "Users insert own posts" on public.posts for insert with check (auth.uid() = user_id);
+drop policy if exists "Users update own posts" on public.posts;
+create policy "Users update own posts" on public.posts for update using (auth.uid() = user_id);
+drop policy if exists "Users delete own posts" on public.posts;
+create policy "Users delete own posts" on public.posts for delete using (auth.uid() = user_id);
+
+drop policy if exists "Post attachments viewable" on public.post_attachments;
+create policy "Post attachments viewable" on public.post_attachments for select using (true);
+drop policy if exists "Users insert attachments for own posts" on public.post_attachments;
+create policy "Users insert attachments for own posts" on public.post_attachments for insert with check (exists (select 1 from public.posts where id = post_id and user_id = auth.uid()));
+drop policy if exists "Users delete attachments for own posts" on public.post_attachments;
+create policy "Users delete attachments for own posts" on public.post_attachments for delete using (exists (select 1 from public.posts where id = post_id and user_id = auth.uid()));
+
+drop policy if exists "Post polls viewable" on public.post_polls;
+create policy "Post polls viewable" on public.post_polls for select using (true);
+drop policy if exists "Users insert polls for own posts" on public.post_polls;
+create policy "Users insert polls for own posts" on public.post_polls for insert with check (exists (select 1 from public.posts where id = post_id and user_id = auth.uid()));
+drop policy if exists "Users update polls for own posts" on public.post_polls;
+create policy "Users update polls for own posts" on public.post_polls for update using (exists (select 1 from public.posts where id = post_id and user_id = auth.uid()));
+drop policy if exists "Users delete polls for own posts" on public.post_polls;
+create policy "Users delete polls for own posts" on public.post_polls for delete using (exists (select 1 from public.posts where id = post_id and user_id = auth.uid()));
+
+drop policy if exists "Post poll options viewable" on public.post_poll_options;
+create policy "Post poll options viewable" on public.post_poll_options for select using (true);
+drop policy if exists "Users insert poll options for own posts" on public.post_poll_options;
+create policy "Users insert poll options for own posts" on public.post_poll_options for insert with check (exists (select 1 from public.post_polls pp join public.posts p on p.id = pp.post_id where pp.id = poll_id and p.user_id = auth.uid()));
+
+drop policy if exists "Post poll votes viewable" on public.post_poll_votes;
+create policy "Post poll votes viewable" on public.post_poll_votes for select using (true);
+drop policy if exists "Users vote on polls" on public.post_poll_votes;
+create policy "Users vote on polls" on public.post_poll_votes for insert with check (auth.uid() = user_id);
+drop policy if exists "Users remove own votes" on public.post_poll_votes;
+create policy "Users remove own votes" on public.post_poll_votes for delete using (auth.uid() = user_id);
+
+create index if not exists posts_user_id on public.posts(user_id);
+create index if not exists posts_created_at on public.posts(created_at desc);
+create index if not exists post_attachments_post_id on public.post_attachments(post_id);
+create index if not exists post_poll_options_poll_id on public.post_poll_options(poll_id);
+create index if not exists post_poll_votes_option_id on public.post_poll_votes(option_id);
+
 -- Profiles extension, match results, stat check
 alter table public.profiles add column if not exists power_level integer default 0;
 alter table public.profiles add column if not exists country text;
 alter table public.profiles add column if not exists dashboard_override jsonb;
+alter table public.profiles add column if not exists game_tag text;
+alter table public.profiles add column if not exists theme_prefs jsonb default '{}';
+alter table public.profiles add column if not exists text_scale_override numeric default 1;
 
-create table if not exists public.match_results (id uuid default uuid_generate_v4() primary key, uploader_id uuid references public.profiles(id) on delete cascade not null, screenshot_url text, screenshot_hash text, match_type text not null check (match_type in ('survival', 'quick_match', 'red_white', 'ninja_world_league', 'tournament')), status text not null default 'pending' check (status in ('pending', 'verified', 'rejected')), verified_at timestamptz, verified_by uuid references public.profiles(id), created_at timestamptz default now());
+create table if not exists public.match_results (id uuid default uuid_generate_v4() primary key, uploader_id uuid references public.profiles(id) on delete cascade not null, screenshot_url text, screenshot_hash text, match_type text not null check (match_type in ('survival', 'quick_match', 'red_white', 'ninja_world_league', 'tournament', 'barrier_battle')), status text not null default 'pending' check (status in ('pending', 'verified', 'rejected')), verified_at timestamptz, verified_by uuid references public.profiles(id), created_at timestamptz default now());
 alter table public.match_results add column if not exists screenshot_hash text;
+alter table public.match_results add column if not exists play_time_sec integer;
+alter table public.match_results add column if not exists results_remaining_sec integer;
+alter table public.match_results add column if not exists game text default 'shinobi_striker';
+alter table public.match_results add column if not exists uploader_in_game_name text;
+do $$ begin
+  alter table public.match_results drop constraint if exists match_results_match_type_check;
+  alter table public.match_results add constraint match_results_match_type_check check (match_type in ('survival', 'quick_match', 'red_white', 'ninja_world_league', 'tournament', 'barrier_battle'));
+exception when others then null;
+end $$;
 create table if not exists public.match_result_players (id uuid default uuid_generate_v4() primary key, result_id uuid references public.match_results(id) on delete cascade not null, profile_id uuid references public.profiles(id) on delete cascade not null, role text not null check (role in ('winner', 'loser', 'participant')), score integer, team text check (team in ('red', 'white')), unique(result_id, profile_id));
-create table if not exists public.power_ratings (profile_id uuid references public.profiles(id) on delete cascade not null, match_type text not null, rating integer not null default 1000, wins integer not null default 0, losses integer not null default 0, updated_at timestamptz default now(), primary key (profile_id, match_type));
+alter table public.match_result_players add column if not exists points integer;
+alter table public.match_result_players add column if not exists in_game_name text;
+create table if not exists public.power_ratings (profile_id uuid references public.profiles(id) on delete cascade not null, match_type text not null, rating integer not null default 1000, wins integer not null default 0, losses integer not null default 0, accumulated_points integer not null default 0, updated_at timestamptz default now(), primary key (profile_id, match_type));
+alter table public.power_ratings add column if not exists accumulated_points integer not null default 0;
 create table if not exists public.trophies (id uuid default uuid_generate_v4() primary key, profile_id uuid references public.profiles(id) on delete cascade not null, trophy_type text not null, earned_at timestamptz default now(), metadata jsonb default '{}');
 
 create table if not exists public.stat_check_submissions (id uuid default uuid_generate_v4() primary key, user_id uuid references public.profiles(id) on delete cascade not null, video_url text not null, character_name text, description text, status text not null default 'pending' check (status in ('pending', 'approved', 'rejected')), reviewed_at timestamptz, created_at timestamptz default now());
@@ -437,6 +576,10 @@ create index if not exists idx_match_results_uploader on public.match_results(up
 create index if not exists idx_match_results_status on public.match_results(status);
 do $$ begin
   create unique index idx_match_results_screenshot_hash_unique on public.match_results (screenshot_hash) where screenshot_hash is not null;
+exception when others then null;
+end $$;
+do $$ begin
+  create unique index idx_match_results_duplicate_detect on public.match_results (play_time_sec, results_remaining_sec, screenshot_hash) where play_time_sec is not null and results_remaining_sec is not null and screenshot_hash is not null;
 exception when others then null;
 end $$;
 create index if not exists idx_power_ratings_profile on public.power_ratings(profile_id);
@@ -467,49 +610,60 @@ create policy "Stat check viewable" on public.stat_check_submissions for select 
 drop policy if exists "Users insert stat check" on public.stat_check_submissions;
 create policy "Users insert stat check" on public.stat_check_submissions for insert with check (auth.uid() = user_id);
 
--- Power ratings trigger: update power_ratings and profiles.power_level when verified match result players are inserted
+-- Power ratings trigger: update power_ratings (accumulated_points) and profiles.power_level when verified match result players are inserted
 create or replace function public.update_power_ratings_on_match() returns trigger as $$
 declare
   v_match_type text;
   v_status text;
-  v_rating_delta int;
+  v_points int;
+  v_uploader_id uuid;
 begin
-  select mr.match_type, mr.status into v_match_type, v_status
+  select mr.match_type, mr.status, mr.uploader_id into v_match_type, v_status, v_uploader_id
   from public.match_results mr where mr.id = new.result_id;
 
   if v_status != 'verified' then
     return new;
   end if;
 
-  if new.role = 'winner' then
-    v_rating_delta := 25;
-  elsif new.role = 'loser' then
-    v_rating_delta := -25;
-  else
-    return new;
-  end if;
+  v_points := coalesce(new.points, 0);
 
-  insert into public.power_ratings (profile_id, match_type, rating, wins, losses, updated_at)
+  insert into public.power_ratings (profile_id, match_type, rating, wins, losses, accumulated_points, updated_at)
   values (
     new.profile_id,
     v_match_type,
-    1000 + v_rating_delta,
-    case when new.role = 'winner' then 1 else 0 end,
-    case when new.role = 'loser' then 1 else 0 end,
+    1000,
+    0,
+    0,
+    v_points,
     now()
   )
   on conflict (profile_id, match_type) do update set
-    rating = power_ratings.rating + v_rating_delta,
-    wins = power_ratings.wins + case when new.role = 'winner' then 1 else 0 end,
-    losses = power_ratings.losses + case when new.role = 'loser' then 1 else 0 end,
+    accumulated_points = power_ratings.accumulated_points + v_points,
     updated_at = now();
+
+  if new.role = 'winner' then
+    update public.power_ratings set wins = wins + 1, updated_at = now() where profile_id = new.profile_id and match_type = v_match_type;
+  elsif new.role = 'loser' then
+    update public.power_ratings set losses = losses + 1, updated_at = now() where profile_id = new.profile_id and match_type = v_match_type;
+  end if;
 
   update public.profiles
   set power_level = coalesce(
-    (select max(rating) from public.power_ratings where profile_id = new.profile_id),
+    (select sum(accumulated_points) from public.power_ratings where profile_id = new.profile_id),
     0
   )
   where id = new.profile_id;
+
+  -- Award "its over 9000" trophy when total points >= 9000
+  insert into public.trophies (profile_id, trophy_type, metadata)
+  select new.profile_id, 'its_over_9000', jsonb_build_object('points', (select sum(accumulated_points) from public.power_ratings where profile_id = new.profile_id))
+  where (select coalesce(sum(accumulated_points), 0) from public.power_ratings where profile_id = new.profile_id) >= 9000
+    and not exists (select 1 from public.trophies where profile_id = new.profile_id and trophy_type = 'its_over_9000');
+
+  update public.servers
+  set total_points = total_points + v_points,
+      updated_at = now()
+  where id in (select server_id from public.server_members where user_id = new.profile_id);
 
   return new;
 end;
@@ -519,3 +673,25 @@ drop trigger if exists on_match_result_player_insert_power on public.match_resul
 create trigger on_match_result_player_insert_power
   after insert on public.match_result_players
   for each row execute procedure public.update_power_ratings_on_match();
+
+-- Tournaments (if not from 005)
+create table if not exists public.tournaments (
+  id uuid primary key default uuid_generate_v4(),
+  name text not null,
+  description text,
+  server_id uuid references public.servers(id) on delete set null,
+  created_at timestamptz default now(),
+  created_by uuid references public.profiles(id) on delete set null
+);
+alter table public.tournaments add column if not exists rules text;
+alter table public.tournaments add column if not exists stat_check_times jsonb default '[]';
+alter table public.tournaments add column if not exists tournament_days_times jsonb default '{}';
+alter table public.tournaments enable row level security;
+drop policy if exists "Tournaments viewable" on public.tournaments;
+create policy "Tournaments viewable" on public.tournaments for select using (true);
+drop policy if exists "Users create tournaments" on public.tournaments;
+create policy "Users create tournaments" on public.tournaments for insert with check (auth.uid() is not null);
+drop policy if exists "Users update tournaments" on public.tournaments;
+create policy "Users update tournaments" on public.tournaments for update using (auth.uid() is not null);
+drop policy if exists "Users delete tournaments" on public.tournaments;
+create policy "Users delete tournaments" on public.tournaments for delete using (auth.uid() is not null);
