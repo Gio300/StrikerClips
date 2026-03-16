@@ -551,6 +551,12 @@ alter table public.profiles add column if not exists dashboard_override jsonb;
 alter table public.profiles add column if not exists game_tag text;
 alter table public.profiles add column if not exists theme_prefs jsonb default '{}';
 alter table public.profiles add column if not exists text_scale_override numeric default 1;
+alter table public.profiles add column if not exists status text;
+do $$ begin
+  alter table public.profiles drop constraint if exists profiles_status_length;
+  alter table public.profiles add constraint profiles_status_length check (status is null or char_length(status) <= 60);
+exception when others then null;
+end $$;
 
 create table if not exists public.match_results (id uuid default uuid_generate_v4() primary key, uploader_id uuid references public.profiles(id) on delete cascade not null, screenshot_url text, screenshot_hash text, match_type text not null check (match_type in ('survival', 'quick_match', 'red_white', 'ninja_world_league', 'tournament', 'barrier_battle')), status text not null default 'pending' check (status in ('pending', 'verified', 'rejected')), verified_at timestamptz, verified_by uuid references public.profiles(id), created_at timestamptz default now());
 alter table public.match_results add column if not exists screenshot_hash text;
