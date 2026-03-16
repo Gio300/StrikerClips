@@ -660,9 +660,21 @@ begin
   )
   where id = new.profile_id;
 
-  -- Award "its over 9000" trophy when total points >= 9000
+  -- Award trophies by total power level (encourages submission and prestige)
   insert into public.trophies (profile_id, trophy_type, metadata)
-  select new.profile_id, 'its_over_9000', jsonb_build_object('points', (select sum(accumulated_points) from public.power_ratings where profile_id = new.profile_id))
+  select new.profile_id, 'centurion', jsonb_build_object('points', (select coalesce(sum(accumulated_points), 0) from public.power_ratings where profile_id = new.profile_id))
+  where (select coalesce(sum(accumulated_points), 0) from public.power_ratings where profile_id = new.profile_id) >= 100
+    and not exists (select 1 from public.trophies where profile_id = new.profile_id and trophy_type = 'centurion');
+  insert into public.trophies (profile_id, trophy_type, metadata)
+  select new.profile_id, 'top_dog', jsonb_build_object('points', (select coalesce(sum(accumulated_points), 0) from public.power_ratings where profile_id = new.profile_id))
+  where (select coalesce(sum(accumulated_points), 0) from public.power_ratings where profile_id = new.profile_id) >= 1000
+    and not exists (select 1 from public.trophies where profile_id = new.profile_id and trophy_type = 'top_dog');
+  insert into public.trophies (profile_id, trophy_type, metadata)
+  select new.profile_id, 'legendary', jsonb_build_object('points', (select coalesce(sum(accumulated_points), 0) from public.power_ratings where profile_id = new.profile_id))
+  where (select coalesce(sum(accumulated_points), 0) from public.power_ratings where profile_id = new.profile_id) >= 5000
+    and not exists (select 1 from public.trophies where profile_id = new.profile_id and trophy_type = 'legendary');
+  insert into public.trophies (profile_id, trophy_type, metadata)
+  select new.profile_id, 'its_over_9000', jsonb_build_object('points', (select coalesce(sum(accumulated_points), 0) from public.power_ratings where profile_id = new.profile_id))
   where (select coalesce(sum(accumulated_points), 0) from public.power_ratings where profile_id = new.profile_id) >= 9000
     and not exists (select 1 from public.trophies where profile_id = new.profile_id and trophy_type = 'its_over_9000');
 
