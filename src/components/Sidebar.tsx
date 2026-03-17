@@ -1,5 +1,6 @@
 import { NavLink } from 'react-router-dom'
 import { useAuth } from '@/hooks/useAuth'
+import { BrandLogo } from '@/components/BrandLogo'
 
 export function Sidebar() {
   const { user } = useAuth()
@@ -7,7 +8,7 @@ export function Sidebar() {
   return (
     <aside className="w-16 md:w-64 bg-dark-card border-r border-dark-border flex flex-col">
       <div className="p-4 border-b border-dark-border">
-        <NavLink to="/" className="flex items-center gap-2">
+        <NavLink to="/" className="flex items-center gap-2 hover:opacity-90 transition-opacity">
           <div className="w-8 h-8 rounded-lg bg-accent/20 flex items-center justify-center">
             <svg className="w-5 h-5 text-accent" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <path d="M4 6v12l8-6 8 6V6H4z" strokeLinejoin="round"/>
@@ -15,8 +16,7 @@ export function Sidebar() {
             </svg>
           </div>
           <span className="hidden md:block font-semibold text-lg">
-            <span className="text-white">Smash</span>
-            <span className="text-accent">Hub</span>
+            <BrandLogo as="span" className="text-lg" />
           </span>
         </NavLink>
       </div>
@@ -88,17 +88,6 @@ export function Sidebar() {
           <span className="hidden md:block">Rankings</span>
         </NavLink>
         <NavLink
-          to="/stat-check"
-          className={({ isActive }) =>
-            `flex items-center gap-3 px-3 py-2 rounded-lg transition-colors ${
-              isActive ? 'bg-accent/10 text-accent' : 'text-gray-400 hover:text-white hover:bg-dark-border/50'
-            }`
-          }
-        >
-          <StatCheckIcon />
-          <span className="hidden md:block">Stat Check</span>
-        </NavLink>
-        <NavLink
           to="/profile"
           className={({ isActive }) =>
             `flex items-center gap-3 px-3 py-2 rounded-lg transition-colors ${
@@ -161,14 +150,6 @@ function RankingsIcon() {
   return (
     <svg className="w-5 h-5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
-    </svg>
-  )
-}
-
-function StatCheckIcon() {
-  return (
-    <svg className="w-5 h-5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
     </svg>
   )
 }

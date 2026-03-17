@@ -5,8 +5,9 @@ alwaysApply: true
 
 # ss-tournaments Project
 
-- The project/repo we update is **ss-tournaments** (GitHub: Gio300/SS-Tournaments)
-- The workspace folder may be named StrikerClips, but the project is ss-tournaments
+- **ONLY update SS-Tournaments.** Never update StrikerClips unless the user explicitly says "update StrikerClips" or "update the StrikerClips repo".
+- The project/repo we update is **ss-tournaments** (GitHub: Gio300/SS-Tournaments). Path: `c:\Users\Flying Phoenix PCs\Desktop\SS-Tournaments`
+- The workspace folder may be named StrikerClips, but the project and deploy target is SS-Tournaments
 - Deploy target: **Gio300/SS-Tournaments** (https://github.com/Gio300/SS-Tournaments)
-- When the user says "update ss-tournaments" or "deploy ss-tournaments", they mean this codebase
+- When the user says "update", "deploy", or "fix" without specifying a repo, they mean SS-Tournaments
 - Deployment: Push to `main` triggers GitHub Actions (`pages-build-deployment`) to deploy to GitHub Pages

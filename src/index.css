@@ -2,6 +2,14 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Brand gradient: green (#22c55e) to red (#ef4444) */
+.brand-gradient {
+  background: linear-gradient(to right, #22c55e, #ef4444);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
 @layer base {
   body {
     @apply bg-dark text-gray-100 font-sans antialiased;

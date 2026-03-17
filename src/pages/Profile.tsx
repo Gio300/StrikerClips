@@ -178,7 +178,15 @@ function ProfileContent() {
                   <span>{followersCount} followers</span>
                   <span>{followingCount} following</span>
                 </div>
-                <div className="flex gap-2 mt-4">
+                <div className="flex flex-wrap gap-2 mt-4">
+                  {targetUserId && (
+                    <Link
+                      to={`/profile/${targetUserId}/trophies`}
+                      className="text-accent hover:underline text-sm"
+                    >
+                      Trophies earned
+                    </Link>
+                  )}
                   {isOwnProfile ? (
                     <>
                       <button

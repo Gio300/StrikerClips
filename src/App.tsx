@@ -14,7 +14,9 @@ import { MatchDetail } from '@/pages/MatchDetail'
 import { Boards } from '@/pages/Boards'
 import { BoardDetail } from '@/pages/BoardDetail'
 import { Profile } from '@/pages/Profile'
+import { ProfileTrophies } from '@/pages/ProfileTrophies'
 import { Tournaments } from '@/pages/Tournaments'
+import { TournamentDetail } from '@/pages/TournamentDetail'
 import { Live } from '@/pages/Live'
 import { AI } from '@/pages/AI'
 import { CreateHighlight } from '@/pages/CreateHighlight'
@@ -37,6 +39,7 @@ export default function App() {
         <Route path="matches/create" element={<AuthGuard><CreateMatch /></AuthGuard>} />
         <Route path="matches/:id" element={<MatchDetail />} />
         <Route path="tournaments" element={<Tournaments />} />
+        <Route path="tournaments/:id" element={<TournamentDetail />} />
         <Route path="boards" element={<Boards />} />
         <Route path="live" element={<Live />} />
         <Route path="ai" element={<AI />} />
@@ -47,6 +50,7 @@ export default function App() {
         <Route path="boards/:serverId/:channelId?" element={<BoardDetail />} />
         <Route path="profile" element={<Profile />} />
         <Route path="profile/:userId" element={<Profile />} />
+        <Route path="profile/:userId/trophies" element={<ProfileTrophies />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

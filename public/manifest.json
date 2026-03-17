@@ -1,0 +1,10 @@
+{
+  "name": "ButtonMasherz",
+  "short_name": "ButtonMasherz",
+  "description": "Combine clips into highlight reels. Watch live. Connect with the community.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0f172a",
+  "theme_color": "#00d4ff",
+  "icons": []
+}

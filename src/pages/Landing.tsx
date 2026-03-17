@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/hooks/useAuth'
+import { BrandLogo } from '@/components/BrandLogo'
 import type { Reel } from '@/types/database'
 
 export function Landing() {
@@ -27,8 +28,7 @@ export function Landing() {
     <div className="p-8 max-w-4xl mx-auto animate-fade-in">
       <div className="text-center mb-12">
         <h1 className="text-4xl md:text-5xl font-bold tracking-tight mb-4">
-          <span className="text-white">Smash</span>
-          <span className="text-accent">Hub</span>
+          <BrandLogo as="h1" className="text-4xl md:text-5xl" />
         </h1>
         <p className="text-lg text-gray-400 mb-6">
           Combine clips into highlight reels. Watch live. Connect with the community.
