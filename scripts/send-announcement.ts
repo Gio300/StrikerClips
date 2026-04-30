@@ -1,10 +1,10 @@
 /**
- * SmashHub mass announcement script
+ * Shinobi Village mass announcement script
  *
  * Sends an email to all users with profiles via Gmail SMTP.
  *
  * Setup:
- * 1. Create a Gmail account for SmashHub
+ * 1. Create a Gmail account for Shinobi Village
  * 2. Enable 2FA, create an App Password: https://support.google.com/accounts/answer/185833
  * 3. Set env vars: GMAIL_USER, GMAIL_APP_PASSWORD, SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
  *
@@ -62,8 +62,8 @@ async function main() {
     }
   })
 
-  const subject = process.env.ANNOUNCEMENT_SUBJECT ?? 'SmashHub Announcement'
-  const from = process.env.GMAIL_FROM ?? `SmashHub <${gmailUser}>`
+  const subject = process.env.ANNOUNCEMENT_SUBJECT ?? 'Shinobi Village Announcement'
+  const from = process.env.GMAIL_FROM ?? `Shinobi Village <${gmailUser}>`
 
   const results = await transporter.sendMail({
     from,

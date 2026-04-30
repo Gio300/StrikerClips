@@ -2,9 +2,9 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Brand gradient: green (#22c55e) to red (#ef4444) */
+/* ---- Brand gradient (text) ---- */
 .brand-gradient {
-  background: linear-gradient(to right, #22c55e, #ef4444);
+  background: linear-gradient(110deg, #22c55e 0%, #ef4444 70%, #f59e0b 100%);
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
@@ -13,9 +13,76 @@
 @layer base {
   body {
     @apply bg-dark text-gray-100 font-sans antialiased;
-    background-image: 
-      linear-gradient(rgba(0, 212, 255, 0.03) 1px, transparent 1px),
-      linear-gradient(90deg, rgba(0, 212, 255, 0.03) 1px, transparent 1px);
-    background-size: 48px 48px;
+    /* Layered atmosphere: a soft red-glow at top, deep night, faint dot grid. */
+    background-image:
+      radial-gradient(ellipse 1100px 480px at 50% -120px, rgba(239, 68, 68, 0.12), transparent 60%),
+      radial-gradient(ellipse 700px 320px at 88% -80px, rgba(245, 158, 11, 0.08), transparent 70%),
+      radial-gradient(circle at 1px 1px, rgba(255, 255, 255, 0.04) 1px, transparent 1.2px);
+    background-size: auto, auto, 24px 24px;
+    background-attachment: fixed;
+  }
+
+  /* Slightly tighter heading tracking, less generic look. */
+  h1, h2, h3 {
+    letter-spacing: -0.01em;
+  }
+
+  /* Custom scrollbar that matches the dark theme. */
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-track { background: #0a0814; }
+  ::-webkit-scrollbar-thumb {
+    background: #251f33;
+    border-radius: 8px;
+  }
+  ::-webkit-scrollbar-thumb:hover { background: #3b3050; }
+}
+
+@layer components {
+  /* Primary CTA: kunai red→amber gradient with subtle glow on hover. */
+  .btn-primary {
+    @apply inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-lg font-semibold
+           text-white bg-gradient-kunai transition-all
+           shadow-md hover:shadow-kunai-lg hover:-translate-y-0.5 active:translate-y-0
+           disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:translate-y-0;
+  }
+
+  /* Secondary CTA: ghost button. */
+  .btn-ghost {
+    @apply inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-lg font-medium
+           border border-dark-border text-gray-300 bg-dark-card/40
+           hover:border-kunai/60 hover:text-white hover:bg-dark-card transition-colors
+           disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+
+  /* Card: subtle elevation, hover lift. */
+  .card {
+    @apply rounded-xl border border-dark-border bg-dark-card overflow-hidden;
+  }
+  .card-hover {
+    @apply transition-all hover:border-kunai/50 hover:-translate-y-0.5 hover:shadow-md;
+  }
+
+  /* Pill / badge */
+  .pill {
+    @apply inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium
+           bg-dark-elevated border border-dark-border text-gray-300;
+  }
+  .pill-kunai {
+    @apply inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium
+           bg-kunai/15 border border-kunai/40 text-kunai;
+  }
+  .pill-chakra {
+    @apply inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium
+           bg-chakra/15 border border-chakra/40 text-chakra;
+  }
+  .pill-accent {
+    @apply inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium
+           bg-accent/10 border border-accent/30 text-accent;
+  }
+
+  /* "Live" red dot */
+  .live-dot::before {
+    content: '';
+    @apply inline-block w-1.5 h-1.5 rounded-full bg-kunai mr-1.5 animate-pulse-soft;
   }
 }

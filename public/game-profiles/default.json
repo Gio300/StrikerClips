@@ -1,0 +1,25 @@
+{
+  "id": "default",
+  "name": "Any game",
+  "description": "Neutral profile. Works for any title — director uses 'most replayed' heatmap as the only signal.",
+  "tone": {
+    "energy": "chill",
+    "vocabulary": "casual",
+    "max_words_per_call": 12,
+    "persona": "a concise, friendly play-by-play voice"
+  },
+  "clutch_rules": [
+    { "name": "Big audio spike", "when": { "audio_loudness_jump": 12 }, "boost": 0.18 }
+  ],
+  "audio_cues": {
+    "explosion": { "min_db_jump": 12, "min_duration_ms": 200 },
+    "cheer": { "phrases": ["nice", "lets go", "oh my", "wow"] }
+  },
+  "narration": {
+    "intro": ["Squad lined up.", "Game on.", "Watch this."],
+    "kill": ["Down.", "Clean.", "Got him."],
+    "clutch": ["He is the only one left.", "Nobody is home but him.", "And he holds it down."],
+    "teamwork": ["Right behind him.", "Same play, two angles.", "Backup is here."],
+    "outro": ["And that is the play.", "Good game.", "Send it."]
+  }
+}

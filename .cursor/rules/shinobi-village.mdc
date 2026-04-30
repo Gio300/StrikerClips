@@ -1,0 +1,25 @@
+---
+description: ReelOne project context — repo identity, deploy target, branding
+alwaysApply: true
+---
+
+# ReelOne
+
+- This workspace is **ReelOne** — a multi-angle highlight platform for **any game** (not one title). Path: `C:\Users\Flying Phoenix PCs\Desktop\ShinobiVillage` (folder name predates the brand; do NOT rename).
+- Brand history: `Shinobi Village` → `ClutchLens` → **ReelOne** (current). Old strings may linger in storage keys (`clutchlens.obs.config`, `clutchlens.byok.*`, `clutchlens:actionCurve:`) and DB user metadata (`clutchlens_tier`); both are read for back-compat but new writes use the new brand.
+- The GitHub repo / GitHub Pages base path is environment-specific. Set `VITE_BASE_PATH` in `.env.local` to match the repo name (e.g. `/StrikerClips/` or future `/ReelOne/`). Deployment: pushes to `main` trigger `.github/workflows/deploy.yml`.
+- When the user says "update", "build", "fix", or "deploy" without naming a repo, they mean this project / ReelOne.
+
+## Branding
+
+- User-facing name: **ReelOne** (one word, camel). Source: `src/lib/brand.ts` and `BrandLogo` component.
+- Tagline: *"Every angle. Every clutch. One reel."*
+- Layout markers in `combined_video_url` use `reelone-layout://`; legacy `clutchlens-layout://` and `shinobi-layout://` are still decoded for old rows (`src/lib/reelLayout.ts`).
+
+## Stack
+
+- Vite + React + Tailwind + Supabase + ffmpeg.wasm; AdSense via `VITE_ADSENSE_*` and `AdSlot`. Creation sponsor gate: `VITE_CREATION_AD_SECONDS` + `create-gate` slot; Pro mock: `VITE_DEV_PREMIUM=1`.
+- Tauri 2 desktop wrapper in `src-tauri/` (crate `reelone`, lib `reelone_lib`, bundle id `com.reelone.app`).
+- Stat Check + tournament admins lives in migrations 006/007/010 (`tournament_admins`, `stat_check_submissions` with `invited_admin_id`, `review_notes`, `creator_decision`/notes).
+
+---

@@ -1,10 +1,25 @@
 {
-  "name": "ButtonMasherz",
-  "short_name": "ButtonMasherz",
-  "description": "Combine clips into highlight reels. Watch live. Connect with the community.",
-  "start_url": "/",
+  "name": "ReelOne",
+  "short_name": "ReelOne",
+  "description": "Multi-angle reels, tournaments, and community — for every game.",
+  "start_url": ".",
+  "scope": ".",
   "display": "standalone",
-  "background_color": "#0f172a",
-  "theme_color": "#00d4ff",
-  "icons": []
+  "orientation": "any",
+  "background_color": "#0a0a0f",
+  "theme_color": "#0a0a0f",
+  "icons": [
+    {
+      "src": "favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "maskable"
+    }
+  ]
 }

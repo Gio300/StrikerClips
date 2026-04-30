@@ -1,8 +1,18 @@
 node_modules
 dist
+dist-site
 .env
 .env.local
 .env.*.local
 *.log
 .DS_Store
 .cursor/settings.json
+
+# Tauri / Rust
+src-tauri/target
+src-tauri/gen/schemas
+src-tauri/WixTools
+
+# Local-only download artifacts (e.g. promo videos pulled with yt-dlp)
+/local-downloads/
+*.mp4.tmp

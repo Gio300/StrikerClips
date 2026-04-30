@@ -4,6 +4,8 @@ import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/hooks/useAuth'
 import { AuthGuard } from '@/components/AuthGuard'
 import { AdSlot } from '@/components/AdSlot'
+import { parseMatchScreenshot, type MatchOcrResult } from '@/lib/ocrMatchResult'
+import { ocrMatchResultsEnabled } from '@/lib/featureFlags'
 
 type MatchType = 'survival' | 'quick_match' | 'red_white' | 'ninja_world_league' | 'tournament'
 
@@ -20,13 +22,19 @@ export function SubmitResult() {
   const [matchType, setMatchType] = useState<MatchType>('survival')
   const [screenshotUrl, setScreenshotUrl] = useState('')
   const [screenshotHash, setScreenshotHash] = useState<string | null>(null)
-  const [selectedFile, setSelectedFile] = useState<File | null>(null)
+  const [, setSelectedFile] = useState<File | null>(null)
   const [uploading, setUploading] = useState(false)
   const [winnerId, setWinnerId] = useState('')
   const [loserIds, setLoserIds] = useState<string[]>([])
   const [profiles, setProfiles] = useState<{ id: string; username: string }[]>([])
   const [submitting, setSubmitting] = useState(false)
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
+  const [ocrRunning, setOcrRunning] = useState(false)
+  const [ocrResult, setOcrResult] = useState<MatchOcrResult | null>(null)
+  // OCR-derived fields (manual edits override).
+  const [outcome, setOutcome] = useState<'victory' | 'defeat' | 'draw' | ''>('')
+  const [kills, setKills] = useState<string>('')
+  const [deaths, setDeaths] = useState<string>('')
 
   useEffect(() => {
     supabase.from('profiles').select('id, username').order('username').then(({ data }) => setProfiles(data ?? []))
@@ -53,6 +61,10 @@ export function SubmitResult() {
       setScreenshotUrl(urlData.publicUrl)
       setScreenshotHash(hash)
       setSelectedFile(file)
+      // Best-effort OCR — never blocks the upload flow.
+      if (ocrMatchResultsEnabled) {
+        runOcr(file)
+      }
     } catch (err) {
       setMessage({ type: 'error', text: (err as Error).message })
     } finally {
@@ -60,10 +72,43 @@ export function SubmitResult() {
     }
   }
 
+  async function runOcr(file: File | Blob) {
+    setOcrRunning(true)
+    setOcrResult(null)
+    try {
+      const result = await parseMatchScreenshot(file)
+      setOcrResult(result)
+      // Only auto-fill if OCR is reasonably confident.
+      if (result.confidence >= 0.55) {
+        if (result.outcome) setOutcome(result.outcome)
+        if (result.kills != null) setKills(String(result.kills))
+        if (result.deaths != null) setDeaths(String(result.deaths))
+      }
+    } catch (err) {
+      setOcrResult({
+        raw: '',
+        outcome: null,
+        kills: null,
+        deaths: null,
+        assists: null,
+        confidence: 0,
+      })
+      // OCR errors are not fatal — surface as an inline hint, keep submit unblocked.
+      // eslint-disable-next-line no-console
+      console.warn('OCR failed:', (err as Error).message)
+    } finally {
+      setOcrRunning(false)
+    }
+  }
+
   function clearScreenshot() {
     setScreenshotUrl('')
     setScreenshotHash(null)
     setSelectedFile(null)
+    setOcrResult(null)
+    setOutcome('')
+    setKills('')
+    setDeaths('')
   }
 
   async function handleSubmit(e: React.FormEvent) {
@@ -82,6 +127,10 @@ export function SubmitResult() {
           status: 'verified',
           verified_at: new Date().toISOString(),
           verified_by: user.id,
+          outcome: outcome || null,
+          kills: kills ? parseInt(kills, 10) : null,
+          deaths: deaths ? parseInt(deaths, 10) : null,
+          ocr_confidence: ocrResult?.confidence ?? null,
         })
         .select()
         .single()
@@ -175,7 +224,79 @@ export function SubmitResult() {
                   </button>
                 </div>
               )}
+              {(ocrRunning || ocrResult) && (
+                <div className="rounded-lg border border-dark-border bg-dark/40 p-3 text-xs">
+                  {ocrRunning ? (
+                    <span className="text-gray-400">Reading screenshot…</span>
+                  ) : ocrResult ? (
+                    <div className="space-y-1">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="text-gray-400">OCR result:</span>
+                        {ocrResult.outcome ? (
+                          <span className="px-2 py-0.5 rounded-full border border-accent/40 text-accent uppercase tracking-wider">
+                            {ocrResult.outcome}
+                          </span>
+                        ) : (
+                          <span className="text-gray-500">No outcome detected</span>
+                        )}
+                        {ocrResult.kills != null && (
+                          <span className="text-gray-300">
+                            K {ocrResult.kills}
+                            {ocrResult.deaths != null && ` / D ${ocrResult.deaths}`}
+                            {ocrResult.assists != null && ` / A ${ocrResult.assists}`}
+                          </span>
+                        )}
+                        <span className="ml-auto text-gray-500">
+                          Confidence {(ocrResult.confidence * 100).toFixed(0)}%
+                        </span>
+                      </div>
+                      {ocrResult.confidence < 0.55 && (
+                        <p className="text-gray-500">
+                          Low confidence — verify the values below before submitting.
+                        </p>
+                      )}
+                    </div>
+                  ) : null}
+                </div>
+              )}
             </div>
+          </div>
+
+          {/* Outcome / KDA — pre-filled from OCR, fully editable. */}
+          <div className="grid sm:grid-cols-3 gap-3">
+            <label className="block">
+              <span className="block text-sm text-gray-400 mb-1">Outcome</span>
+              <select
+                value={outcome}
+                onChange={(e) => setOutcome(e.target.value as typeof outcome)}
+                className="w-full px-3 py-2 rounded-lg bg-dark border border-dark-border text-white text-sm"
+              >
+                <option value="">—</option>
+                <option value="victory">Victory</option>
+                <option value="defeat">Defeat</option>
+                <option value="draw">Draw</option>
+              </select>
+            </label>
+            <label className="block">
+              <span className="block text-sm text-gray-400 mb-1">Kills</span>
+              <input
+                type="number"
+                min={0}
+                value={kills}
+                onChange={(e) => setKills(e.target.value)}
+                className="w-full px-3 py-2 rounded-lg bg-dark border border-dark-border text-white text-sm"
+              />
+            </label>
+            <label className="block">
+              <span className="block text-sm text-gray-400 mb-1">Deaths</span>
+              <input
+                type="number"
+                min={0}
+                value={deaths}
+                onChange={(e) => setDeaths(e.target.value)}
+                className="w-full px-3 py-2 rounded-lg bg-dark border border-dark-border text-white text-sm"
+              />
+            </label>
           </div>
           <div>
             <label className="block text-sm text-gray-400 mb-1">Winner *</label>

@@ -1,0 +1,30 @@
+{
+  "id": "shinobi-strikers",
+  "name": "Naruto to Boruto: Shinobi Striker",
+  "description": "4v4 ninja brawler. Director leans into ougi/finisher impacts and last-ninja-standing comebacks.",
+  "tone": {
+    "energy": "hype",
+    "vocabulary": "anime",
+    "max_words_per_call": 12,
+    "persona": "a hype but chill ninja-anime narrator. No swearing. No spoilers."
+  },
+  "clutch_rules": [
+    { "name": "Finisher impact (audio spike)", "when": { "audio_loudness_jump": 14 }, "boost": 0.20 },
+    { "name": "1v3+ clutch", "when": { "remaining_allies": { "eq": 1 }, "enemies_remaining": { "gte": 2 } }, "boost": 0.30 },
+    { "name": "Last-second KO", "when": { "time_remaining_lt": 5, "kill_event": true }, "boost": 0.25 },
+    { "name": "Comeback win", "when": { "score_delta_was_lt": -3, "score_delta_now_gte": 0 }, "boost": 0.22 },
+    { "name": "Awakening / Ougi active", "when": { "flag": "ougi_active" }, "boost": 0.18 }
+  ],
+  "audio_cues": {
+    "ougi": { "phrases": ["awakening", "ougi"], "min_db_jump": 14, "min_duration_ms": 250 },
+    "ko": { "phrases": ["KO", "down"], "min_db_jump": 10 },
+    "victory": { "phrases": ["match", "winner", "win"] }
+  },
+  "narration": {
+    "intro": ["Squad's locked in.", "Game on, shinobi.", "Watch this rotation."],
+    "kill": ["Sent it.", "Down.", "Clean tag.", "He's gone."],
+    "clutch": ["He's the only one left and he's still winning.", "Nobody is home — except him.", "Last shinobi standing.", "And he holds the line."],
+    "teamwork": ["Right behind him.", "Two angles, same play.", "The wing collapses with him."],
+    "outro": ["And that's the play.", "GG.", "Send it again."]
+  }
+}

@@ -1,0 +1,55 @@
+name: Build marketing site
+
+# Manual trigger — separate from the app deploy so the marketing site can be
+# hosted anywhere (Cloudflare Pages, Netlify, GitHub Pages on its own repo).
+# This produces a downloadable artifact ('reelone-site') containing the
+# static dist-site folder. Drop it onto your host of choice.
+
+on:
+  workflow_dispatch:
+    inputs:
+      app_url:
+        description: 'Absolute URL of the deployed app (e.g. https://gio300.github.io/StrikerClips)'
+        required: false
+        default: ''
+      contact_email:
+        description: 'Contact email for the one-click button'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install
+        run: npm ci
+
+      - name: Build site
+        run: npm run build:site
+        env:
+          VITE_APP_URL: ${{ github.event.inputs.app_url }}
+          VITE_CONTACT_EMAIL: ${{ github.event.inputs.contact_email }}
+          VITE_SITE_BASE: '/'
+          VITE_DOWNLOAD_WIN: ${{ secrets.VITE_DOWNLOAD_WIN }}
+          VITE_DOWNLOAD_MAC: ${{ secrets.VITE_DOWNLOAD_MAC }}
+          VITE_DOWNLOAD_LINUX: ${{ secrets.VITE_DOWNLOAD_LINUX }}
+          VITE_DOWNLOAD_IOS: ${{ secrets.VITE_DOWNLOAD_IOS }}
+          VITE_DOWNLOAD_ANDROID: ${{ secrets.VITE_DOWNLOAD_ANDROID }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: reelone-site
+          path: dist-site
+          retention-days: 30

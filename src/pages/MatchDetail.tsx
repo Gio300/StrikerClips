@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
+import { isPlayableUrl } from '@/lib/reelLayout'
 import type { Match, Reel, Clip } from '@/types/database'
 
 export function MatchDetail() {
@@ -69,8 +70,8 @@ export function MatchDetail() {
             {reels.map((reel) => (
               <div key={reel.id} className="rounded-xl border border-dark-border bg-dark-card overflow-hidden">
                 <h3 className="p-4 font-medium">{reel.title}</h3>
-                {reel.combined_video_url && (
-                  <video src={reel.combined_video_url} controls className="w-full" />
+                {isPlayableUrl(reel.combined_video_url) && (
+                  <video src={reel.combined_video_url!} controls className="w-full" />
                 )}
               </div>
             ))}

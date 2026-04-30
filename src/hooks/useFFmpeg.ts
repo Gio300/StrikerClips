@@ -1,59 +1,118 @@
 import { useState, useCallback } from 'react'
-import { FFmpeg } from '@ffmpeg/ffmpeg'
-import { fetchFile } from '@ffmpeg/util'
+import {
+  concatVideos as opConcat,
+  gridStack4 as opGrid,
+  sideBySide as opSideBySide,
+  pipOverlay as opPip,
+  trimClip as opTrim,
+} from '@/lib/ffmpegOps'
 
-let ffmpegInstance: FFmpeg | null = null
+export type ReelLayout = 'concat' | 'grid' | 'side-by-side' | 'pip' | 'action' | 'ultra'
 
-async function getFFmpeg(): Promise<FFmpeg> {
-  if (ffmpegInstance) return ffmpegInstance
-  const { FFmpeg } = await import('@ffmpeg/ffmpeg')
-  const ffmpeg = new FFmpeg()
-  await ffmpeg.load({
-    coreURL: 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd/ffmpeg-core.js',
-    wasmURL: 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd/ffmpeg-core.wasm',
-  })
-  ffmpegInstance = ffmpeg
-  return ffmpeg
+const MIN_FILES: Record<ReelLayout, number> = {
+  concat: 2,
+  grid: 4,
+  'side-by-side': 2,
+  pip: 2,
+  action: 2,
+  ultra: 2,
+}
+
+const MAX_FILES: Record<ReelLayout, number> = {
+  concat: 8,
+  grid: 4,
+  'side-by-side': 2,
+  pip: 2,
+  action: 8,
+  ultra: 8,
+}
+
+const TOTAL_BYTES_LIMIT = 200 * 1024 * 1024 // 200 MB combined cap to keep the browser tab alive.
+
+export function layoutLimits(layout: ReelLayout): { min: number; max: number } {
+  return { min: MIN_FILES[layout], max: MAX_FILES[layout] }
 }
 
 export function useFFmpeg() {
   const [loading, setLoading] = useState(false)
   const [progress, setProgress] = useState(0)
+  const [stage, setStage] = useState<string>('')
 
-  const concatVideos = useCallback(async (files: File[]): Promise<Blob | null> => {
-    if (files.length < 2) return null
+  const runLayout = useCallback(async (layout: ReelLayout, files: File[]): Promise<Blob | null> => {
+    const { min, max } = layoutLimits(layout)
+    if (files.length < min || files.length > max) return null
+
+    const total = files.reduce((sum, f) => sum + f.size, 0)
+    if (total > TOTAL_BYTES_LIMIT) {
+      console.warn(`[useFFmpeg] aborting: ${(total / 1024 / 1024).toFixed(1)} MB exceeds 200 MB browser cap`)
+      return null
+    }
+
     setLoading(true)
     setProgress(0)
+    setStage(
+      layout === 'concat' ? 'Stitching clips'
+      : layout === 'grid' ? 'Building 2x2 grid'
+      : layout === 'side-by-side' ? 'Building split-screen'
+      : layout === 'action' ? 'Stitching action cuts'
+      : layout === 'ultra' ? 'Stitching director cut'
+      : 'Building picture-in-picture'
+    )
+
     try {
-      const ffmpeg = await getFFmpeg()
-      ffmpeg.on('progress', ({ progress: p }) => setProgress(Math.round((p ?? 0) * 100)))
-
-      const names = files.map((_, i) => `input${i}.mp4`)
-      for (let i = 0; i < files.length; i++) {
-        await ffmpeg.writeFile(names[i], await fetchFile(files[i]))
+      const onProgress = (pct: number) => setProgress(pct)
+      let blob: Blob | null = null
+      switch (layout) {
+        case 'concat':
+          blob = await opConcat(files, onProgress)
+          break
+        case 'grid':
+          blob = await opGrid(files, onProgress)
+          break
+        case 'side-by-side':
+          blob = await opSideBySide(files, onProgress)
+          break
+        case 'pip':
+          blob = await opPip(files, onProgress)
+          break
+        case 'action':
+          // For uploaded files, action mode falls back to concat — switching is
+          // a playback-time concept that only makes sense for synced YouTube
+          // angles. Files are baked into a single MP4 anyway, so concat is the
+          // closest meaningful render.
+          blob = await opConcat(files, onProgress)
+          break
+        case 'ultra':
+          // Same reasoning as 'action': ultra is a playback-time director cut
+          // across synced YouTube angles. For uploaded files we bake to concat
+          // so the reel is still saveable; the dynamic layout dance only fires
+          // for YouTube reels.
+          blob = await opConcat(files, onProgress)
+          break
       }
-
-      const listContent = names.map((n) => `file '${n}'`).join('\n')
-      await ffmpeg.writeFile('list.txt', listContent)
-
-      await ffmpeg.exec(['-f', 'concat', '-safe', '0', '-i', 'list.txt', '-c', 'copy', 'output.mp4'])
-
-      const data = await ffmpeg.readFile('output.mp4')
-      const blob = new Blob([data], { type: 'video/mp4' })
-
-      for (const n of names) await ffmpeg.deleteFile(n)
-      await ffmpeg.deleteFile('list.txt')
-      await ffmpeg.deleteFile('output.mp4')
-
       return blob
-    } catch (err) {
-      console.error('FFmpeg error:', err)
-      return null
     } finally {
       setLoading(false)
       setProgress(0)
+      setStage('')
     }
   }, [])
 
-  return { concatVideos, loading, progress }
+  /** Back-compat shim: existing pages call concatVideos. */
+  const concatVideos = useCallback((files: File[]) => runLayout('concat', files), [runLayout])
+
+  const trim = useCallback(async (file: File, startSec: number, endSec: number): Promise<Blob | null> => {
+    setLoading(true)
+    setProgress(0)
+    setStage('Trimming')
+    try {
+      return await opTrim(file, startSec, endSec, (pct) => setProgress(pct))
+    } finally {
+      setLoading(false)
+      setProgress(0)
+      setStage('')
+    }
+  }, [])
+
+  return { concatVideos, runLayout, trim, loading, progress, stage }
 }

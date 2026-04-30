@@ -1,0 +1,15 @@
+/*
+ * Shared CSS used inline by Shinobi Village transactional email templates.
+ * Email clients have notoriously bad CSS support, so all critical styling
+ * lives inline on each template. This file is kept only as a reference of
+ * the Shinobi color palette + intent for designers updating the templates.
+ *
+ * --shinobi-bg:        #0b0d10 (page background)
+ * --shinobi-surface:   #14181d (card)
+ * --shinobi-border:    #1f2630
+ * --shinobi-text:      #e7eaf0
+ * --shinobi-muted:     #8a93a3
+ * --shinobi-kunai:     #ff5530 (primary CTA, brand orange)
+ * --shinobi-chakra:    #4ad6ff (accent cyan)
+ * --shinobi-leaf:      #18b566 (success/leaf green)
+ */

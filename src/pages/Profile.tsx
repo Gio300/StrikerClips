@@ -1,9 +1,10 @@
-'use client'
-
 import { useEffect, useState } from 'react'
 import { useNavigate, Link, useParams } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/hooks/useAuth'
+import { BRAND } from '@/lib/brand'
+import { InviteMenu } from '@/components/InviteMenu'
+import { DonateButton } from '@/components/DonateButton'
 import type {
   Reel,
   UserYoutubeLink,
@@ -203,14 +204,29 @@ function ProfileContent() {
                       </button>
                     </>
                   ) : (
-                    <button
-                      onClick={toggleFollow}
-                      className={`px-4 py-2 rounded-lg text-sm font-medium ${
-                        isFollowing ? 'border border-dark-border text-gray-400' : 'bg-accent text-dark'
-                      }`}
-                    >
-                      {isFollowing ? 'Unfollow' : 'Follow'}
-                    </button>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <button
+                        onClick={toggleFollow}
+                        className={`px-4 py-2 rounded-lg text-sm font-medium ${
+                          isFollowing ? 'border border-dark-border text-gray-400' : 'bg-accent text-dark'
+                        }`}
+                      >
+                        {isFollowing ? 'Unfollow' : 'Follow'}
+                      </button>
+                      {viewProfile && (
+                        <DonateButton
+                          creatorId={viewProfile.id}
+                          creatorUsername={viewProfile.username}
+                        />
+                      )}
+                      {viewProfile && (
+                        <InviteMenu
+                          targetUserId={viewProfile.id}
+                          targetUsername={viewProfile.username}
+                          label="Invite"
+                        />
+                      )}
+                    </div>
                   )}
                 </div>
               </>
@@ -281,15 +297,20 @@ function ProfileTab({
             to="/highlight/create"
             className="inline-flex items-center gap-2 px-6 py-3 rounded-lg bg-accent text-dark font-semibold hover:shadow-glow transition-all"
           >
-            Create Highlight
+            Create a reel
           </Link>
         </div>
       )}
 
       {isOwnProfile && (
         <>
-          <h2 className="text-lg font-semibold mb-4">My YouTube Sources</h2>
-          <p className="text-gray-400 text-sm mb-4">Save YouTube URLs to use when creating highlights.</p>
+          <h2 className="text-lg font-semibold mb-4">My YouTube sources</h2>
+          <p className="rounded-lg border border-chakra/20 bg-dark-card/50 p-3 text-sm text-gray-400 mb-4">
+            <span className="text-chakra/90 font-medium">Next:</span> connect your YouTube account so {BRAND.name} can
+            use the official API to work with <em>only your uploads</em> (no link scraping) for cloud renders and the
+            public channel. Rolling out with the desktop app; for now, paste links or save them below.
+          </p>
+          <p className="text-gray-400 text-sm mb-4">Save YouTube URLs to quick-add when you build a reel.</p>
           <form onSubmit={addYoutubeLink} className="flex gap-2 mb-4">
             <input
               type="url"
