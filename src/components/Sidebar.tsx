@@ -1,6 +1,6 @@
 import { NavLink } from 'react-router-dom'
 import { useAuth } from '@/hooks/useAuth'
-import { BrandLogo } from '@/components/BrandLogo'
+import { BrandLogo, BrandMark } from '@/components/BrandLogo'
 import { useUnreadNotifications } from '@/hooks/useUnreadNotifications'
 
 const NAV_ITEMS: { to: string; label: string; Icon: () => JSX.Element }[] = [
@@ -24,9 +24,7 @@ export function Sidebar() {
     <aside className="w-16 md:w-64 shrink-0 bg-dark-card/70 backdrop-blur-sm border-r border-dark-border flex flex-col sticky top-0 h-screen">
       <div className="p-4 border-b border-dark-border">
         <NavLink to="/" className="flex items-center gap-2.5 hover:opacity-90 transition-opacity">
-          <div className="relative w-9 h-9 rounded-lg bg-gradient-kunai flex items-center justify-center shadow-md">
-            <ShurikenIcon />
-          </div>
+          <BrandMark size={36} className="shrink-0" />
           <span className="hidden md:block">
             <BrandLogo as="span" className="text-base" />
           </span>
@@ -110,14 +108,6 @@ export function Sidebar() {
         )}
       </div>
     </aside>
-  )
-}
-
-function ShurikenIcon() {
-  return (
-    <svg className="w-5 h-5 text-white" viewBox="0 0 24 24" fill="currentColor">
-      <path d="M12 2 L14 10 L22 12 L14 14 L12 22 L10 14 L2 12 L10 10 Z" />
-    </svg>
   )
 }
 

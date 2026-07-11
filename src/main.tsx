@@ -2,8 +2,7 @@ import React from 'react'
 import ReactDOM from 'react-dom/client'
 import { BrowserRouter } from 'react-router-dom'
 import App from './App'
-import ConfigNeeded from './components/ConfigNeeded'
-import { isSupabaseConfigured, ADSENSE_CLIENT } from './lib/runtimeConfig'
+import { ADSENSE_CLIENT } from './lib/runtimeConfig'
 import { initAdRoll } from './lib/adroll'
 import './index.css'
 
@@ -22,20 +21,10 @@ if (ADSENSE_CLIENT && typeof document !== 'undefined') {
 // AdRoll retargeting pixel — only when configured.
 initAdRoll()
 
-const root = ReactDOM.createRoot(document.getElementById('root')!)
-if (!isSupabaseConfigured) {
-  // Graceful failure instead of a white screen when Supabase isn't wired yet.
-  root.render(
-    <React.StrictMode>
-      <ConfigNeeded />
-    </React.StrictMode>,
-  )
-} else {
-  root.render(
-    <React.StrictMode>
-      <BrowserRouter basename={basename}>
-        <App />
-      </BrowserRouter>
-    </React.StrictMode>,
-  )
-}
+ReactDOM.createRoot(document.getElementById('root')!).render(
+  <React.StrictMode>
+    <BrowserRouter basename={basename}>
+      <App />
+    </BrowserRouter>
+  </React.StrictMode>,
+)
