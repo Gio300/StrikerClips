@@ -4,7 +4,8 @@
 // invite slots. Until that migration is applied, we encode this state into
 // the existing `combined_video_url` column using a fake URI scheme:
 //
-//   reelone-layout://<layout>            (new — use this in new writes)
+//   killcam-layout://<layout>            (new — use this in new writes)
+//   reelone-layout://<layout>            (legacy — still decoded for old rows)
 //   clutchlens-layout://<layout>         (legacy — still decoded for old rows)
 //   shinobi-layout://<layout>            (legacy — still decoded for old rows)
 //   ?slots=N = locked until N total clips
@@ -24,15 +25,15 @@
 //     The MP4 already bakes in the layout, so we don't need to record it.
 //   - YouTube + concat + no invites: `combined_video_url` = null.
 //   - YouTube + non-concat OR pending invites: `combined_video_url` =
-//     `reelone-layout://<layout>?slots=<N>` (legacy schemes still read).
+//     `killcam-layout://<layout>?slots=<N>` (legacy schemes still read).
 //
 // This keeps the feature working before and after migration 009, and across
-// the ClutchLens → ReelOne brand swap.
+// the Shinobi → ClutchLens → ReelOne → KillCam brand swaps.
 
 import type { ReelLayout } from '@/types/database'
 
-const SCHEME = 'reelone-layout://'
-const LEGACY_SCHEMES = ['clutchlens-layout://', 'shinobi-layout://']
+const SCHEME = 'killcam-layout://'
+const LEGACY_SCHEMES = ['reelone-layout://', 'clutchlens-layout://', 'shinobi-layout://']
 
 function markerBody(value: string | null | undefined): string | null {
   if (typeof value !== 'string') return null

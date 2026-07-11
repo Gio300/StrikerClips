@@ -87,7 +87,7 @@ const CREATIVES: Creative[] = [
   {
     id: 'create-reel',
     to: '/highlight/create',
-    eyebrow: 'Sponsored · ReelOne',
+    eyebrow: 'Sponsored · KillCam',
     headline: 'Every angle, one clutch reel',
     body: 'Combine up to 8 angles: action cam, ultra director, squad grid. Built for any game.',
     cta: 'Create a highlight',
@@ -105,7 +105,7 @@ const CREATIVES: Creative[] = [
   {
     id: 'signup',
     to: '/signup',
-    eyebrow: 'Sponsored · ReelOne',
+    eyebrow: 'Sponsored · KillCam',
     headline: 'Free account. Unlimited reels.',
     body: 'Connect YouTube, invite friends, run tournaments, and share your best angles.',
     cta: 'Sign up free',

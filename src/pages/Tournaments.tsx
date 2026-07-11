@@ -249,7 +249,7 @@ function CreateTournamentForm({
             type="text"
             value={name}
             onChange={(e) => setName(e.target.value)}
-            placeholder="e.g. ReelOne Spring Showdown"
+            placeholder="e.g. KillCam Spring Showdown"
             className="w-full px-4 py-2 rounded-lg bg-dark border border-dark-border text-white"
             required
           />
@@ -328,7 +328,7 @@ function CreateTournamentForm({
             type="text"
             value={prizePool}
             onChange={(e) => setPrizePool(e.target.value)}
-            placeholder="e.g. $500 cash + ReelOne Pro"
+            placeholder="e.g. $500 cash + KillCam Pro"
             className="w-full px-4 py-2 rounded-lg bg-dark border border-dark-border text-white"
           />
         </Field>

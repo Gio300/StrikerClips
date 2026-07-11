@@ -7,8 +7,11 @@ import { useEntitlements } from '@/hooks/useEntitlements'
 import { detectHighlights, formatTimestamp, type HighlightMoment } from '@/lib/highlightDetector'
 import { extractYouTubeId } from '@/lib/youtubeApi'
 import { encodeLayoutMarker } from '@/lib/reelLayout'
+import { computeSyncOffsets } from '@/lib/multiAngleSync'
 import { BRAND } from '@/lib/brand'
 import { CreationSponsorGate } from '@/components/CreationSponsorGate'
+import { CreatorLicenseGate } from '@/components/CreatorLicenseGate'
+import { recordCreatorAgreement } from '@/lib/creatorAgreement'
 import type { UserYoutubeLink } from '@/types/database'
 
 type ClipInput =
@@ -55,6 +58,7 @@ export function CreateHighlight() {
   const [showAdvanced, setShowAdvanced] = useState(false)
   const [sponsorUnlocked, setSponsorUnlocked] = useState(false)
   const onSponsorUnlocked = useCallback(() => setSponsorUnlocked(true), [])
+  const [licenseAccepted, setLicenseAccepted] = useState(false)
 
   const adWaitSec = creationAdRequiredSec()
   const needsSponsorAd = !isPremium && adWaitSec > 0
@@ -160,6 +164,10 @@ export function CreateHighlight() {
       setError('Finish the sponsor message above, or go Pro to skip it.')
       return
     }
+    if (!licenseAccepted) {
+      setError('Accept the Creator Agreement to publish.')
+      return
+    }
     if (!title.trim()) {
       setError('Enter a title')
       return
@@ -223,7 +231,20 @@ export function CreateHighlight() {
 
       // Only render via ffmpeg.wasm when the user uploaded files. YouTube reels stay free.
       if (allUpload) {
-        const blob = await runLayout(layout, uploadClips.map((c) => c.file))
+        const files = uploadClips.map((c) => c.file)
+        // Multi-angle sync: for stacked layouts, align every angle to the SAME
+        // real-world moment (audio cross-correlation) before stitching. concat
+        // plays end-to-end, so it needs no alignment.
+        let offsets: number[] | undefined
+        if (layout === 'grid' || layout === 'side-by-side' || layout === 'pip') {
+          try {
+            const res = await computeSyncOffsets(files)
+            offsets = res.offsets
+          } catch (syncErr) {
+            console.warn('[sync] offset detection failed; rendering unsynced:', syncErr)
+          }
+        }
+        const blob = await runLayout(layout, files, offsets)
         if (!blob) {
           setError('Render failed. The total file size may exceed 200 MB, or one of the clips is in an unsupported codec.')
           setSaving(false)
@@ -298,6 +319,16 @@ export function CreateHighlight() {
         .single()
 
       if (reelErr) throw reelErr
+
+      // Record the immutable, timestamped license grant for this build. Don't
+      // block navigation on a ledger hiccup, but do log it.
+      const { error: agreementErr } = await recordCreatorAgreement({
+        scope: 'reel',
+        userId: user!.id,
+        reelId: reelData.id,
+      })
+      if (agreementErr) console.error('Creator agreement not recorded:', agreementErr)
+
       navigate(`/reels/${reelData.id}`)
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Failed to create highlight')
@@ -623,9 +654,11 @@ export function CreateHighlight() {
 
         <CreationSponsorGate isPremium={isPremium} onUnlocked={onSponsorUnlocked} />
 
+        <CreatorLicenseGate accepted={licenseAccepted} onChange={setLicenseAccepted} />
+
         <button
           type="submit"
-          disabled={saving || ffmpegLoading || clips.length === 0 || hasMix || (needsSponsorAd && !sponsorUnlocked)}
+          disabled={saving || ffmpegLoading || clips.length === 0 || hasMix || !licenseAccepted || (needsSponsorAd && !sponsorUnlocked)}
           className="w-full py-3 rounded-lg bg-accent text-dark font-semibold hover:shadow-glow disabled:opacity-50"
         >
           {saving ? 'Saving…' : ffmpegLoading ? 'Rendering…' : 'Create reel'}

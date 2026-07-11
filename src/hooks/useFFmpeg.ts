@@ -38,7 +38,7 @@ export function useFFmpeg() {
   const [progress, setProgress] = useState(0)
   const [stage, setStage] = useState<string>('')
 
-  const runLayout = useCallback(async (layout: ReelLayout, files: File[]): Promise<Blob | null> => {
+  const runLayout = useCallback(async (layout: ReelLayout, files: File[], offsets?: number[]): Promise<Blob | null> => {
     const { min, max } = layoutLimits(layout)
     if (files.length < min || files.length > max) return null
 
@@ -67,13 +67,13 @@ export function useFFmpeg() {
           blob = await opConcat(files, onProgress)
           break
         case 'grid':
-          blob = await opGrid(files, onProgress)
+          blob = await opGrid(files, onProgress, offsets)
           break
         case 'side-by-side':
-          blob = await opSideBySide(files, onProgress)
+          blob = await opSideBySide(files, onProgress, offsets)
           break
         case 'pip':
-          blob = await opPip(files, onProgress)
+          blob = await opPip(files, onProgress, offsets)
           break
         case 'action':
           // For uploaded files, action mode falls back to concat — switching is

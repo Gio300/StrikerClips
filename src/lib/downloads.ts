@@ -1,12 +1,12 @@
 /**
- * Desktop / mobile download targets for the ClutchLens install app.
+ * Desktop / mobile download targets for the KillCam install app.
  *
  * Wire real URLs via env vars. Until they're set, the download buttons fall
  * back to the web app (`/`) so the marketing page is always usable.
  *
- *   VITE_DOWNLOAD_WIN     e.g. https://github.com/<you>/clutchlens-desktop/releases/latest/download/ClutchLens-Setup-x64.exe
- *   VITE_DOWNLOAD_MAC     .../ClutchLens.dmg
- *   VITE_DOWNLOAD_LINUX   .../ClutchLens.AppImage
+ *   VITE_DOWNLOAD_WIN     e.g. https://github.com/<you>/killcam-desktop/releases/latest/download/KillCam-Setup-x64.exe
+ *   VITE_DOWNLOAD_MAC     .../KillCam.dmg
+ *   VITE_DOWNLOAD_LINUX   .../KillCam.AppImage
  *   VITE_DOWNLOAD_IOS     App Store URL once published
  *   VITE_DOWNLOAD_ANDROID Play Store URL once published
  */

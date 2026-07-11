@@ -1,7 +1,7 @@
 /**
  * Standalone marketing site entry.
  *
- * This is the bundle that ships at the marketing domain (e.g. clutchlens.com).
+ * This is the bundle that ships at the marketing domain (e.g. killcam.app).
  * It contains ONLY the Marketing page — no Supabase client, no auth, no app
  * routes. The rest of the React app is the install/web product, served from
  * a separate URL and built via the default `npm run build` script.

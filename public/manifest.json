@@ -1,7 +1,7 @@
 {
-  "name": "ReelOne",
-  "short_name": "ReelOne",
-  "description": "Multi-angle reels, tournaments, and community — for every game.",
+  "name": "KillCam",
+  "short_name": "KillCam",
+  "description": "Multi-angle kill highlights, clans, live chat rooms, and tournaments — for every game.",
   "start_url": ".",
   "scope": ".",
   "display": "standalone",

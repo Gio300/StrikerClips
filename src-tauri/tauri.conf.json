@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "ReelOne",
+  "productName": "KillCam",
   "version": "0.1.0",
-  "identifier": "com.reelone.app",
+  "identifier": "app.killcam.desktop",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:5173",
@@ -13,7 +13,7 @@
     "withGlobalTauri": false,
     "windows": [
       {
-        "title": "ReelOne",
+        "title": "KillCam",
         "width": 1280,
         "height": 800,
         "minWidth": 960,
@@ -32,8 +32,8 @@
     "active": true,
     "targets": "all",
     "category": "Entertainment",
-    "shortDescription": "Multi-angle reels, live broadcasting, tournaments — for every game.",
-    "longDescription": "ReelOne stitches your gameplay clips into multi-angle reels using YouTube's 'most replayed' heatmap, runs tournaments, tracks power levels, and lets squads broadcast together via local OBS — your stream keys, your machine.",
+    "shortDescription": "Multi-angle kill highlights, clans, live chat rooms, tournaments — for every game.",
+    "longDescription": "KillCam combines every player's clip of the same moment into one synced multi-angle edit, publishes it to the KillCam YouTube channel, and gives clans pages, rosters, chat rooms, and leaderboards to battle over. Your stream keys, your machine.",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

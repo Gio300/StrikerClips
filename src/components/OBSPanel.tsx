@@ -13,7 +13,7 @@ import { Soundboard } from '@/components/Soundboard'
 
 /**
  * OBSPanel — connect to a locally-running OBS Studio (free), drive scenes
- * and streaming from the ClutchLens UI. Each user streams to their own
+ * and streaming from the KillCam UI. Each user streams to their own
  * YouTube/Twitch keys configured inside OBS — we never see them, and we
  * pay $0 for streaming infra.
  *

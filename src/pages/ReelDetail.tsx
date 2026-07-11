@@ -6,6 +6,7 @@ import { ShareButtons } from '@/components/ShareButtons'
 import { SyncedYouTubeReel } from '@/components/SyncedYouTubeReel'
 import { AdSlot } from '@/components/AdSlot'
 import { AutoUploadButton } from '@/components/AutoUploadButton'
+import RoomChat from '@/components/RoomChat'
 import { resolveLayout, resolveSlots, isPlayableUrl, buildInviteTitle, isInviteTitleFor } from '@/lib/reelLayout'
 import { extractYouTubeId } from '@/lib/youtubeApi'
 import type { Reel, Clip, ReelLayout } from '@/types/database'
@@ -77,12 +78,24 @@ export function ReelDetail() {
   const isOwner = user?.id === reel.user_id
 
   // Decide which playback surface to render. Order matters:
+  //  0) Published to OUR YouTube channel → embed that (official embed = our
+  //     channel's watch time; also lets us purge the raw bytes from Storage).
   //  1) Locked → invite UI in place of player
   //  2) Pre-rendered combined MP4 (uploads stitched via ffmpeg.wasm)
   //  3) Synced YouTube reel (link-only multi-angle, free)
   //  4) Single uploaded file fallback
   let body: React.ReactNode
-  if (isLocked) {
+  if (reel.youtube_video_id) {
+    body = (
+      <iframe
+        className="w-full h-full"
+        src={`https://www.youtube.com/embed/${reel.youtube_video_id}`}
+        title={reel.title}
+        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+        allowFullScreen
+      />
+    )
+  } else if (isLocked) {
     body = (
       <LockedSurface
         reelId={reel.id}
@@ -107,7 +120,9 @@ export function ReelDetail() {
 
   // Multi-angle layouts need more vertical room for controls + grid; single-angle stays 16:9.
   // 'action' and 'ultra' have an extra meter HUD + thumbnail strip so they get extra height.
-  const surfaceClass = isLocked
+  const surfaceClass = reel.youtube_video_id
+    ? 'aspect-video'
+    : isLocked
     ? 'min-h-[420px]'
     : youtubeClips.length > 0 && (layout === 'action' || layout === 'ultra') ? 'h-[560px]'
     : youtubeClips.length > 0 && layout !== 'concat' ? 'h-[480px]'
@@ -250,6 +265,11 @@ export function ReelDetail() {
           )}
         </div>
       )}
+
+      {/* Live room for this reel — the dwell-time surface that IS the ad inventory. */}
+      <div className="mt-8">
+        <RoomChat roomType="reel" roomRef={reel.id} title="Room chat" />
+      </div>
 
       {/* Ad below the reel — runs on every share view, the monetization "floor". */}
       <div className="mt-6">
