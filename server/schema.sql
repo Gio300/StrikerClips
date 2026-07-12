@@ -690,8 +690,71 @@ alter table public.reels add column if not exists clan_id           uuid referen
 alter table public.reels add column if not exists is_clan_highlight boolean default false;
 
 -- ─────────────────────────────────────────────────────────────────────────
+--  Monetization — ad-free entitlement + upload-credit ledger + rewarded ads
+--  (server is the SOURCE OF TRUTH for whether a user sees ads; never CSS)
+-- ─────────────────────────────────────────────────────────────────────────
+
+-- One row per user. ad_free is the authoritative "hide all ads" flag; it is
+-- flipped by the Stripe webhook (or the internal setter) — NOT by the client.
+create table if not exists public.entitlements (
+  user_id                uuid primary key references public.profiles(id) on delete cascade,
+  ad_free                boolean not null default false,
+  tier                   text not null default 'free',   -- 'free' | 'pro'
+  source                 text,                            -- 'stripe' | 'grant' | 'manual'
+  stripe_customer_id     text,
+  stripe_subscription_id text,
+  current_period_end     timestamptz,
+  updated_at             timestamptz default now()
+);
+do $$ begin
+  if not exists (select 1 from pg_constraint where conname = 'entitlements_tier_check') then
+    alter table public.entitlements add constraint entitlements_tier_check check (tier in ('free', 'pro'));
+  end if;
+end $$;
+
+-- Current credit balance per user + which calendar month we last granted the
+-- free monthly allotment (so the refill happens exactly once per month, lazily).
+create table if not exists public.upload_credits (
+  user_id           uuid primary key references public.profiles(id) on delete cascade,
+  balance           integer not null default 0,
+  last_refill_month text,                                 -- 'YYYY-MM'
+  updated_at        timestamptz default now()
+);
+do $$ begin
+  if not exists (select 1 from pg_constraint where conname = 'upload_credits_balance_nonneg') then
+    alter table public.upload_credits add constraint upload_credits_balance_nonneg check (balance >= 0);
+  end if;
+end $$;
+
+-- Append-only ledger — every credit change (grant / earn / spend / purchase).
+create table if not exists public.credit_ledger (
+  id            uuid primary key default gen_random_uuid(),
+  user_id       uuid references public.profiles(id) on delete cascade not null,
+  delta         integer not null,                         -- +earn / -spend
+  balance_after integer not null,
+  reason        text not null,   -- 'monthly_grant'|'rewarded_ad'|'upload'|'purchase'|'admin'
+  ref           text,            -- external ref (reward token, reel id, stripe id)
+  created_at    timestamptz default now()
+);
+
+-- One row per completed rewarded-ad view. The unique (provider, reward_token)
+-- makes credit grants idempotent — a replayed token can never double-credit.
+create table if not exists public.ad_rewards (
+  id           uuid primary key default gen_random_uuid(),
+  user_id      uuid references public.profiles(id) on delete cascade not null,
+  provider     text not null default 'house',
+  reward_token text not null,
+  credited     boolean not null default false,
+  created_at   timestamptz default now(),
+  unique (provider, reward_token)
+);
+
+-- ─────────────────────────────────────────────────────────────────────────
 --  Indexes (all idempotent)
 -- ─────────────────────────────────────────────────────────────────────────
+create index if not exists idx_entitlements_stripe_customer on public.entitlements(stripe_customer_id);
+create index if not exists idx_credit_ledger_user           on public.credit_ledger(user_id, created_at desc);
+create index if not exists idx_ad_rewards_user_created      on public.ad_rewards(user_id, created_at desc);
 create index if not exists idx_clips_user                on public.clips(user_id);
 create index if not exists idx_reels_user                on public.reels(user_id);
 create index if not exists idx_reels_clan                on public.reels(clan_id);

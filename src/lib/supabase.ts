@@ -12,6 +12,8 @@
  *   "not configured" error rather than throwing.
  */
 
+import { subscribeTopic } from './realtime'
+
 // ---- Minimal auth types (replacing the ones from @supabase/supabase-js) ----
 export type User = {
   id: string
@@ -121,12 +123,35 @@ class QueryBuilder implements PromiseLike<Result> {
   }
 }
 
-// ---- realtime stub: chainable no-op so chat components don't crash ----
+// ---- realtime: map Supabase's channel API onto our WebSocket (src/lib/realtime) ----
+function parseTopic(opts: any): string | null {
+  const table = opts?.table
+  const filter = opts?.filter as string | undefined // e.g. "room_ref=eq.<val>"
+  if (!table || !filter) return null
+  const m = /^([a-zA-Z0-9_]+)=eq\.(.+)$/.exec(filter)
+  if (!m) return null
+  return `${table}:${m[1]}:${m[2]}`
+}
+
 function makeChannel() {
-  const ch = {
-    on() { return ch },
-    subscribe(cb?: (status: string) => void) { if (cb) cb('SUBSCRIBED'); return ch },
-    unsubscribe() { return Promise.resolve('ok') },
+  const subs: { topic: string; cb: (payload: any) => void }[] = []
+  const offs: Array<() => void> = []
+  const teardown = () => { for (const off of offs) off(); offs.length = 0 }
+  const ch: any = {
+    on(_type: string, opts: any, cb: (payload: any) => void) {
+      const topic = parseTopic(opts)
+      if (topic && typeof cb === 'function') subs.push({ topic, cb })
+      return ch
+    },
+    subscribe(statusCb?: (status: string) => void) {
+      for (const s of subs) {
+        offs.push(subscribeTopic(s.topic, (row) => s.cb({ new: row, eventType: 'INSERT' })))
+      }
+      if (statusCb) statusCb('SUBSCRIBED')
+      return ch
+    },
+    unsubscribe() { teardown(); return Promise.resolve('ok') },
+    _teardown: teardown,
   }
   return ch
 }
@@ -204,7 +229,7 @@ export const supabase = {
   auth,
   storage,
   channel: (_name: string) => makeChannel(),
-  removeChannel: (_ch: unknown) => Promise.resolve('ok'),
+  removeChannel: (ch: any) => { if (ch && typeof ch._teardown === 'function') ch._teardown(); return Promise.resolve('ok') },
   rpc: async () => ({ data: null, error: { message: 'rpc not supported' } }),
   functions: {
     // Edge functions (Stripe donations/connect) are not wired on this backend

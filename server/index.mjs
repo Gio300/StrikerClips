@@ -9,6 +9,7 @@
 //  hashes. The frontend talks to this same-origin, so no CORS is required.
 // ============================================================================
 
+import http from 'node:http'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import express from 'express'
@@ -18,6 +19,9 @@ import jwt from 'jsonwebtoken'
 
 import { pool, query, bootstrap } from './db.mjs'
 import { handleQuery } from './query.mjs'
+import { attachRealtime, publishInsert, startPgListener, RT_KEYS } from './realtime.mjs'
+import { processMentions } from './mentions.mjs'
+import { mountMonetization, handleStripeWebhook } from './monetization.mjs'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const DIST_DIR = join(__dirname, '..', 'dist')
@@ -34,6 +38,11 @@ const COOKIE_OPTS = {
 
 const app = express()
 app.disable('x-powered-by')
+
+// Stripe webhook MUST see the raw body to verify the signature, so it is
+// registered BEFORE the JSON body parser. (See monetization.mjs.)
+app.post('/api/billing/stripe-webhook', express.raw({ type: '*/*' }), handleStripeWebhook)
+
 app.use(express.json({ limit: '5mb' }))
 app.use(cookieParser())
 
@@ -193,11 +202,28 @@ app.post('/api/auth/logout', (req, res) => {
 })
 
 // ─────────────────────────────────────────────────────────────────────────
+//  Monetization — ad-free entitlement, credit ledger, rewarded ads, billing
+//  (server-side source of truth; shares the JWT auth via getUserId)
+// ─────────────────────────────────────────────────────────────────────────
+mountMonetization(app, { getUserId })
+
+// ─────────────────────────────────────────────────────────────────────────
 //  Generic query gateway
 // ─────────────────────────────────────────────────────────────────────────
 app.post('/api/query', async (req, res) => {
   try {
-    const result = await handleQuery(req.body, getUserId(req))
+    const body = req.body || {}
+    const result = await handleQuery(body, getUserId(req))
+    // Live fan-out + @mention pings for successful realtime-table inserts.
+    if (!result.error && body.action === 'insert' && body.table && RT_KEYS[body.table]) {
+      const rows = Array.isArray(result.data) ? result.data : result.data ? [result.data] : []
+      for (const row of rows) {
+        publishInsert(pool, body.table, row)
+        processMentions(body.table, row)
+          .then((notifs) => { for (const n of notifs) publishInsert(pool, 'notifications', n) })
+          .catch(() => {})
+      }
+    }
     return res.json(result)
   } catch (err) {
     console.error('[query]', err.message)
@@ -251,7 +277,10 @@ app.use((err, _req, res, _next) => {
 // ─────────────────────────────────────────────────────────────────────────
 async function start() {
   await bootstrap() // applies schema.sql; logs + continues even on failure
-  app.listen(PORT, () => {
+  const server = http.createServer(app)
+  attachRealtime(server) // WebSocket fan-out at /ws
+  startPgListener(pool) // cross-instance realtime via Postgres LISTEN/NOTIFY
+  server.listen(PORT, () => {
     console.log(`[server] KillCam backend listening on :${PORT}`)
   })
 }

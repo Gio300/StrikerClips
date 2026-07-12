@@ -51,12 +51,26 @@ const config = INSTANCE_CONNECTION_NAME
       max: 10,
     }
 
-export const pool = new Pool(config)
+// The live pool. `activePool` is swappable (see __setPool) so tests can inject
+// an in-process Postgres (e.g. PGlite) without any production behaviour change.
+let activePool = new Pool(config)
 
 // Don't let an idle-client error take down the process.
-pool.on('error', (err) => {
+activePool.on('error', (err) => {
   console.error('[db] idle client error:', err.message)
 })
+
+// Exported handle that always forwards to the active pool. Covers every method
+// the server actually uses: connect(), query(), on(), end().
+export const pool = {
+  connect: (...a) => activePool.connect(...a),
+  query: (...a) => activePool.query(...a),
+  on: (...a) => activePool.on(...a),
+  end: (...a) => activePool.end(...a),
+}
+
+/** TEST SEAM: swap the underlying pool (e.g. a PGlite adapter). No-op in prod. */
+export function __setPool(p) { activePool = p }
 
 /**
  * Run a parameterized query against the pool.
@@ -64,7 +78,7 @@ pool.on('error', (err) => {
  * @param {any[]} [params]
  */
 export function query(text, params) {
-  return pool.query(text, params)
+  return activePool.query(text, params)
 }
 
 /**
