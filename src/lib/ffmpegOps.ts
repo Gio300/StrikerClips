@@ -97,17 +97,34 @@ export async function concatVideos(files: File[], onProgress?: ProgressFn): Prom
 }
 
 /**
+ * Build ffmpeg input args, seeking each input by its multi-angle sync offset
+ * (seconds) so every clip's t=0 lands on the SAME real-world moment. `-ss`
+ * BEFORE `-i` is input seeking — the only way to independently shift one input
+ * inside a filter_complex graph. Offsets (from multiAngleSync) are normalised so
+ * the earliest clip is 0; `shortest=1` then trims to the synced window.
+ */
+function buildInputArgs(names: string[], offsets?: number[]): string[] {
+  const args: string[] = []
+  for (let i = 0; i < names.length; i++) {
+    const off = offsets?.[i] ?? 0
+    if (off > 0) args.push('-ss', String(off))
+    args.push('-i', names[i])
+  }
+  return args
+}
+
+/**
  * 2x2 grid stack — perfect for "same fight, 4 player perspectives".
  * Truncates to the shortest clip's duration so all four stay in sync.
+ * `offsets` aligns the four angles to the same moment (from multiAngleSync).
  */
-export async function gridStack4(files: File[], onProgress?: ProgressFn): Promise<Blob | null> {
+export async function gridStack4(files: File[], onProgress?: ProgressFn, offsets?: number[]): Promise<Blob | null> {
   if (files.length !== 4) return null
   const ffmpeg = await getFFmpeg()
   const detach = attachProgress(ffmpeg, onProgress)
   try {
     const names = await writeInputs(ffmpeg, files)
-    const inputArgs: string[] = []
-    for (const n of names) inputArgs.push('-i', n)
+    const inputArgs = buildInputArgs(names, offsets)
     const scaled: string[] = []
     for (let i = 0; i < 4; i++) {
       scaled.push(
@@ -140,19 +157,20 @@ export async function gridStack4(files: File[], onProgress?: ProgressFn): Promis
  * Side-by-side comparison — 2 clips horizontally.
  * Useful for "watch X's perspective vs Y's" replays.
  */
-export async function sideBySide(files: File[], onProgress?: ProgressFn): Promise<Blob | null> {
+export async function sideBySide(files: File[], onProgress?: ProgressFn, offsets?: number[]): Promise<Blob | null> {
   if (files.length !== 2) return null
   const ffmpeg = await getFFmpeg()
   const detach = attachProgress(ffmpeg, onProgress)
   try {
     const names = await writeInputs(ffmpeg, files)
+    const inputArgs = buildInputArgs(names, offsets)
     const filter =
       `[0:v]scale=${TILE_W}:${TARGET_H}:force_original_aspect_ratio=decrease,pad=${TILE_W}:${TARGET_H}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=${FPS}[v0];` +
       `[1:v]scale=${TILE_W}:${TARGET_H}:force_original_aspect_ratio=decrease,pad=${TILE_W}:${TARGET_H}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=${FPS}[v1];` +
       `[v0][v1]hstack=inputs=2:shortest=1[outv];` +
       `[0:a][1:a]amix=inputs=2:duration=shortest:dropout_transition=0[outa]`
     await ffmpeg.exec([
-      '-i', names[0], '-i', names[1],
+      ...inputArgs,
       '-filter_complex', filter,
       '-map', '[outv]', '-map', '[outa]',
       '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '23',
@@ -173,12 +191,13 @@ export async function sideBySide(files: File[], onProgress?: ProgressFn): Promis
  * Picture-in-picture: main clip fullscreen, secondary clip in bottom-right corner.
  * Audio is taken from the main clip only.
  */
-export async function pipOverlay(files: File[], onProgress?: ProgressFn): Promise<Blob | null> {
+export async function pipOverlay(files: File[], onProgress?: ProgressFn, offsets?: number[]): Promise<Blob | null> {
   if (files.length !== 2) return null
   const ffmpeg = await getFFmpeg()
   const detach = attachProgress(ffmpeg, onProgress)
   try {
     const names = await writeInputs(ffmpeg, files)
+    const inputArgs = buildInputArgs(names, offsets)
     const pipW = Math.round(TARGET_W / 4)
     const pipH = Math.round(TARGET_H / 4)
     const margin = 16
@@ -187,7 +206,7 @@ export async function pipOverlay(files: File[], onProgress?: ProgressFn): Promis
       `[1:v]scale=${pipW}:${pipH}:force_original_aspect_ratio=decrease,pad=${pipW}:${pipH}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=${FPS}[pip];` +
       `[main][pip]overlay=W-w-${margin}:H-h-${margin}:shortest=1[outv]`
     await ffmpeg.exec([
-      '-i', names[0], '-i', names[1],
+      ...inputArgs,
       '-filter_complex', filter,
       '-map', '[outv]', '-map', '0:a?',
       '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '23',

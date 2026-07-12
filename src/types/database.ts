@@ -23,6 +23,10 @@ export interface Clip {
   thumbnail: string | null
   title: string | null
   created_at: string
+  // Cost discipline: raw user uploads are transient and get purged once the
+  // combined master is confirmed on YouTube + archived. Set by migration 013.
+  is_transient?: boolean
+  purged_at?: string | null
 }
 
 export type ReelLayout = 'concat' | 'grid' | 'side-by-side' | 'pip' | 'action' | 'ultra'
@@ -35,9 +39,14 @@ export interface Reel {
   combined_video_url: string | null
   thumbnail: string | null
   // Optional: only present once migration 009 has been applied. Until then,
-  // layout is encoded into combined_video_url via `reelone-layout://` (legacy: `clutchlens-layout://`, `shinobi-layout://`).
+  // layout is encoded into combined_video_url via `killcam-layout://` (legacy: `reelone-layout://`, `clutchlens-layout://`, `shinobi-layout://`).
   // Use `resolveLayout()` from `@/lib/reelLayout` to read this safely.
   layout?: ReelLayout
+  // The monetized re-upload on OUR YouTube channel. When set, the player embeds
+  // this instead of the creator's original. Added by migration 013.
+  youtube_video_id?: string | null
+  clan_id?: string | null
+  is_clan_highlight?: boolean
   created_at: string
 }
 
@@ -378,5 +387,109 @@ export interface StatCheckSubmission {
   creator_decision: StatCheckCreatorDecision | null
   creator_notes: string | null
   creator_decided_at: string | null
+  created_at: string
+}
+
+// ── KillCam: creator agreements, rev-share, clans, rooms (migration 013) ──
+
+export type AgreementScope = 'account' | 'clip' | 'reel'
+
+/** Immutable audit record of the license a creator granted at upload. */
+export interface CreatorAgreement {
+  id: string
+  user_id: string
+  scope: AgreementScope
+  clip_id: string | null
+  reel_id: string | null
+  agreement_version: string
+  content_sha256: string | null
+  grant_host: boolean
+  grant_edit_combine: boolean
+  grant_distribute: boolean
+  grant_youtube: boolean
+  grant_monetize: boolean
+  rev_share_bps: number
+  user_agent: string | null
+  accepted_at: string
+}
+
+export type EarningSource = 'ad_revshare' | 'youtube_revshare' | 'tip' | 'adjustment'
+export type EarningStatus = 'accrued' | 'payable' | 'paid' | 'reversed'
+
+export interface CreatorEarning {
+  id: string
+  creator_id: string
+  source: EarningSource
+  reel_id: string | null
+  amount_cents: number
+  currency: string
+  status: EarningStatus
+  period: string | null
+  note: string | null
+  created_at: string
+  paid_at: string | null
+}
+
+export type ClanJoinMode = 'open' | 'request' | 'invite'
+export type ClanRole = 'owner' | 'officer' | 'member'
+
+export interface Clan {
+  id: string
+  tag: string
+  name: string
+  description: string | null
+  emblem_icon: string
+  emblem_bg: string
+  emblem_fg: string
+  banner_url: string | null
+  owner_id: string | null
+  points: number
+  member_count: number
+  wins: number
+  losses: number
+  join_mode: ClanJoinMode
+  created_at: string
+}
+
+export interface ClanMember {
+  id: string
+  clan_id: string
+  user_id: string
+  role: ClanRole
+  joined_at: string
+}
+
+export interface ClanMessage {
+  id: string
+  clan_id: string
+  user_id: string | null
+  content: string
+  created_at: string
+}
+
+export type ClanMatchStatus = 'scheduled' | 'live' | 'final' | 'cancelled'
+
+export interface ClanMatch {
+  id: string
+  clan_a: string
+  clan_b: string
+  scheduled_at: string | null
+  status: ClanMatchStatus
+  score_a: number
+  score_b: number
+  winner_clan_id: string | null
+  created_by: string | null
+  created_at: string
+}
+
+export type RoomType = 'clip' | 'reel' | 'match' | 'tournament' | 'clan_match'
+
+/** A message in a polymorphic chat room keyed by (room_type, room_ref). */
+export interface RoomMessage {
+  id: string
+  room_type: RoomType
+  room_ref: string
+  user_id: string | null
+  content: string
   created_at: string
 }

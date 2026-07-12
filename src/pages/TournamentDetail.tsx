@@ -5,6 +5,7 @@ import { useAuth } from '@/hooks/useAuth'
 import { InviteMenu } from '@/components/InviteMenu'
 import { invalidateInviteContext } from '@/hooks/useInviteContext'
 import { notify, notifyMany } from '@/lib/notifications'
+import RoomChat from '@/components/RoomChat'
 import type {
   Tournament,
   TournamentAdmin,
@@ -268,6 +269,10 @@ export function TournamentDetail() {
           canManage={Boolean(isAdmin || isOwner)}
         />
       )}
+
+      <div className="mt-8">
+        <RoomChat roomType="tournament" roomRef={tournament.id} title="Tournament chat" />
+      </div>
     </div>
   )
 }

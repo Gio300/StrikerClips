@@ -17,9 +17,9 @@ const ONDEVICE_IMG = `${import.meta.env.BASE_URL}marketing/marketing-ondevice.pn
  * - Standalone marketing site (VITE_APP_URL set): all CTAs become absolute
  *   URLs to the deployed app, e.g. https://app.example.com/signup.
  * - In-app build (VITE_APP_URL empty): respect Vite's BASE_URL so paths
- *   resolve correctly when the app is served under a sub-path like
- *   /StrikerClips/. A full-page reload is acceptable here — these are
- *   context switches, not in-app navigation.
+ *   resolve correctly when the app is served under a sub-path. A full-page
+ *   reload is acceptable here — these are context switches, not in-app
+ *   navigation.
  */
 function appHref(path: string): string {
   const explicit = import.meta.env.VITE_APP_URL || ''

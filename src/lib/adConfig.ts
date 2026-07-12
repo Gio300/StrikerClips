@@ -1,5 +1,5 @@
 /**
- * Ad slot configuration for ClutchLens.
+ * Ad slot configuration for KillCam.
  * Set VITE_ADSENSE_CLIENT + per-slot IDs in .env.local (or GitHub Pages secrets) to enable.
  * The AdSense script tag is auto-injected by main.tsx when VITE_ADSENSE_CLIENT is set.
  *
@@ -22,5 +22,11 @@ export const adConfig = {
     'feed-inline': import.meta.env.VITE_ADSENSE_FEED_INLINE ?? '',
     'create-gate': import.meta.env.VITE_ADSENSE_CREATE_GATE ?? '',
     'export-gate': import.meta.env.VITE_ADSENSE_EXPORT_GATE ?? '',
+    // High-dwell surfaces: clan pages, chat rooms, and leaderboards are the
+    // premium inventory (long sessions), so they get their own slot IDs.
+    'clans-hero': import.meta.env.VITE_ADSENSE_CLANS_HERO ?? '',
+    'clans-leaderboard-inline': import.meta.env.VITE_ADSENSE_CLANS_LEADERBOARD_INLINE ?? '',
+    'clan-detail-rail': import.meta.env.VITE_ADSENSE_CLAN_DETAIL_RAIL ?? '',
+    'room-inline': import.meta.env.VITE_ADSENSE_ROOM_INLINE ?? '',
   } as Record<string, string>,
 }

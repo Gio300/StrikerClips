@@ -2,9 +2,9 @@
 @tailwind components;
 @tailwind utilities;
 
-/* ---- Brand gradient (text) ---- */
+/* ---- Brand gradient (text) — KillCam red → orange → amber ---- */
 .brand-gradient {
-  background: linear-gradient(110deg, #22c55e 0%, #ef4444 70%, #f59e0b 100%);
+  background: linear-gradient(110deg, #FF3B1F 0%, #FF7A18 55%, #FFB800 100%);
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
@@ -13,10 +13,10 @@
 @layer base {
   body {
     @apply bg-dark text-gray-100 font-sans antialiased;
-    /* Layered atmosphere: a soft red-glow at top, deep night, faint dot grid. */
+    /* Layered atmosphere: KillCam red/orange glow at top, near-black night, faint dot grid. */
     background-image:
-      radial-gradient(ellipse 1100px 480px at 50% -120px, rgba(239, 68, 68, 0.12), transparent 60%),
-      radial-gradient(ellipse 700px 320px at 88% -80px, rgba(245, 158, 11, 0.08), transparent 70%),
+      radial-gradient(ellipse 1100px 480px at 50% -120px, rgba(255, 59, 31, 0.14), transparent 60%),
+      radial-gradient(ellipse 700px 320px at 88% -80px, rgba(255, 184, 0, 0.09), transparent 70%),
       radial-gradient(circle at 1px 1px, rgba(255, 255, 255, 0.04) 1px, transparent 1.2px);
     background-size: auto, auto, 24px 24px;
     background-attachment: fixed;
@@ -29,12 +29,12 @@
 
   /* Custom scrollbar that matches the dark theme. */
   ::-webkit-scrollbar { width: 10px; height: 10px; }
-  ::-webkit-scrollbar-track { background: #0a0814; }
+  ::-webkit-scrollbar-track { background: #0A0A0C; }
   ::-webkit-scrollbar-thumb {
-    background: #251f33;
+    background: #2A2A30;
     border-radius: 8px;
   }
-  ::-webkit-scrollbar-thumb:hover { background: #3b3050; }
+  ::-webkit-scrollbar-thumb:hover { background: #3d3d46; }
 }
 
 @layer components {

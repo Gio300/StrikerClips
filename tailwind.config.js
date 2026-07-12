@@ -7,28 +7,31 @@ export default {
   theme: {
     extend: {
       colors: {
+        // Near-black KillCam surface (warm-neutral, not the old purple-black).
         dark: {
-          DEFAULT: '#0a0814',
-          card: '#13111d',
-          border: '#251f33',
-          elevated: '#1a1726',
+          DEFAULT: '#0A0A0C',
+          card: '#141417',
+          border: '#2A2A30',
+          elevated: '#1A1A1F',
         },
-        // Cyan kept as the original "accent" so the rest of the codebase keeps working.
+        // Primary accent is now KillCam ORANGE (was cyan). This single change
+        // re-tints every `accent` usage across the app.
         accent: {
-          DEFAULT: '#00d4ff',
-          muted: '#00a8cc',
-          glow: 'rgba(0, 212, 255, 0.3)',
+          DEFAULT: '#FF7A18',
+          muted: '#FF3B1F',
+          glow: 'rgba(255, 122, 24, 0.3)',
         },
-        // New shinobi palette
+        // KillCam red / amber (kept the token names so existing markup restyles).
         kunai: {
-          DEFAULT: '#ef4444',
-          dark: '#b91c1c',
-          glow: 'rgba(239, 68, 68, 0.35)',
+          DEFAULT: '#FF3B1F',
+          dark: '#C42A12',
+          glow: 'rgba(255, 59, 31, 0.35)',
         },
         chakra: {
-          DEFAULT: '#f59e0b',
-          dark: '#b45309',
+          DEFAULT: '#FFB800',
+          dark: '#C78A00',
         },
+        // Success green retained for "done/uploaded" states.
         leaf: {
           DEFAULT: '#22c55e',
           dark: '#15803d',
@@ -40,16 +43,18 @@ export default {
         brand: ['Orbitron', 'system-ui', 'sans-serif'],
       },
       boxShadow: {
-        glow: '0 0 20px rgba(0, 212, 255, 0.2)',
-        'glow-lg': '0 0 40px rgba(0, 212, 255, 0.25)',
-        kunai: '0 0 24px rgba(239, 68, 68, 0.35)',
-        'kunai-lg': '0 0 48px rgba(239, 68, 68, 0.4)',
-        chakra: '0 0 24px rgba(245, 158, 11, 0.35)',
+        glow: '0 0 20px rgba(255, 122, 24, 0.22)',
+        'glow-lg': '0 0 40px rgba(255, 122, 24, 0.28)',
+        kunai: '0 0 24px rgba(255, 59, 31, 0.35)',
+        'kunai-lg': '0 0 48px rgba(255, 59, 31, 0.42)',
+        chakra: '0 0 24px rgba(255, 184, 0, 0.35)',
       },
       backgroundImage: {
-        'gradient-kunai': 'linear-gradient(135deg, #ef4444 0%, #f59e0b 100%)',
-        'gradient-shinobi': 'linear-gradient(135deg, #22c55e 0%, #ef4444 100%)',
-        'gradient-mist': 'linear-gradient(180deg, rgba(239,68,68,0.12) 0%, rgba(10,8,20,0) 60%)',
+        // KillCam signature: red → orange → amber.
+        'gradient-kunai': 'linear-gradient(135deg, #FF3B1F 0%, #FF7A18 55%, #FFB800 100%)',
+        'gradient-killcam': 'linear-gradient(135deg, #FF3B1F 0%, #FF7A18 55%, #FFB800 100%)',
+        'gradient-shinobi': 'linear-gradient(135deg, #FF3B1F 0%, #FFB800 100%)',
+        'gradient-mist': 'linear-gradient(180deg, rgba(255,59,31,0.12) 0%, rgba(10,10,12,0) 60%)',
       },
       animation: {
         'fade-in': 'fadeIn 0.4s ease-out',

@@ -2,12 +2,13 @@ import { defineConfig, loadEnv } from 'vite'
 import react from '@vitejs/plugin-react'
 import path from 'path'
 
-// VITE_BASE_PATH controls the deploy sub-path (GitHub Pages project sites need it).
-// Defaults to '/StrikerClips/' to keep the existing live URL working until the repo is renamed.
-// To rebrand the live URL, set VITE_BASE_PATH=/ShinobiVillage/ in .env.local + GitHub Pages secret.
+// VITE_BASE_PATH controls the deploy sub-path.
+// Defaults to '/' — the canonical home is now killcam.app served at the domain root
+// (Cloud Run). Only set VITE_BASE_PATH=/StrikerClips/ for the legacy GitHub Pages
+// project-site preview, which is served under a sub-path.
 export default defineConfig(({ mode: _mode }) => {
   const env = loadEnv(_mode, process.cwd(), '')
-  const base = env.VITE_BASE_PATH || '/StrikerClips/'
+  const base = env.VITE_BASE_PATH || '/'
 
   return {
     plugins: [react()],

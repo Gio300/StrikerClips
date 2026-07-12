@@ -3,8 +3,12 @@
 /**
  * youtube-uploader.ts — picks rows out of `public.pending_uploads`,
  * downloads the source video(s) referenced on the reel, bakes a multi-angle
- * composite with ffmpeg, uploads to the ReelOne YouTube channel, and writes
- * the resulting `youtube_video_id` back to the row.
+ * composite with ffmpeg, ARCHIVES the master to an external drive (fail-loud),
+ * uploads to the KillCam YouTube channel, purges the transient raw uploads, and
+ * writes the resulting `youtube_video_id` back to the reel + queue row.
+ *
+ * Ordering guarantees YouTube is never the only copy: bake → archive → upload →
+ * purge. If the archive drive is missing the worker aborts before uploading.
  *
  * Operator setup is documented in `docs/youtube-uploader.md`. Required env:
  *
@@ -14,6 +18,7 @@
  *   YOUTUBE_CLIENT_SECRET
  *   YOUTUBE_REFRESH_TOKEN         # generated once via OAuth playground
  *   YOUTUBE_CHANNEL_ID            # cosmetic — used in description
+ *   ARCHIVE_DIR                   # REQUIRED — external-drive path for masters, e.g. E:\KillCamMasters
  *   FFMPEG_PATH                   # optional; defaults to imageio-ffmpeg if absent
  *
  * Run:
@@ -34,6 +39,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import process from 'node:process'
+import { ensureArchiveReady, archiveMaster, purgeReelSources, storagePathFromPublicUrl } from './lib/retention'
 
 const execFileP = promisify(execFile)
 
@@ -125,7 +131,7 @@ async function processOne(row: PendingUploadRow) {
       throw new Error('No YouTube source clips on reel — uploader requires at least one yt-dlp-able URL.')
     }
 
-    workdir = await mkdtemp(join(tmpdir(), 'reelone-upload-'))
+    workdir = await mkdtemp(join(tmpdir(), 'killcam-upload-'))
     console.log(`[uploader] workdir ${workdir}`)
 
     // 1. Download each source clip with yt-dlp.
@@ -186,19 +192,44 @@ async function processOne(row: PendingUploadRow) {
       await runFfmpeg(args)
     }
 
-    // 3. Upload to YouTube.
+    // 3. Archive the master to the external drive BEFORE anything leaves for
+    //    YouTube. Fails loudly if the drive is missing — we abort here and the
+    //    catch marks this reel failed WITHOUT purging anything.
+    const archiveDir = await ensureArchiveReady()
+    const archivedPath = await archiveMaster(finalPath, reel.id, archiveDir)
+
+    // 4. Upload to YouTube.
     const accessToken = await getAccessToken()
     const ownerHandle = await fetchOwnerHandle(reel.user_id)
     const description = (reel.description ?? '').trim() +
-      `\n\nOriginal angle by @${ownerHandle ?? 'reelone-creator'} on ReelOne.\n` +
-      `Multi-angle composite generated automatically. https://reelone.app/reels/${reel.id}`
+      `\n\nOriginal angle by @${ownerHandle ?? 'a KillCam creator'} on KillCam.\n` +
+      `Multi-angle composite generated automatically. https://killcam.app/reels/${reel.id}`
     const videoId = await youtubeUpload({
       accessToken,
       filePath: finalPath,
       title: reel.title.slice(0, 95),
       description: description.slice(0, 4900),
-      tags: ['ReelOne', 'gaming', 'highlight'],
+      tags: ['KillCam', 'gaming', 'highlight'],
     })
+
+    // 5. Point the reel at the monetized re-upload so the app embeds OUR
+    //    channel's copy instead of the creator's original.
+    const masterStoragePath = storagePathFromPublicUrl(reel.combined_video_url)
+    await supabase.from('reels').update({ youtube_video_id: videoId }).eq('id', reel.id)
+
+    // 6. Purge the transient raw uploads + Supabase-hosted master. The site now
+    //    serves zero video bytes for this reel; YouTube is the CDN. Non-fatal:
+    //    the master is already safe (YouTube + external archive).
+    let sourcesPurgedAt: string | null = null
+    try {
+      await purgeReelSources(supabase, { id: reel.id, combined_video_url: reel.combined_video_url }, clips)
+      sourcesPurgedAt = new Date().toISOString()
+    } catch (purgeErr) {
+      console.error(
+        `[retention] purge failed for reel ${reel.id}:`,
+        purgeErr instanceof Error ? purgeErr.message : purgeErr,
+      )
+    }
 
     await supabase
       .from('pending_uploads')
@@ -206,9 +237,13 @@ async function processOne(row: PendingUploadRow) {
         status: 'uploaded',
         youtube_video_id: videoId,
         uploaded_at: new Date().toISOString(),
+        master_storage_path: masterStoragePath,
+        archived_path: archivedPath,
+        archived_at: new Date().toISOString(),
+        sources_purged_at: sourcesPurgedAt,
       })
       .eq('id', row.id)
-    console.log(`[uploader] reel ${row.reel_id} uploaded as https://youtu.be/${videoId}`)
+    console.log(`[uploader] reel ${row.reel_id} uploaded https://youtu.be/${videoId}; archived → ${archivedPath}`)
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     console.error(`[uploader] reel ${row.reel_id} failed:`, message)

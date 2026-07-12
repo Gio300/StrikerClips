@@ -2,7 +2,7 @@ name: Build marketing site
 
 # Manual trigger — separate from the app deploy so the marketing site can be
 # hosted anywhere (Cloudflare Pages, Netlify, GitHub Pages on its own repo).
-# This produces a downloadable artifact ('reelone-site') containing the
+# This produces a downloadable artifact ('killcam-site') containing the
 # static dist-site folder. Drop it onto your host of choice.
 
 on:
@@ -50,6 +50,6 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: reelone-site
+          name: killcam-site
           path: dist-site
           retention-days: 30

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
 import { isPlayableUrl } from '@/lib/reelLayout'
+import RoomChat from '@/components/RoomChat'
 import type { Match, Reel, Clip } from '@/types/database'
 
 export function MatchDetail() {
@@ -78,6 +79,9 @@ export function MatchDetail() {
           </div>
         </div>
       )}
+      <div className="mt-8">
+        <RoomChat roomType="match" roomRef={match.id} title="Match chat" />
+      </div>
       <Link to="/matches" className="inline-block mt-8 text-accent hover:underline">← Back to Matches</Link>
     </div>
   )

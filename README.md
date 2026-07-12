@@ -1,17 +1,20 @@
-# Shinobi Village
+# KillCam
 
-Multi-angle highlight platform for *Shinobi Strikers* players: stitch teammates' clips together, run tournaments, track power-level rankings, and chat in Discord-style boards.
+**Every angle of the kill. One cam.** — https://killcam.app
 
-> Note: the GitHub repo and live deploy URL are still `StrikerClips` until rebrand-day. Set `VITE_BASE_PATH` if you change them.
+KillCam combines every player's clip of the same moment into one synced multi-angle edit, publishes it to the KillCam YouTube channel, and gives clans pages, rosters, chat rooms, and leaderboards to battle over. Works for any game.
+
+> Note: the GitHub repo is still named `StrikerClips`. The canonical deploy is now the domain root (`/`) on Cloud Run → killcam.app. Set `VITE_BASE_PATH=/StrikerClips/` only for the legacy GitHub Pages preview.
 
 ## Tech Stack
 
 - **Frontend:** React 18 + Vite + Tailwind CSS
 - **Backend:** Supabase (Auth, PostgreSQL, Storage, Realtime)
-- **Video:** ffmpeg.wasm — client-side multi-angle stitching (concat, 2x2 grid, side-by-side, picture-in-picture)
+- **Video:** ffmpeg.wasm — client-side multi-angle stitching (concat, 2x2 grid, side-by-side, picture-in-picture) with audio cross-correlation sync to align the same moment across angles
+- **Publish/CDN:** combined masters go to the KillCam YouTube channel; the site embeds them back and serves **zero video bytes** (YouTube is the CDN). Raw uploads are transient and purged after archive.
 - **AI:** browser-only audio-energy auto-highlight detector (Web Audio API, no API costs)
-- **Hosting:** GitHub Pages (free) via GitHub Actions
-- **Monetization:** Google AdSense banners + reel pre-roll slots
+- **Hosting:** Cloud Run (container, nginx) — see [docs/DEPLOY.md](docs/DEPLOY.md)
+- **Monetization:** display ads (AdSense) around the player, in chat rooms, on clan pages and leaderboards; AdRoll retargeting pixel; ad rev-share to creators
 
 ## Setup
 

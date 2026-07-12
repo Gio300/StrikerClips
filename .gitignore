@@ -16,3 +16,25 @@ src-tauri/WixTools
 # Local-only download artifacts (e.g. promo videos pulled with yt-dlp)
 /local-downloads/
 *.mp4.tmp
+
+# Env variants (in addition to .env / .env.local above)
+.env.*
+!.env.example
+
+# Secrets / keys — never commit
+*.key
+*.pem
+*.p12
+*.pfx
+*-key.txt
+*credentials*.json
+*service-role*
+*service_role*
+*-secret*
+*refresh-token*
+runtime-config.local.js
+
+# Combined-master archive & cold storage (lives on the external drive) — never in git
+/KillCamMasters/
+/archive/
+*.master.mp4

@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/hooks/useAuth'
-import { BrandLogo } from '@/components/BrandLogo'
+import { BrandLogo, BrandMark } from '@/components/BrandLogo'
 import { BRAND } from '@/lib/brand'
 import { AdSlot } from '@/components/AdSlot'
 import { resolveLayout } from '@/lib/reelLayout'
@@ -32,12 +32,13 @@ export function Landing() {
       {/* HERO */}
       <section className="text-center mb-16 md:mb-20">
         <div className="inline-flex items-center gap-2 mb-6 pill-kunai whitespace-nowrap">
-          <span className="live-dot" /> Free to start · {BRAND.name} — {BRAND.tagline}
+          <span className="live-dot" /> Free to start · {BRAND.tagline}
         </div>
+        <BrandMark size={88} className="mx-auto mb-5 drop-shadow-[0_0_28px_rgba(255,90,20,0.35)]" />
         <BrandLogo as="h1" className="text-5xl md:text-6xl lg:text-7xl block mb-5" />
         <p className="text-lg md:text-xl text-gray-400 max-w-2xl mx-auto mb-8">
-          Turn squad clips into one reel, run brackets, and share everywhere — any game, right in the browser. Optional
-          desktop app later for OAuth, local AI help, and stream tools.
+          Combine every player’s angle of the same moment into one synced multi-angle kill cam. Run brackets, form
+          clans, and battle in live chat rooms — any game, right in the browser.
         </p>
         <div className="flex flex-wrap gap-3 justify-center">
           {user ? (

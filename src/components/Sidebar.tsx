@@ -1,12 +1,14 @@
 import { NavLink } from 'react-router-dom'
 import { useAuth } from '@/hooks/useAuth'
-import { BrandLogo } from '@/components/BrandLogo'
+import { BrandLogo, BrandMark } from '@/components/BrandLogo'
 import { useUnreadNotifications } from '@/hooks/useUnreadNotifications'
 
 const NAV_ITEMS: { to: string; label: string; Icon: () => JSX.Element }[] = [
   { to: '/', label: 'Home', Icon: HomeIcon },
   { to: '/reels', label: 'Reels', Icon: ReelsIcon },
   { to: '/tournaments', label: 'Tournaments', Icon: TournamentsIcon },
+  { to: '/proof', label: 'Proof', Icon: ProofIcon },
+  { to: '/clans', label: 'Clans', Icon: ClansIcon },
   { to: '/boards', label: 'Boards', Icon: BoardsIcon },
   { to: '/live', label: 'Live', Icon: LiveIcon },
   { to: '/ai', label: 'AI', Icon: AIIcon },
@@ -23,9 +25,7 @@ export function Sidebar() {
     <aside className="w-16 md:w-64 shrink-0 bg-dark-card/70 backdrop-blur-sm border-r border-dark-border flex flex-col sticky top-0 h-screen">
       <div className="p-4 border-b border-dark-border">
         <NavLink to="/" className="flex items-center gap-2.5 hover:opacity-90 transition-opacity">
-          <div className="relative w-9 h-9 rounded-lg bg-gradient-kunai flex items-center justify-center shadow-md">
-            <ShurikenIcon />
-          </div>
+          <BrandMark size={36} className="shrink-0" />
           <span className="hidden md:block">
             <BrandLogo as="span" className="text-base" />
           </span>
@@ -112,14 +112,6 @@ export function Sidebar() {
   )
 }
 
-function ShurikenIcon() {
-  return (
-    <svg className="w-5 h-5 text-white" viewBox="0 0 24 24" fill="currentColor">
-      <path d="M12 2 L14 10 L22 12 L14 14 L12 22 L10 14 L2 12 L10 10 Z" />
-    </svg>
-  )
-}
-
 function HomeIcon() {
   return (
     <svg className="w-5 h-5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -150,6 +142,22 @@ function BoardsIcon() {
   return (
     <svg className="w-5 h-5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z M8 11h8M8 15h5" />
+    </svg>
+  )
+}
+
+function ClansIcon() {
+  return (
+    <svg className="w-5 h-5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M12 3l7 2.5v5.5c0 4.4-3 7.6-7 9-4-1.4-7-4.6-7-9V5.5L12 3z" />
+    </svg>
+  )
+}
+
+function ProofIcon() {
+  return (
+    <svg className="w-5 h-5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
     </svg>
   )
 }

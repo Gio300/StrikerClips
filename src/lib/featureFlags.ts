@@ -12,7 +12,7 @@ const env = import.meta.env
 /** Stripe Connect donations (DonateButton, payouts card on /dashboard). */
 export const donationsEnabled: boolean = Boolean(env.VITE_STRIPE_PUBLISHABLE_KEY)
 
-/** Auto-upload to ReelOne YouTube channel (button on ReelDetail). */
+/** Auto-upload to the KillCam YouTube channel (button on ReelDetail). */
 export const youtubeAutoUploadEnabled: boolean = Boolean(env.VITE_YOUTUBE_AUTOUPLOAD === '1')
 
 /** OCR-driven match result parsing on screenshot upload. */
