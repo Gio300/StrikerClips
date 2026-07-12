@@ -66,6 +66,7 @@ const ALLOWED_TABLES = new Set([
   'clan_messages',
   'clan_matches',
   'room_messages',
+  'clip_events',
 ])
 
 // SQL operators keyed by the frontend's op name.

@@ -810,3 +810,31 @@ values ('00000000-0000-0000-0000-000000000001', 'general', 'text'),
        ('00000000-0000-0000-0000-000000000001', 'highlights', 'clips'),
        ('00000000-0000-0000-0000-000000000001', 'clips', 'clips')
 on conflict (server_id, name) do nothing;
+
+-- ─────────────────────────────────────────────────────────────────────────
+--  clip_events — the EVENT INDEX that makes the AI moment-reference instant.
+--  A timestamped log of in-game events per video (kill, flag grab, capture,
+--  base/barrier, round/match win, combo) for Naruto to Boruto: Shinobi Striker.
+--  Sources, most reliable first: 'tag' (uploader-supplied at upload),
+--  'ocr' (killfeed/HUD), 'audio', 'chat'. `ordinal` supports "the Nth run".
+-- ─────────────────────────────────────────────────────────────────────────
+create table if not exists public.clip_events (
+  id          uuid primary key default gen_random_uuid(),
+  video_id    text not null,          -- YouTube id (canonical) or reel/clip id
+  clip_id     uuid,                   -- optional link to public.clips
+  game        text not null default 'shinobi_striker',
+  mode        text,                   -- flag_battle | barrier_battle | base_battle | combat
+  event_kind  text not null,          -- kill | death | flag_grab | flag_capture | base_taken | barrier | round_win | match_win | combo
+  actor       text,                   -- who did it (username / display text)
+  target      text,                   -- who it happened to
+  ordinal     integer,                -- 1st, 2nd, ... occurrence of this kind
+  t_seconds   numeric not null,       -- start moment
+  end_seconds numeric,                -- optional segment end (reference only; full video stays scrubbable)
+  label       text,                   -- human label for chapters ("Kill 4 on rival")
+  source      text not null default 'tag',
+  created_by  uuid references public.profiles(id) on delete set null,
+  created_at  timestamptz default now()
+);
+
+create index if not exists idx_clip_events_video on public.clip_events(video_id, t_seconds);
+create index if not exists idx_clip_events_kind  on public.clip_events(video_id, event_kind, ordinal);

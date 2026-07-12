@@ -7,6 +7,7 @@ const NAV_ITEMS: { to: string; label: string; Icon: () => JSX.Element }[] = [
   { to: '/', label: 'Home', Icon: HomeIcon },
   { to: '/reels', label: 'Reels', Icon: ReelsIcon },
   { to: '/tournaments', label: 'Tournaments', Icon: TournamentsIcon },
+  { to: '/proof', label: 'Proof', Icon: ProofIcon },
   { to: '/clans', label: 'Clans', Icon: ClansIcon },
   { to: '/boards', label: 'Boards', Icon: BoardsIcon },
   { to: '/live', label: 'Live', Icon: LiveIcon },
@@ -149,6 +150,14 @@ function ClansIcon() {
   return (
     <svg className="w-5 h-5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M12 3l7 2.5v5.5c0 4.4-3 7.6-7 9-4-1.4-7-4.6-7-9V5.5L12 3z" />
+    </svg>
+  )
+}
+
+function ProofIcon() {
+  return (
+    <svg className="w-5 h-5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
     </svg>
   )
 }

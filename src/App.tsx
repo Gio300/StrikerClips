@@ -29,6 +29,7 @@ import { Dashboard } from '@/pages/Dashboard'
 import { AILabel } from '@/pages/AILabel'
 import Clans from '@/pages/Clans'
 import ClanDetail from '@/pages/ClanDetail'
+import { ProofFinder } from '@/pages/ProofFinder'
 
 export default function App() {
   return (
@@ -51,6 +52,7 @@ export default function App() {
         <Route path="matches/:id" element={<MatchDetail />} />
         <Route path="tournaments" element={<Tournaments />} />
         <Route path="tournaments/:id" element={<TournamentDetail />} />
+        <Route path="proof" element={<ProofFinder />} />
         <Route path="clans" element={<Clans />} />
         <Route path="clans/:clanId" element={<ClanDetail />} />
         <Route path="boards" element={<Boards />} />
