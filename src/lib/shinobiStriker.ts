@@ -69,19 +69,32 @@ export function parseCountOrdinal(text: string): { count?: number; ordinal?: num
   return { count, ordinal }
 }
 
-/** Best-effort detect the event kind referenced by a phrase. */
+/**
+ * Detect the event kind a phrase refers to. Phrase-aware and tolerant of natural
+ * wording like "flag on the second run" or "when he ran in the flag" — not just
+ * exact synonyms. Order matters (capture beats grab; flag/run beats kill).
+ */
 export function detectEventKind(text: string): string | null {
-  const t = ` ${text.toLowerCase()} `
-  let best: { kind: string; len: number } | null = null
-  for (const e of EVENT_KINDS) {
-    for (const syn of e.synonyms) {
-      if (t.includes(` ${syn} `) || t.includes(`${syn} `) || t.includes(` ${syn}`)) {
-        // Prefer the longest matching phrase (more specific wins).
-        if (!best || syn.length > best.len) best = { kind: e.kind, len: syn.length }
-      }
-    }
+  const t = ` ${text.toLowerCase().replace(/[^a-z0-9\s]/g, ' ')} `
+  const has = (w: string) => new RegExp(`\\b${w}`).test(t)
+  const any = (...ws: string[]) => ws.some(has)
+
+  const flag = has('flag')
+  // Capture beats grab when both are implied.
+  if ((flag && any('captur', 'capp', 'scor', 'point', 'return')) || any('captur', 'capp', 'scored')) return 'flag_capture'
+  // Flag grab / flag run — "run"/"ran" in this game almost always means a flag run.
+  if (flag || any('grab', 'grabb', 'snag')) return 'flag_grab'
+  if (/\b(ran|run|runs|running)\b/.test(t)) return 'flag_grab'
+  if (has('base')) return 'base_taken'
+  if (has('barrier')) return 'barrier'
+  if (any('kill', 'dropp', 'downed', 'eliminat', 'ko', 'knockout', 'clapp', 'bodied', 'destroy')) {
+    return has('died') || has('death') ? 'death' : 'kill'
   }
-  return best?.kind ?? null
+  if (any('death', 'died')) return 'death'
+  if (any('combo')) return 'combo'
+  if (any('round')) return 'round_win'
+  if (any('win', 'won', 'victor', 'clutch', 'carried', 'gg')) return 'match_win'
+  return null
 }
 
 export function labelForKind(kind: string): string {

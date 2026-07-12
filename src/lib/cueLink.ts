@@ -54,8 +54,13 @@ export type Moment = {
   time: string
 }
 
+/** Start a few seconds BEFORE the tagged moment — landing slightly early is far
+ * better than landing after it, and absorbs approximate/rough timestamps. */
+export const LEAD_IN_SEC = 3
+
 export function toMoment(videoId: string, event: ClipEvent): Moment {
-  const t = Number(event.t_seconds) || 0
+  const raw = Number(event.t_seconds) || 0
+  const t = Math.max(0, raw - LEAD_IN_SEC)
   const label = event.label || describeEvent(event)
   return {
     event,
