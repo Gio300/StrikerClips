@@ -1,0 +1,17 @@
+# Keep the Cloud Build upload small and deterministic.
+.git
+node_modules
+android
+appicons
+dist
+dist-site
+src-tauri/target
+# Local env + helper artifacts (the Dockerfile sets build env explicitly)
+.env
+.env.local
+.env.*.local
+_*
+*.log
+*.mp4
+*.mp4.tmp
+/local-downloads/
