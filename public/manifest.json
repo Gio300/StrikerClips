@@ -1,13 +1,13 @@
 {
-  "name": "ReelOne",
-  "short_name": "ReelOne",
-  "description": "Multi-angle reels, tournaments, and community — for every game.",
+  "name": "KillCam",
+  "short_name": "KillCam",
+  "description": "Every angle of the kill. One cam — multi-angle kill highlights, clans, and tournaments.",
   "start_url": ".",
   "scope": ".",
   "display": "standalone",
   "orientation": "any",
-  "background_color": "#0a0a0f",
-  "theme_color": "#0a0a0f",
+  "background_color": "#0A0A0C",
+  "theme_color": "#0A0A0C",
   "icons": [
     {
       "src": "favicon.svg",

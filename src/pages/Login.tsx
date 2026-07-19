@@ -23,12 +23,6 @@ export function Login() {
     navigate('/')
   }
 
-  async function handleOAuth(provider: 'google' | 'github' | 'facebook') {
-    setError('')
-    const { error } = await supabase.auth.signInWithOAuth({ provider })
-    if (error) setError(error.message)
-  }
-
   const inputCls = 'w-full px-4 py-2.5 rounded-lg bg-dark border border-dark-border text-white placeholder-gray-500 focus:outline-none focus:border-kunai/60 focus:ring-2 focus:ring-kunai/20 transition-shadow'
 
   return (
@@ -54,18 +48,6 @@ export function Login() {
             </button>
           </form>
 
-          <div className="my-5 flex items-center gap-3">
-            <div className="flex-1 h-px bg-dark-border" />
-            <span className="text-xs text-gray-500 uppercase tracking-wider">or continue with</span>
-            <div className="flex-1 h-px bg-dark-border" />
-          </div>
-
-          <div className="grid grid-cols-3 gap-2">
-            <OAuthBtn label="Google" onClick={() => handleOAuth('google')} />
-            <OAuthBtn label="Facebook" onClick={() => handleOAuth('facebook')} brand="facebook" />
-            <OAuthBtn label="GitHub" onClick={() => handleOAuth('github')} />
-          </div>
-
           <p className="mt-6 text-center text-sm text-gray-400">
             Don't have an account?{' '}
             <Link to="/signup" className="text-kunai hover:underline font-medium">Sign up</Link>
@@ -73,20 +55,5 @@ export function Login() {
         </div>
       </div>
     </div>
-  )
-}
-
-function OAuthBtn({ label, onClick, brand }: { label: string; onClick: () => void; brand?: 'facebook' }) {
-  const hover = brand === 'facebook'
-    ? 'hover:border-[#1877F2]/60 hover:text-[#1877F2]'
-    : 'hover:border-kunai/50 hover:text-white'
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={`py-2 rounded-lg border border-dark-border bg-dark-card text-gray-300 ${hover} transition-colors text-sm font-medium`}
-    >
-      {label}
-    </button>
   )
 }

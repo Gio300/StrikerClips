@@ -31,6 +31,13 @@ jobs:
       - name: Build
         run: npm run build
         env:
+          # Standalone preview: the site runs on an in-browser backend so login,
+          # create, squad, director etc. all work end-to-end without a server.
+          # Flip VITE_MOCK_BACKEND off (and set real Supabase secrets) when the
+          # shared backend is chosen.
+          VITE_BASE_PATH: '/'
+          VITE_MOCK_BACKEND: '1'
+          VITE_CREATION_AD_SECONDS: '0'
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
           VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
 

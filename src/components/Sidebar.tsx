@@ -3,17 +3,49 @@ import { useAuth } from '@/hooks/useAuth'
 import { BrandLogo } from '@/components/BrandLogo'
 import { useUnreadNotifications } from '@/hooks/useUnreadNotifications'
 
-const NAV_ITEMS: { to: string; label: string; Icon: () => JSX.Element }[] = [
-  { to: '/', label: 'Home', Icon: HomeIcon },
-  { to: '/reels', label: 'Reels', Icon: ReelsIcon },
-  { to: '/tournaments', label: 'Tournaments', Icon: TournamentsIcon },
-  { to: '/boards', label: 'Boards', Icon: BoardsIcon },
-  { to: '/live', label: 'Live', Icon: LiveIcon },
-  { to: '/ai', label: 'AI', Icon: AIIcon },
-  { to: '/rankings', label: 'Rankings', Icon: RankingsIcon },
-  { to: '/dashboard', label: 'Dashboard', Icon: DashboardIcon },
-  { to: '/profile', label: 'Profile', Icon: ProfileIcon },
+// Five destinations, on purpose. Everything else got folded in: the reel feed
+// is Watch, Director IS Live (watch party + DVR), tournaments/rankings/clans are
+// one Compete hub, and profile/redeem/settings are Me. Best options only.
+const PRIMARY_NAV: { to: string; label: string; Icon: () => JSX.Element }[] = [
+  { to: '/reels', label: 'Watch', Icon: HomeIcon },
+  { to: '/director', label: 'Live', Icon: LiveIcon },
+  { to: '/tournaments', label: 'Compete', Icon: TournamentsIcon },
+  { to: '/browser', label: 'Browser', Icon: BrowserIcon },
+  { to: '/profile', label: 'Me', Icon: ProfileIcon },
 ]
+
+function renderNavItem({ to, label, Icon }: { to: string; label: string; Icon: () => JSX.Element }) {
+  return (
+    <NavLink
+      key={to}
+      to={to}
+      end={to === '/'}
+      className={({ isActive }) =>
+        `relative flex items-center gap-3 px-3 py-2 rounded-lg transition-colors ${
+          isActive ? 'text-white bg-dark-elevated' : 'text-gray-400 hover:text-white hover:bg-dark-elevated/60'
+        }`
+      }
+    >
+      {({ isActive }) => (
+        <>
+          {isActive && <span className="absolute left-0 top-1.5 bottom-1.5 w-0.5 rounded-r bg-gradient-kunai" />}
+          <span className={isActive ? 'text-kunai' : ''}>
+            <Icon />
+          </span>
+          <span className="hidden md:block text-sm font-medium">{label}</span>
+        </>
+      )}
+    </NavLink>
+  )
+}
+
+function PlusIcon() {
+  return (
+    <svg className="w-5 h-5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.2} d="M12 5v14M5 12h14" />
+    </svg>
+  )
+}
 
 export function Sidebar() {
   const { user } = useAuth()
@@ -33,32 +65,17 @@ export function Sidebar() {
       </div>
 
       <nav className="flex-1 p-2 space-y-0.5 overflow-y-auto">
-        {NAV_ITEMS.map(({ to, label, Icon }) => (
-          <NavLink
-            key={to}
-            to={to}
-            end={to === '/'}
-            className={({ isActive }) =>
-              `relative flex items-center gap-3 px-3 py-2 rounded-lg transition-colors ${
-                isActive
-                  ? 'text-white bg-dark-elevated'
-                  : 'text-gray-400 hover:text-white hover:bg-dark-elevated/60'
-              }`
-            }
-          >
-            {({ isActive }) => (
-              <>
-                {isActive && (
-                  <span className="absolute left-0 top-1.5 bottom-1.5 w-0.5 rounded-r bg-gradient-kunai" />
-                )}
-                <span className={isActive ? 'text-kunai' : ''}>
-                  <Icon />
-                </span>
-                <span className="hidden md:block text-sm font-medium">{label}</span>
-              </>
-            )}
-          </NavLink>
-        ))}
+        {/* One clear primary action */}
+        <NavLink
+          to="/highlight/create"
+          className="flex items-center justify-center md:justify-start gap-2 px-3 py-2.5 mb-2 rounded-lg bg-gradient-kunai text-dark font-semibold hover:shadow-glow transition-shadow"
+        >
+          <PlusIcon />
+          <span className="hidden md:block text-sm">Create</span>
+        </NavLink>
+
+        {PRIMARY_NAV.map((item) => renderNavItem(item))}
+
         {user && (
           <NavLink
             to="/notifications"
@@ -91,6 +108,13 @@ export function Sidebar() {
       </nav>
 
       <div className="p-2 border-t border-dark-border space-y-0.5">
+        <NavLink
+          to="/redeem"
+          className="flex items-center gap-3 px-3 py-2 rounded-lg text-leaf hover:bg-leaf/10 transition-colors"
+        >
+          <TicketIcon />
+          <span className="hidden md:block text-sm font-medium">Redeem a pass</span>
+        </NavLink>
         <NavLink
           to="/marketing"
           className="flex items-center gap-3 px-3 py-2 rounded-lg text-chakra hover:bg-chakra/10 transition-colors"
@@ -162,6 +186,23 @@ function LiveIcon() {
   )
 }
 
+function DirectorIcon() {
+  return (
+    <svg className="w-5 h-5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M3 7h18M3 7l2-3h4l-2 3M11 7l2-3h4l-2 3M4 7v13h16V7M9 11l5 3-5 3v-6z" />
+    </svg>
+  )
+}
+
+function BrowserIcon() {
+  return (
+    <svg className="w-5 h-5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <circle cx="12" cy="12" r="9" strokeWidth={1.8} />
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M3 12h18M12 3c2.5 2.5 2.5 15 0 18M12 3c-2.5 2.5-2.5 15 0 18" />
+    </svg>
+  )
+}
+
 function AIIcon() {
   return (
     <svg className="w-5 h-5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -190,6 +231,14 @@ function LoginIcon() {
   return (
     <svg className="w-5 h-5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M11 16l-4-4m0 0l4-4m-4 4h14m-5 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h7a3 3 0 013 3v1" />
+    </svg>
+  )
+}
+
+function TicketIcon() {
+  return (
+    <svg className="w-5 h-5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M15 5v2m0 4v2m0 4v2M5 5h14a2 2 0 012 2v3a2 2 0 000 4v3a2 2 0 01-2 2H5a2 2 0 01-2-2v-3a2 2 0 000-4V7a2 2 0 012-2z" />
     </svg>
   )
 }

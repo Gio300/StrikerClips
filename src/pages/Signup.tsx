@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
 import { BrandLogo } from '@/components/BrandLogo'
 import { BRAND } from '@/lib/brand'
@@ -12,6 +12,7 @@ export function Signup() {
   const [loading, setLoading] = useState(false)
   const [sent, setSent] = useState(false)
   const [termsAccepted, setTermsAccepted] = useState(false)
+  const navigate = useNavigate()
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
@@ -32,18 +33,20 @@ export function Signup() {
         },
       },
     })
-    setLoading(false)
     if (error) {
+      setLoading(false)
       setError(error.message)
       return
     }
+    // If a session already exists (local/instant backends), skip the
+    // "check your email" step and drop the new user straight into the app.
+    const { data: sess } = await supabase.auth.getSession()
+    setLoading(false)
+    if (sess?.session) {
+      navigate('/')
+      return
+    }
     setSent(true)
-  }
-
-  async function handleOAuth(provider: 'google' | 'github' | 'facebook') {
-    setError('')
-    const { error } = await supabase.auth.signInWithOAuth({ provider })
-    if (error) setError(error.message)
   }
 
   const inputCls = 'w-full px-4 py-2.5 rounded-lg bg-dark border border-dark-border text-white placeholder-gray-500 focus:outline-none focus:border-kunai/60 focus:ring-2 focus:ring-kunai/20 transition-shadow'
@@ -110,18 +113,6 @@ export function Signup() {
             </button>
           </form>
 
-          <div className="my-5 flex items-center gap-3">
-            <div className="flex-1 h-px bg-dark-border" />
-            <span className="text-xs text-gray-500 uppercase tracking-wider">or continue with</span>
-            <div className="flex-1 h-px bg-dark-border" />
-          </div>
-
-          <div className="grid grid-cols-3 gap-2">
-            <OAuthBtn label="Google" onClick={() => handleOAuth('google')} />
-            <OAuthBtn label="Facebook" onClick={() => handleOAuth('facebook')} brand="facebook" />
-            <OAuthBtn label="GitHub" onClick={() => handleOAuth('github')} />
-          </div>
-
           <p className="mt-6 text-center text-sm text-gray-400">
             Already have an account?{' '}
             <Link to="/login" className="text-kunai hover:underline font-medium">Sign in</Link>
@@ -129,20 +120,5 @@ export function Signup() {
         </div>
       </div>
     </div>
-  )
-}
-
-function OAuthBtn({ label, onClick, brand }: { label: string; onClick: () => void; brand?: 'facebook' }) {
-  const hover = brand === 'facebook'
-    ? 'hover:border-[#1877F2]/60 hover:text-[#1877F2]'
-    : 'hover:border-kunai/50 hover:text-white'
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={`py-2 rounded-lg border border-dark-border bg-dark-card text-gray-300 ${hover} transition-colors text-sm font-medium`}
-    >
-      {label}
-    </button>
   )
 }

@@ -30,6 +30,7 @@ export interface YTPlayer {
   getPlayerState: () => number
   getCurrentTime: () => number
   getDuration: () => number
+  setPlaybackRate?: (rate: number) => void
 }
 export interface YTPlayerOptions {
   videoId: string

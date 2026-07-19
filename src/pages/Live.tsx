@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/hooks/useAuth'
@@ -88,6 +88,32 @@ function StreamsTab() {
   const [error, setError] = useState('')
   const [multiView, setMultiView] = useState(false)
   const [focusedIndex, setFocusedIndex] = useState(0)
+  const [directorNote, setDirectorNote] = useState('')
+  const streamCountRef = useRef(0)
+
+  // Voice / text director: the global VoiceButton dispatches `kc:director`.
+  // "all screens" → 4-up, "single" → single, "focus screen N" → focus that cam.
+  useEffect(() => {
+    function onDirector(e: Event) {
+      const detail = (e as CustomEvent).detail as { action?: string; screen?: number } | undefined
+      if (!detail?.action) return
+      const flash = (msg: string) => { setDirectorNote(msg); window.setTimeout(() => setDirectorNote(''), 2500) }
+      switch (detail.action) {
+        case 'all': setMultiView(true); flash('Director: all screens'); break
+        case 'single': setMultiView(false); flash('Director: single screen'); break
+        case 'focus': {
+          const n = detail.screen ?? 1
+          const idx = Math.max(0, Math.min(n - 1, Math.max(0, streamCountRef.current - 1)))
+          setMultiView(true); setFocusedIndex(idx); flash(`Director: focus screen ${idx + 1}`)
+          break
+        }
+        case 'stats': flash('Director: stats (open the Stat Check tab)'); break
+        default: flash(`Director: ${detail.action}`); break
+      }
+    }
+    window.addEventListener('kc:director', onDirector as EventListener)
+    return () => window.removeEventListener('kc:director', onDirector as EventListener)
+  }, [])
 
   const [groups, setGroups] = useState<GroupWithMembers[]>([])
   const [groupName, setGroupName] = useState('')
@@ -256,6 +282,7 @@ function StreamsTab() {
     : streams
 
   const displayStreams = viewingGroupId ? groupStreams : streams
+  streamCountRef.current = displayStreams.length
 
   if (loading) {
     return (
@@ -445,6 +472,10 @@ function StreamsTab() {
             </div>
           )}
         </div>
+      )}
+
+      {directorNote && (
+        <div className="mb-3 rounded-lg border border-accent/40 bg-accent/10 px-4 py-2 text-sm text-accent">🎙 {directorNote}</div>
       )}
 
       <div className="flex items-center justify-between mb-4">

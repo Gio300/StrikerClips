@@ -1,5 +1,6 @@
 import { Outlet } from 'react-router-dom'
 import { Sidebar } from './Sidebar'
+import { VoiceButton } from './VoiceButton'
 
 export function Layout() {
   return (
@@ -8,6 +9,7 @@ export function Layout() {
       <main className="flex-1 overflow-x-hidden overflow-y-auto">
         <Outlet />
       </main>
+      <VoiceButton />
     </div>
   )
 }

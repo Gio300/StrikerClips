@@ -17,6 +17,7 @@ import { ProfileTrophies } from '@/pages/ProfileTrophies'
 import { Tournaments } from '@/pages/Tournaments'
 import { TournamentDetail } from '@/pages/TournamentDetail'
 import { Live } from '@/pages/Live'
+import { Director } from '@/pages/Director'
 import { AI } from '@/pages/AI'
 import { CreateHighlight } from '@/pages/CreateHighlight'
 import { Terms } from '@/pages/Terms'
@@ -27,6 +28,8 @@ import { SubmitResult } from '@/pages/SubmitResult'
 import { NotificationsPage } from '@/pages/Notifications'
 import { Dashboard } from '@/pages/Dashboard'
 import { AILabel } from '@/pages/AILabel'
+import { Redeem } from '@/pages/Redeem'
+import { Browser } from '@/pages/Browser'
 
 export default function App() {
   return (
@@ -51,12 +54,15 @@ export default function App() {
         <Route path="tournaments/:id" element={<TournamentDetail />} />
         <Route path="boards" element={<Boards />} />
         <Route path="live" element={<Live />} />
+        <Route path="director" element={<Director />} />
         <Route path="ai" element={<AI />} />
         <Route path="rankings" element={<Rankings />} />
         <Route path="stat-check" element={<StatCheck />} />
         <Route path="submit-result" element={<SubmitResult />} />
         <Route path="notifications" element={<AuthGuard><NotificationsPage /></AuthGuard>} />
         <Route path="dashboard" element={<AuthGuard><Dashboard /></AuthGuard>} />
+        <Route path="redeem" element={<AuthGuard><Redeem /></AuthGuard>} />
+        <Route path="browser" element={<Browser />} />
         <Route path="ai/label" element={<AuthGuard><AILabel /></AuthGuard>} />
         <Route path="boards/create" element={<AuthGuard><CreateServer /></AuthGuard>} />
         <Route path="boards/:serverId/:channelId?" element={<BoardDetail />} />

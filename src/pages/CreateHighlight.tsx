@@ -4,11 +4,14 @@ import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/hooks/useAuth'
 import { useFFmpeg, layoutLimits, type ReelLayout } from '@/hooks/useFFmpeg'
 import { useEntitlements } from '@/hooks/useEntitlements'
-import { detectHighlights, formatTimestamp, type HighlightMoment } from '@/lib/highlightDetector'
+import { formatTimestamp, type HighlightMoment } from '@/lib/highlightDetector'
+import { detectByCategory } from '@/lib/categoryDetector'
+import { HIGHLIGHT_CATEGORIES, type HighlightCategoryId } from '@/lib/highlightCategories'
 import { extractYouTubeId } from '@/lib/youtubeApi'
 import { encodeLayoutMarker } from '@/lib/reelLayout'
 import { BRAND } from '@/lib/brand'
 import { CreationSponsorGate } from '@/components/CreationSponsorGate'
+import { ClipFinder } from '@/components/ClipFinder'
 import type { UserYoutubeLink } from '@/types/database'
 
 type ClipInput =
@@ -67,6 +70,8 @@ export function CreateHighlight() {
 
   const [aiAnalyzing, setAiAnalyzing] = useState<number | null>(null)
   const [suggestionsByIdx, setSuggestionsByIdx] = useState<Record<number, HighlightMoment[]>>({})
+  const [category, setCategory] = useState<HighlightCategoryId>('all')
+  const [scanProgress, setScanProgress] = useState<{ idx: number; pct: number } | null>(null)
 
   const limits = layoutLimits(layout)
   // 'concat', 'action', and 'ultra' all accept a range of clip counts; the
@@ -137,11 +142,15 @@ export function CreateHighlight() {
     const c = clips[i]
     if (!c || c.type !== 'upload') return
     setAiAnalyzing(i)
+    setScanProgress({ idx: i, pct: 0 })
     try {
-      const moments = await detectHighlights(c.file)
+      const moments = await detectByCategory(c.file, category, {
+        onProgress: (done, total) => setScanProgress({ idx: i, pct: Math.round((done / total) * 100) }),
+      })
       setSuggestionsByIdx((prev) => ({ ...prev, [i]: moments }))
     } finally {
       setAiAnalyzing(null)
+      setScanProgress(null)
     }
   }
 
@@ -309,6 +318,7 @@ export function CreateHighlight() {
   const uploadCount = clips.filter((c) => c.type === 'upload').length
   const youtubeCount = clips.filter((c) => c.type === 'youtube').length
   const hasMix = uploadCount > 0 && youtubeCount > 0
+  const activeCat = HIGHLIGHT_CATEGORIES.find((c) => c.id === category) ?? HIGHLIGHT_CATEGORIES[0]
 
   return (
     <div className="p-8 max-w-3xl mx-auto">
@@ -343,6 +353,11 @@ export function CreateHighlight() {
             placeholder="4-stack clutch, all angles"
           />
         </div>
+
+        <ClipFinder
+          onAdd={addYoutubeClip}
+          username={(user?.user_metadata as { username?: string } | undefined)?.username}
+        />
 
         {!showAdvanced ? (
           <div>
@@ -466,7 +481,9 @@ export function CreateHighlight() {
         )}
 
         <div>
-          <label className="block text-sm text-gray-400 mb-2">Add YouTube clip (URL)</label>
+          <label className="block text-sm text-gray-400 mb-2">
+            {showAdvanced ? 'Add YouTube clip (URL)' : 'Or paste a link manually'}
+          </label>
           <div className="flex flex-wrap gap-2">
             <input
               type="text"
@@ -527,6 +544,34 @@ export function CreateHighlight() {
           </div>
         )}
 
+        {uploadCount > 0 && (
+          <div>
+            <label className="block text-sm text-gray-400 mb-2">What to pull</label>
+            <div className="flex flex-wrap gap-2">
+              {HIGHLIGHT_CATEGORIES.map((cat) => {
+                const active = category === cat.id
+                return (
+                  <button
+                    key={cat.id}
+                    type="button"
+                    onClick={() => setCategory(cat.id)}
+                    className={`px-3 py-2 rounded-lg border text-left transition-colors ${
+                      active ? 'border-accent bg-accent/10' : 'border-dark-border bg-dark-card hover:border-accent/40'
+                    }`}
+                  >
+                    <div className="text-sm font-medium">{cat.label}</div>
+                    <div className="text-xs text-gray-500">{cat.sub}</div>
+                  </button>
+                )
+              })}
+            </div>
+            <p className="text-xs text-gray-500 mt-1">
+              Pick a category, then hit “Find {activeCat.label}” on a clip below. K.O.s, ultimates, flags, opening, and
+              closing are matched from the on-screen text; “All highlights” uses audio.
+            </p>
+          </div>
+        )}
+
         {clips.length > 0 && (
           <div>
             <label className="block text-sm text-gray-400 mb-2">Clips ({clips.length})</label>
@@ -573,9 +618,13 @@ export function CreateHighlight() {
                           onClick={() => analyzeClip(i)}
                           disabled={aiAnalyzing === i}
                           className="text-xs px-2 py-1 rounded border border-accent/40 text-accent hover:bg-accent/10 disabled:opacity-50"
-                          title="Detect big moments via audio (clutch spikes)"
+                          title={category === 'all' ? 'Detect big moments via audio (clutch spikes)' : `Scan on-screen text for ${activeCat.label}`}
                         >
-                          {aiAnalyzing === i ? 'Analyzing…' : 'Find clutch moments'}
+                          {aiAnalyzing === i
+                            ? scanProgress?.idx === i
+                              ? `Scanning ${scanProgress.pct}%`
+                              : 'Analyzing…'
+                            : `Find ${activeCat.label}`}
                         </button>
                       )}
                       <button

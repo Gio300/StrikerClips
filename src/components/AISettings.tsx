@@ -153,7 +153,7 @@ export function AISettings() {
       />
 
       <p className="text-[11px] text-gray-500 leading-relaxed border-t border-dark-border pt-3">
-        Reminder: ReelOne never reads or transmits these keys. They live in this browser's
+        Reminder: KillCam never reads or transmits these keys. They live in this browser's
         localStorage. Clear your browser data to wipe them, or use the "Forget" button on each.
       </p>
     </div>

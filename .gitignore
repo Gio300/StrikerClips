@@ -16,3 +16,8 @@ src-tauri/WixTools
 # Local-only download artifacts (e.g. promo videos pulled with yt-dlp)
 /local-downloads/
 *.mp4.tmp
+
+# Local dev + on-device verification helpers (this session)
+_*
+/android
+/appicons
