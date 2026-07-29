@@ -14,6 +14,7 @@ interface ImportMetaEnv {
   readonly VITE_ADSENSE_EXPORT_GATE?: string
   readonly VITE_FACEBOOK_APP_ID?: string
   readonly VITE_BASE_PATH?: string
+  readonly VITE_MOBILE_STORE_BUILD?: string
   /** Per-build stamp injected by vite.buildId.ts; drives the update prompt. */
   readonly VITE_BUILD_ID?: string
   readonly VITE_DOWNLOAD_WIN?: string

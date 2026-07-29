@@ -32,6 +32,7 @@ import { supabase } from '@/lib/supabase'
 import { canHost } from '@/lib/tkoKing'
 import { BrandLogo } from '@/components/BrandLogo'
 import { useUnreadNotifications } from '@/hooks/useUnreadNotifications'
+import { IS_MOBILE_STORE_BUILD } from '@/lib/storeBuild'
 
 type NavItem = {
   to: string
@@ -56,11 +57,13 @@ const COMMUNITY_NAV: NavItem[] = [
   { to: '/profile', label: 'Profile', Icon: UserRound },
 ]
 
-const MARKET_NAV: NavItem[] = [
-  { to: '/shop', label: 'Team Shop', Icon: Shirt },
-  { to: '/store', label: 'Store', Icon: ShoppingBag },
-  { to: '/oracle', label: 'Oracle', Icon: Bot },
-]
+const MARKET_NAV: NavItem[] = IS_MOBILE_STORE_BUILD
+  ? [{ to: '/oracle', label: 'Oracle', Icon: Bot }]
+  : [
+      { to: '/shop', label: 'Team Shop', Icon: Shirt },
+      { to: '/store', label: 'Store', Icon: ShoppingBag },
+      { to: '/oracle', label: 'Oracle', Icon: Bot },
+    ]
 
 export function Sidebar() {
   const { user } = useAuth()
@@ -111,9 +114,9 @@ export function Sidebar() {
       </nav>
 
       <div className="border-t border-dark-border p-2">
-        <NavRow to="/upgrade" label="Membership" Icon={Sparkles} />
+        {!IS_MOBILE_STORE_BUILD && <NavRow to="/upgrade" label="Membership" Icon={Sparkles} />}
         <NavRow to="/redeem" label="Redeem pass" Icon={Ticket} />
-        <NavRow to="/marketing" label="Install TKO" Icon={Download} />
+        {!IS_MOBILE_STORE_BUILD && <NavRow to="/marketing" label="Install TKO" Icon={Download} />}
         <NavRow to="/help" label="Help" Icon={HelpCircle} />
         <NavRow to="/legal" label="Legal" Icon={FileText} />
         {!user ? (

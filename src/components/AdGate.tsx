@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { useEntitlements } from '@/hooks/useEntitlements'
 import { hidesAds } from '@/lib/tiers'
 import { AdSlot } from '@/components/AdSlot'
+import { IS_MOBILE_STORE_BUILD } from '@/lib/storeBuild'
 
 type AdGateProps = {
   /** Content revealed once the free user dismisses the house ad. */
@@ -49,9 +50,11 @@ export function AdGate({ children, slotId = 'feed-inline', label, className = ''
       <AdSlot slotId={slotId} shape="square" className="w-full" />
 
       <div className="flex items-center justify-between gap-3 flex-wrap">
-        <Link to="/upgrade" className="text-xs text-accent hover:underline">
-          Go Ad-Free for $1.99/mo
-        </Link>
+        {!IS_MOBILE_STORE_BUILD && (
+          <Link to="/upgrade" className="text-xs text-accent hover:underline">
+            Go Ad-Free for $1.99/mo
+          </Link>
+        )}
         <button
           type="button"
           onClick={() => setDismissed(true)}

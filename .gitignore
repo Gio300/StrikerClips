@@ -19,7 +19,6 @@ src-tauri/WixTools
 
 # Local dev + on-device verification helpers (this session)
 _*
-/android
 /appicons
 
 # Android release signing — NEVER commit a keystore or its passwords.

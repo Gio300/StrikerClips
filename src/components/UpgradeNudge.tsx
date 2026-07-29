@@ -1,5 +1,6 @@
 import { Link } from 'react-router-dom'
 import { useEntitlements } from '@/hooks/useEntitlements'
+import { IS_MOBILE_STORE_BUILD } from '@/lib/storeBuild'
 
 type UpgradeNudgeProps = {
   /** Headline of the nudge. Defaults to a friendly generic. */
@@ -32,6 +33,7 @@ export function UpgradeNudge({
   className = '',
 }: UpgradeNudgeProps) {
   const { isPremium } = useEntitlements()
+  if (IS_MOBILE_STORE_BUILD) return null
   if (hideForPaid && isPremium) return null
 
   return (

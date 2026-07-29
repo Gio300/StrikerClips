@@ -26,6 +26,7 @@ import { AvailabilityHint, Avatar } from '@/components/ui'
 import { AvatarPicker } from '@/components/AvatarPicker'
 import { useIdentityAvailability } from '@/hooks/useIdentityAvailability'
 import { buildTrophyCloset, trophyCountLabel, type ShinobiDefeatRow } from '@/lib/tkoKing'
+import { IS_MOBILE_STORE_BUILD } from '@/lib/storeBuild'
 import type {
   Reel,
   UserYoutubeLink,
@@ -62,7 +63,9 @@ function WalletChip() {
         <span className="font-semibold text-leaf">{sweeps.toLocaleString()}</span>
         <span className="text-xs text-gray-500">Give Points</span>
       </span>
-      <Link to="/store" className="text-accent hover:underline text-xs">Store</Link>
+      {!IS_MOBILE_STORE_BUILD && (
+        <Link to="/store" className="text-accent hover:underline text-xs">Store</Link>
+      )}
     </div>
   )
 }

@@ -38,6 +38,7 @@ import { useAuth } from '@/hooks/useAuth'
 import { supabase } from '@/lib/supabase'
 import { useUnreadNotifications } from '@/hooks/useUnreadNotifications'
 import { InstallAppButton } from '@/components/InstallAppButton'
+import { IS_MOBILE_STORE_BUILD } from '@/lib/storeBuild'
 
 type PrimaryNavItem = {
   to: string
@@ -152,11 +153,17 @@ export function BottomNav() {
     : []
 
   const account: SheetItem[] = [
-    { to: '/shop', label: 'Creator marketplace', Icon: Shirt },
-    { to: '/store', label: 'Tokens & Give Points', Icon: ShoppingBag },
+    ...(!IS_MOBILE_STORE_BUILD
+      ? [
+          { to: '/shop', label: 'Creator marketplace', Icon: Shirt },
+          { to: '/store', label: 'Tokens & Give Points', Icon: ShoppingBag },
+        ]
+      : []),
     { to: '/oracle', label: 'Oracle calls', Icon: Bot },
     { to: '/redeem', label: 'Redeem pass', Icon: Ticket },
-    { to: '/marketing', label: 'Install TKO', Icon: Download },
+    ...(!IS_MOBILE_STORE_BUILD
+      ? [{ to: '/marketing', label: 'Install TKO', Icon: Download }]
+      : []),
     { to: '/help', label: 'Help center', Icon: HelpCircle },
     { to: '/legal', label: 'Terms & privacy', Icon: FileText },
   ]
@@ -189,17 +196,21 @@ export function BottomNav() {
             </div>
 
             <div className="px-3 py-3">
-              <NavLink to="/upgrade" className="mb-4 flex min-h-11 items-center gap-3 rounded-lg bg-kunai px-3 text-sm font-semibold text-white">
-                <Sparkles size={18} />
-                Membership
-                <ChevronRight size={17} className="ml-auto" />
-              </NavLink>
+              {!IS_MOBILE_STORE_BUILD && (
+                <NavLink to="/upgrade" className="mb-4 flex min-h-11 items-center gap-3 rounded-lg bg-kunai px-3 text-sm font-semibold text-white">
+                  <Sparkles size={18} />
+                  Membership
+                  <ChevronRight size={17} className="ml-auto" />
+                </NavLink>
+              )}
 
               <SheetGroup label="Explore" items={explore} />
               {studio.length > 0 && <SheetGroup label="Studio" items={studio} />}
               <SheetGroup label="TKO" items={account} />
 
-              <InstallAppButton variant="subtle" className="mt-3 block w-full [&>button]:w-full" />
+              {!IS_MOBILE_STORE_BUILD && (
+                <InstallAppButton variant="subtle" className="mt-3 block w-full [&>button]:w-full" />
+              )}
 
               {!user ? (
                 <SheetLink to="/login" label="Sign in" Icon={LogIn} />

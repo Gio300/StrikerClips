@@ -57,10 +57,12 @@ import { Store } from '@/pages/Store'
 import { Shop } from '@/pages/Shop'
 import { Oracle } from '@/pages/Oracle'
 import { Upgrade } from '@/pages/Upgrade'
+import { StoreUnavailable } from '@/pages/StoreUnavailable'
 import { Discover } from '@/pages/Discover'
 import { Connect } from '@/pages/Connect'
 import { Chat } from '@/pages/Chat'
 import { ChatSpace, ClanChatRedirect } from '@/pages/ChatSpace'
+import { IS_MOBILE_STORE_BUILD } from '@/lib/storeBuild'
 
 // Signed-in visitors land on the dead-simple 5-button launcher (HomeMenu).
 // Signed-out visitors keep the marketing Landing page.
@@ -137,10 +139,13 @@ export default function App() {
         <Route path="rewards" element={<AuthGuard><Rewards /></AuthGuard>} />
         <Route path="forge" element={<AuthGuard><Forge /></AuthGuard>} />
         <Route path="conquest" element={<ConquestMap />} />
-        <Route path="store" element={<Store />} />
-        <Route path="shop" element={<AuthGuard><Shop /></AuthGuard>} />
+        <Route path="store" element={IS_MOBILE_STORE_BUILD ? <StoreUnavailable /> : <Store />} />
+        <Route
+          path="shop"
+          element={IS_MOBILE_STORE_BUILD ? <StoreUnavailable /> : <AuthGuard><Shop /></AuthGuard>}
+        />
         <Route path="oracle" element={<Oracle />} />
-        <Route path="upgrade" element={<Upgrade />} />
+        <Route path="upgrade" element={IS_MOBILE_STORE_BUILD ? <StoreUnavailable /> : <Upgrade />} />
         <Route path="browser" element={<Browser />} />
         <Route path="ai/label" element={<AuthGuard><AILabel /></AuthGuard>} />
         <Route path="boards/create" element={<AuthGuard><CreateServer /></AuthGuard>} />
