@@ -10,7 +10,7 @@ import {
 export type ReelLayout = 'concat' | 'grid' | 'side-by-side' | 'pip' | 'action' | 'ultra'
 
 const MIN_FILES: Record<ReelLayout, number> = {
-  concat: 2,
+  concat: 1,
   grid: 4,
   'side-by-side': 2,
   pip: 2,

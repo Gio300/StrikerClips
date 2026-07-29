@@ -1,0 +1,42 @@
+# ===========================================================================
+# RENDER WORKER image — the self-running muscle of TKO.cam.
+#
+# Same TS/node build as the app, but the runtime adds ffmpeg + yt-dlp and runs
+# server/renderWorker.run.ts instead of the web server. It drains the
+# render_jobs queue: pull source angles -> composite with ffmpeg -> upload to
+# the TKO YouTube channel -> write the link back + notify participants.
+#
+# Deploy as a Cloud Run JOB (batch, cheapest) triggered by Cloud Scheduler with
+# `--once`, OR as a Cloud Run SERVICE with min-instances=1 for a live poll loop.
+# See docs/RENDER-WORKER-DEPLOY.md.
+#
+# Required env at runtime (wire via --set-secrets / --set-env-vars, never bake):
+#   DATABASE_URL  (or INSTANCE_CONNECTION_NAME + DB_USER/DB_PASSWORD/DB_NAME)
+#   YOUTUBE_CLIENT_ID / YOUTUBE_CLIENT_SECRET / YOUTUBE_REFRESH_TOKEN
+# ===========================================================================
+FROM node:20-slim AS build
+WORKDIR /app
+ENV NODE_ENV=production
+COPY package.json package-lock.json ./
+RUN npm ci --include=dev
+COPY . .
+
+FROM node:20-slim AS runtime
+WORKDIR /app
+ENV NODE_ENV=production
+# ffmpeg = the compositor; yt-dlp (via python) = the source resolver for
+# youtube-hosted angles. Pin nothing exotic; slim + apt is reproducible enough.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ffmpeg python3 ca-certificates curl \
+ && curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp \
+ && chmod a+rx /usr/local/bin/yt-dlp \
+ && rm -rf /var/lib/apt/lists/*
+COPY --from=build /app/node_modules ./node_modules
+COPY --from=build /app/server ./server
+COPY --from=build /app/src ./src
+COPY --from=build /app/public/brand ./public/brand
+COPY --from=build /app/package.json ./package.json
+COPY --from=build /app/tsconfig.json ./tsconfig.json
+# Cloud Run Jobs run to completion: drain the queue once then exit (Scheduler
+# re-runs on a cadence). For a Service, drop `--once` and set POLL_MS.
+CMD ["node_modules/.bin/tsx", "server/renderWorker.run.ts", "--once"]

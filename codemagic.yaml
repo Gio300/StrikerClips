@@ -1,0 +1,64 @@
+workflows:
+  tko-ios-testflight:
+    name: TKO iOS - TestFlight
+    instance_type: mac_mini_m2
+    max_build_duration: 120
+
+    integrations:
+      app_store_connect: tko_app_store
+
+    environment:
+      ios_signing:
+        distribution_type: app_store
+        bundle_identifier: app.killcam
+      vars:
+        XCODE_WORKSPACE: App.xcworkspace
+        XCODE_SCHEME: App
+      node: 22
+      xcode: latest
+      cocoapods: default
+
+    cache:
+      cache_paths:
+        - $CM_BUILD_DIR/node_modules
+        - $HOME/Library/Caches/CocoaPods
+
+    scripts:
+      - name: Install JavaScript dependencies
+        script: npm ci
+
+      - name: Run unit and integration tests
+        script: VITE_MOCK_BACKEND=1 npx vitest run --testTimeout 15000
+
+      - name: Build the TKO web application
+        script: VITE_REAL_BACKEND=1 VITE_API_BASE=https://tko.cam VITE_BASE_PATH=/ npm run build
+
+      - name: Sync Capacitor iOS project
+        script: npx cap sync ios
+
+      - name: Apply App Store signing profiles
+        script: xcode-project use-profiles
+
+      - name: Set iOS build number
+        script: |
+          cd "$CM_BUILD_DIR/ios/App"
+          agvtool new-version -all "$PROJECT_BUILD_NUMBER"
+
+      - name: Build signed IPA
+        script: |
+          cd "$CM_BUILD_DIR/ios/App"
+          xcode-project build-ipa \
+            --workspace "$XCODE_WORKSPACE" \
+            --scheme "$XCODE_SCHEME"
+
+    artifacts:
+      - ios/App/build/ios/ipa/*.ipa
+      - /tmp/xcodebuild_logs/*.log
+      - $HOME/Library/Developer/Xcode/DerivedData/**/Build/**/*.app
+      - $HOME/Library/Developer/Xcode/DerivedData/**/Build/**/*.dSYM
+
+    publishing:
+      app_store_connect:
+        auth: integration
+        submit_to_testflight: true
+        submit_to_app_store: false

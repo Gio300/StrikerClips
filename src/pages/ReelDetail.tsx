@@ -1,22 +1,34 @@
 import { useEffect, useState } from 'react'
-import { useParams, Link } from 'react-router-dom'
+import { useParams, Link, useNavigate } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/hooks/useAuth'
+import { usePip } from '@/components/pip/PipContext'
 import { ShareButtons } from '@/components/ShareButtons'
 import { SyncedYouTubeReel } from '@/components/SyncedYouTubeReel'
 import { AdSlot } from '@/components/AdSlot'
 import { AutoUploadButton } from '@/components/AutoUploadButton'
+import { ReelComments } from '@/components/ReelComments'
+import { ImmersivePlayer } from '@/components/ImmersivePlayer'
+import { CollapsibleSection } from '@/components/CollapsibleSection'
+import { useEntitlements } from '@/hooks/useEntitlements'
+import { hidesAds } from '@/lib/tiers'
 import { resolveLayout, resolveSlots, isPlayableUrl, buildInviteTitle, isInviteTitleFor } from '@/lib/reelLayout'
 import { extractYouTubeId } from '@/lib/youtubeApi'
 import type { Reel, Clip, ReelLayout } from '@/types/database'
 
 export function ReelDetail() {
   const { id } = useParams()
+  const navigate = useNavigate()
+  const { minimize } = usePip()
   const { user } = useAuth()
+  const { tier } = useEntitlements()
+  const showAds = !hidesAds(tier)
   const [reel, setReel] = useState<(Reel & { profiles?: { username: string; power_level?: number } }) | null>(null)
   const [clips, setClips] = useState<Clip[]>([])
   const [inviteClips, setInviteClips] = useState<Clip[]>([])
   const [loading, setLoading] = useState(true)
+  const [notFound, setNotFound] = useState(false)
+  const [commentCount, setCommentCount] = useState<number>(0)
 
   // Friend submission form state
   const [submitUrl, setSubmitUrl] = useState('')
@@ -28,41 +40,67 @@ export function ReelDetail() {
   useEffect(() => {
     if (!id) return
     async function fetchAll() {
-      const { data: reelData } = await supabase
-        .from('reels')
-        .select('*, profiles(username, power_level)')
-        .eq('id', id)
-        .single()
-      setReel(reelData)
+      try {
+        const { data: reelData } = await supabase
+          .from('reels')
+          .select('*, profiles(username, power_level)')
+          .eq('id', id!)
+          .single()
+        if (!reelData) { setNotFound(true); return }
+        setReel(reelData as unknown as (Reel & { profiles?: { username: string; power_level?: number } }))
 
-      // 1) Officially-attached clips, in saved order.
-      let ordered: Clip[] = []
-      if (reelData?.clip_ids?.length) {
-        const { data: clipsData } = await supabase.from('clips').select('*').in('id', reelData.clip_ids)
-        const byId = new Map((clipsData ?? []).map((c) => [c.id, c]))
-        ordered = reelData.clip_ids.map((cid: string) => byId.get(cid)).filter(Boolean) as Clip[]
+        // 1) Officially-attached clips, in saved order.
+        let ordered: Clip[] = []
+        if (reelData?.clip_ids?.length) {
+          const { data: clipsData } = await supabase.from('clips').select('*').in('id', reelData.clip_ids)
+          const byId = new Map((clipsData ?? []).map((c) => [c.id, c]))
+          ordered = reelData.clip_ids.map((cid: string) => byId.get(cid)).filter(Boolean) as Clip[]
+        }
+        setClips(ordered)
+
+        // 2) Friend-submitted clips (tagged via title `[for:<reelId>]`). These
+        //    aren't in clip_ids but should be playable once the reel unlocks.
+        //    `like` filter pulls anything starting with the tag.
+        const { data: invites } = await supabase
+          .from('clips')
+          .select('*')
+          .like('title', `[for:${id}]%`)
+          .order('created_at', { ascending: true })
+        setInviteClips((invites ?? []).filter((c) => isInviteTitleFor(c.title, id!)))
+      } catch {
+        setNotFound(true)
+      } finally {
+        setLoading(false)
       }
-      setClips(ordered)
-
-      // 2) Friend-submitted clips (tagged via title `[for:<reelId>]`). These
-      //    aren't in clip_ids but should be playable once the reel unlocks.
-      //    `like` filter pulls anything starting with the tag.
-      const { data: invites } = await supabase
-        .from('clips')
-        .select('*')
-        .like('title', `[for:${id}]%`)
-        .order('created_at', { ascending: true })
-      setInviteClips((invites ?? []).filter((c) => isInviteTitleFor(c.title, id!)))
-
-      setLoading(false)
     }
     fetchAll()
   }, [id])
 
-  if (loading || !reel) {
+  if (loading) {
     return (
       <div className="p-8 flex items-center justify-center">
         <div className="animate-pulse text-accent">Loading...</div>
+      </div>
+    )
+  }
+  if (notFound || !reel) {
+    return (
+      <div className="p-8 flex flex-col items-center justify-center text-center gap-3 py-20">
+        <p className="text-gray-300">This clip isn't ready yet.</p>
+        <p className="text-sm text-gray-500">
+          If you just created it, we may still be assembling the multi-angle video — it posts to the TKO channel and
+          shows up in Watch once it's done. Give it a moment and retry.
+        </p>
+        <div className="mt-2 flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => { setNotFound(false); setLoading(true); /* re-run the effect */ window.location.reload() }}
+            className="px-4 py-2 rounded-lg border border-accent text-accent font-semibold hover:bg-accent/10"
+          >
+            Retry
+          </button>
+          <Link to="/my-clips" className="px-4 py-2 rounded-lg bg-accent text-dark font-semibold">Back to My Clips</Link>
+        </div>
       </div>
     )
   }
@@ -92,11 +130,13 @@ export function ReelDetail() {
       />
     )
   } else if (isPlayableUrl(reel.combined_video_url)) {
-    body = <video src={reel.combined_video_url!} controls className="w-full h-full" />
+    // Produced videos are vertical 1080×1920 — object-cover fills the immersive
+    // 9:16 column instead of leaving a letterboxed strip.
+    body = <video src={reel.combined_video_url!} controls playsInline className="w-full h-full object-cover" />
   } else if (youtubeClips.length > 0) {
     body = <SyncedYouTubeReel layout={layout} clips={youtubeClips} />
   } else if (uploadClips.length > 0) {
-    body = <video src={uploadClips[0].url_or_path} controls className="w-full h-full" />
+    body = <video src={uploadClips[0].url_or_path} controls playsInline className="w-full h-full object-cover" />
   } else {
     body = (
       <div className="w-full h-full flex items-center justify-center text-gray-500">
@@ -107,11 +147,57 @@ export function ReelDetail() {
 
   // Multi-angle layouts need more vertical room for controls + grid; single-angle stays 16:9.
   // 'action' and 'ultra' have an extra meter HUD + thumbnail strip so they get extra height.
+  // With the secondary controls now collapsed into sections below, the player
+  // is the star — give it more vertical room (esp. the director/multi-angle
+  // layouts) so it dominates the phone screen.
   const surfaceClass = isLocked
     ? 'min-h-[420px]'
-    : youtubeClips.length > 0 && (layout === 'action' || layout === 'ultra') ? 'h-[560px]'
-    : youtubeClips.length > 0 && layout !== 'concat' ? 'h-[480px]'
+    : youtubeClips.length > 0 && (layout === 'action' || layout === 'ultra') ? 'h-[600px]'
+    : youtubeClips.length > 0 && layout !== 'concat' ? 'h-[520px]'
     : 'aspect-video'
+
+  // Minimize is offered whenever there's an actual player on screen (not the
+  // locked/invite surface). Pushing the session into the global PiP dock lets
+  // the viewer keep it floating while they browse elsewhere.
+  const canMinimize =
+    !isLocked &&
+    (isPlayableUrl(reel.combined_video_url) || youtubeClips.length > 0 || uploadClips.length > 0)
+
+  function handleMinimize() {
+    if (!reel) return
+    minimize({
+      id: `reel:${reel.id}`,
+      title: reel.title || 'Reel',
+      restorePath: `/reels/${reel.id}`,
+      render: () => body,
+    })
+    // Drop the viewer back to home so the floating PiP is clearly "minimized
+    // while browsing"; they can maximize from the dock to return here.
+    navigate('/')
+  }
+
+  // Playable reels get the IMMERSIVE, full-screen TikTok/Sora-style player: the
+  // vertical video fills the viewport with floating UI on top. Locked reels keep
+  // the in-page invite/contribution layout below.
+  if (canMinimize) {
+    return (
+      <ImmersivePlayer
+        reelId={reel.id}
+        title={reel.title}
+        creatorName={reel.profiles?.username ?? 'Unknown'}
+        creatorId={reel.user_id}
+        onMinimize={handleMinimize}
+        backTo="/videos"
+        moreMenu={
+          isOwner && reel.user_id ? (
+            <AutoUploadButton reelId={reel.id} ownerId={reel.user_id} />
+          ) : undefined
+        }
+      >
+        {body}
+      </ImmersivePlayer>
+    )
+  }
 
   async function handleFriendSubmit(e: React.FormEvent) {
     e.preventDefault()
@@ -163,10 +249,10 @@ export function ReelDetail() {
   const canSubmit = isLocked && !!user
 
   return (
-    <div className="p-8 max-w-4xl mx-auto">
+    <div className="p-4 sm:p-6 lg:p-8 max-w-4xl mx-auto">
       {/* Ad above the reel — consistent placement no matter where the link is shared back to. */}
       <div className="mb-4">
-        <AdSlot slotId="reel-top" shape="leaderboard" />
+        {showAds && <AdSlot slotId="reel-top" shape="leaderboard" />}
       </div>
 
       <div className="rounded-xl border border-dark-border bg-dark-card overflow-hidden">
@@ -174,7 +260,22 @@ export function ReelDetail() {
           {body}
         </div>
         <div className="p-6">
-          <h1 className="text-2xl font-bold">{reel.title}</h1>
+          <div className="flex items-start justify-between gap-3">
+            <h1 className="text-2xl font-bold">{reel.title}</h1>
+            {canMinimize && (
+              <button
+                type="button"
+                onClick={handleMinimize}
+                title="Minimize to a floating player"
+                className="shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-dark-border text-sm text-gray-300 hover:border-accent/50 hover:text-accent transition-colors"
+              >
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" aria-hidden>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M15 10l6-6m0 0h-5m5 0v5M9 14l-6 6m0 0h5m-5 0v-5" />
+                </svg>
+                Minimize
+              </button>
+            )}
+          </div>
           <p className="text-gray-400 mt-2">
             by <Link to={`/profile/${reel.user_id}`} className="text-accent hover:underline">{reel.profiles?.username ?? 'Unknown'}</Link>
             {reel.profiles?.power_level != null && reel.profiles.power_level > 0 && (
@@ -187,15 +288,22 @@ export function ReelDetail() {
             {layout !== 'concat' && <span className="ml-2 text-xs text-accent">· {layoutBadge(layout)}</span>}
             {isLocked && <span className="ml-2 text-xs text-yellow-400">· locked</span>}
           </p>
-          <div className="mt-4">
-            <ShareButtons title={reel.title} />
-          </div>
-          {isOwner && !isLocked && reel?.user_id && (
-            <div className="mt-4">
-              <AutoUploadButton reelId={reel.id} ownerId={reel.user_id} />
-            </div>
-          )}
         </div>
+      </div>
+
+      {/* Secondary actions tuck under one-word sections so the player + comments
+          get the space. Share/Upload stay collapsed by default; the viewer's
+          choice persists per section. */}
+      <div className="mt-4 space-y-3">
+        <CollapsibleSection id="reel-share" label="Share">
+          <ShareButtons title={reel.title} />
+        </CollapsibleSection>
+
+        {isOwner && !isLocked && reel?.user_id && (
+          <CollapsibleSection id="reel-upload" label="Upload">
+            <AutoUploadButton reelId={reel.id} ownerId={reel.user_id} />
+          </CollapsibleSection>
+        )}
       </div>
 
       {/* Friend submission panel — visible while reel is locked. */}
@@ -251,9 +359,17 @@ export function ReelDetail() {
         </div>
       )}
 
+      {/* Comments — anyone can read; only signed-in users can post. Collapsed
+          by default with a live count in the header. */}
+      <div className="mt-4">
+        <CollapsibleSection id="reel-comments" label="Comments" count={commentCount}>
+          <ReelComments reelId={reel.id} embedded onCountChange={setCommentCount} />
+        </CollapsibleSection>
+      </div>
+
       {/* Ad below the reel — runs on every share view, the monetization "floor". */}
       <div className="mt-6">
-        <AdSlot slotId="reel-bottom" shape="banner" />
+        {showAds && <AdSlot slotId="reel-bottom" shape="banner" />}
       </div>
 
       <Link to="/reels" className="inline-block mt-6 text-accent hover:underline">← Back to Reels</Link>

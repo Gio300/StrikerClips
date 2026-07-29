@@ -1,17 +1,38 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/hooks/useAuth'
 import { useFFmpeg, layoutLimits, type ReelLayout } from '@/hooks/useFFmpeg'
 import { useEntitlements } from '@/hooks/useEntitlements'
+import { useAutoMerge } from '@/hooks/useAutoMerge'
 import { formatTimestamp, type HighlightMoment } from '@/lib/highlightDetector'
 import { detectByCategory } from '@/lib/categoryDetector'
 import { HIGHLIGHT_CATEGORIES, type HighlightCategoryId } from '@/lib/highlightCategories'
-import { extractYouTubeId } from '@/lib/youtubeApi'
+import { extractYouTubeId, isValidYouTubeUrl, youtubeLinkError } from '@/lib/youtubeApi'
+import { thumbUrl, loadLibrary } from '@/lib/youtubeConnect'
+import { demoSquad } from '@/lib/squad'
+import { parseMatchScreenshot } from '@/lib/ocrMatchResult'
+import { suggestOtherAngles, type ClipMeta, type ResultSignature } from '@/lib/matchGrouping'
+import {
+  libraryVideoToMeta,
+  squadClipToMeta,
+  demoMatchAngles,
+  recordAddedYouTubeClip,
+} from '@/lib/clipRecords'
+import {
+  recordReelParticipants,
+  resolveParticipantsFromVideoIds,
+} from '@/lib/reelParticipants'
+import { prettyClip } from '@/lib/clipLabel'
 import { encodeLayoutMarker } from '@/lib/reelLayout'
+import { recordActivity } from '@/lib/activity'
 import { BRAND } from '@/lib/brand'
 import { CreationSponsorGate } from '@/components/CreationSponsorGate'
 import { ClipFinder } from '@/components/ClipFinder'
+import { useAskTko } from '@/components/AskTkoContext'
+import { ActionCard } from '@/components/ui/ActionCard'
+import { ChipInput } from '@/components/ui/ChipInput'
+import type { NinjaIconName } from '@/components/ui/NinjaIcon'
 import type { UserYoutubeLink } from '@/types/database'
 
 type ClipInput =
@@ -27,11 +48,15 @@ const LAYOUT_OPTIONS: { id: ReelLayout; name: string; tagline: string; needs: st
   { id: 'pip', name: 'Picture-in-picture', tagline: 'Main angle + small overlay', needs: 'Exactly 2 clips (1st = main)' },
 ]
 
-/** One-tap starting points when “Simple” mode is on. */
-const SIMPLE_PRESETS: { id: ReelLayout; label: string; sub: string }[] = [
-  { id: 'concat', label: 'Quick', sub: 'Stitch clips' },
-  { id: 'action', label: 'Action', sub: 'One screen' },
-  { id: 'ultra', label: 'Ultra', sub: 'Director cut' },
+/**
+ * The two-mode picker shown once there are 2+ clips. Auto (auto-switch action
+ * cam) is the default; Director is the cinematic multi-angle 'ultra' cut. The
+ * old "Simple/concat" preset was dropped from this selector — the concat layout
+ * itself still lives in Advanced options and the single-clip path.
+ */
+const SIMPLE_PRESETS: { id: ReelLayout; label: string; sub: string; icon: NinjaIconName }[] = [
+  { id: 'action', label: 'Auto', sub: 'We auto-cut between your clips on one screen', icon: 'bolt' },
+  { id: 'ultra', label: 'Director', sub: 'Cinematic multi-angle (side-by-side + PiP)', icon: 'sword' },
 ]
 
 function creationAdRequiredSec(): number {
@@ -43,6 +68,10 @@ function creationAdRequiredSec(): number {
 export function CreateHighlight() {
   const { user } = useAuth()
   const { isPremium } = useEntitlements()
+  // Cross-user auto-merge unlock (YouTube connected + a paid tier). Only clips
+  // from an entitled user enter the auto-match pipeline; own posts still land.
+  const { enabled: autoMergeOn } = useAutoMerge()
+  const { open: openAskTko } = useAskTko()
   const navigate = useNavigate()
   const { runLayout, loading: ffmpegLoading, progress, stage } = useFFmpeg()
 
@@ -56,15 +85,22 @@ export function CreateHighlight() {
   const [error, setError] = useState('')
   const [saving, setSaving] = useState(false)
   const [showAdvanced, setShowAdvanced] = useState(false)
+  const [draftRestored, setDraftRestored] = useState(false)
+  const hydratedRef = useRef(false)
+
+  // Inline validity of the manual "paste a YouTube link" box.
+  const manualLinkErr = youtubeLinkError(youtubeUrl)
+  const canAddManualLink = isValidYouTubeUrl(youtubeUrl)
   const [sponsorUnlocked, setSponsorUnlocked] = useState(false)
   const onSponsorUnlocked = useCallback(() => setSponsorUnlocked(true), [])
 
   const adWaitSec = creationAdRequiredSec()
   const needsSponsorAd = !isPremium && adWaitSec > 0
 
-  // Friend invite mode: when on, the reel saves "locked" until at least
-  // `inviteSlots` total clips exist. Friends contribute via the share link
-  // on the reel detail page (clips tagged with [for:<reelId>] in title).
+  // Squad invite mode: when on, the reel saves "locked" until at least
+  // `inviteSlots` total clips exist. Squadmates (people you follow / your clan)
+  // contribute via the share link on the reel detail page (clips tagged with
+  // [for:<reelId>] in title).
   const [inviteFriends, setInviteFriends] = useState(false)
   const [inviteSlots, setInviteSlots] = useState<number>(4)
 
@@ -72,6 +108,96 @@ export function CreateHighlight() {
   const [suggestionsByIdx, setSuggestionsByIdx] = useState<Record<number, HighlightMoment[]>>({})
   const [category, setCategory] = useState<HighlightCategoryId>('all')
   const [scanProgress, setScanProgress] = useState<{ idx: number; pct: number } | null>(null)
+
+  // ── Same-match bunching: "other angles of this match" ──────────────────────
+  const uid = user?.id ?? 'anon'
+  const username = (user?.user_metadata as { username?: string } | undefined)?.username ?? 'me'
+  // Result signatures read from a match-result screenshot (client OCR), per video
+  // id — they sharpen grouping. Kept out of band so a low-confidence read never
+  // blocks the user; we just store what we got.
+  const [resultByVideoId, setResultByVideoId] = useState<Record<string, ResultSignature>>({})
+  const [ocrBusyId, setOcrBusyId] = useState<string | null>(null)
+
+  // The candidate library the grouping engine searches: the user's connected
+  // clips + their squad's clips + the demo match, mapped to ClipMeta and deduped,
+  // with any OCR-read result signatures overlaid.
+  const clipMetaPool = useMemo<ClipMeta[]>(() => {
+    const byId = new Map<string, ClipMeta>()
+    for (const m of demoMatchAngles()) byId.set(m.clipId, m)
+    for (const v of loadLibrary(uid)) if (!byId.has(v.id)) byId.set(v.id, libraryVideoToMeta(v, username))
+    for (const c of demoSquad().clips) if (!byId.has(c.id)) byId.set(c.id, squadClipToMeta(c))
+    return [...byId.values()].map((m) =>
+      resultByVideoId[m.clipId]
+        ? { ...m, resultSignature: { ...m.resultSignature, ...resultByVideoId[m.clipId] } }
+        : m,
+    )
+  }, [uid, username, resultByVideoId])
+
+  const titleByVideoId = useMemo<Record<string, string>>(() => {
+    const map: Record<string, string> = {}
+    for (const v of loadLibrary(uid)) map[v.id] = v.title
+    for (const c of demoSquad().clips) if (!map[c.id]) map[c.id] = c.title
+    return map
+  }, [uid])
+
+  // YouTube video ids already added to the reel.
+  const addedYoutubeIds = useMemo(() => {
+    const s = new Set<string>()
+    for (const c of clips) {
+      if (c.type !== 'youtube') continue
+      const id = extractYouTubeId(c.url)
+      if (id) s.add(id)
+    }
+    return s
+  }, [clips])
+
+  // The bunch: other angles of the SAME match as any clip already in the reel.
+  const bunchSuggestions = useMemo<ClipMeta[]>(() => {
+    if (addedYoutubeIds.size === 0) return []
+    const seen = new Set<string>()
+    const out: ClipMeta[] = []
+    for (const id of addedYoutubeIds) {
+      const target = clipMetaPool.find((m) => m.clipId === id)
+      if (!target) continue
+      for (const other of suggestOtherAngles(target, clipMetaPool)) {
+        if (addedYoutubeIds.has(other.clipId) || seen.has(other.clipId)) continue
+        seen.add(other.clipId)
+        out.push(other)
+      }
+    }
+    return out
+  }, [addedYoutubeIds, clipMetaPool])
+
+  // Auto-categorize + read a result screenshot for an added YouTube clip.
+  async function handleTagResult(videoId: string, files: FileList | null) {
+    const file = files?.[0]
+    if (!file) return
+    setOcrBusyId(videoId)
+    try {
+      const ocr = await parseMatchScreenshot(file)
+      const rs: ResultSignature = {}
+      if (ocr.outcome) rs.outcome = ocr.outcome
+      if (ocr.kills != null) rs.kills = ocr.kills
+      if (ocr.deaths != null) rs.deaths = ocr.deaths
+      if (ocr.assists != null) rs.assists = ocr.assists
+      setResultByVideoId((prev) => ({ ...prev, [videoId]: rs }))
+      try {
+        recordAddedYouTubeClip({
+          userId: uid,
+          youtubeId: videoId,
+          playerId: uid,
+          playerName: username,
+          title: titleByVideoId[videoId],
+          ocr,
+          autoMergeEnabled: autoMergeOn,
+        })
+      } catch {
+        /* persistence is best-effort; never block the user */
+      }
+    } finally {
+      setOcrBusyId(null)
+    }
+  }
 
   const limits = layoutLimits(layout)
   // 'concat', 'action', and 'ultra' all accept a range of clip counts; the
@@ -88,10 +214,83 @@ export function CreateHighlight() {
       .then(({ data }) => setSavedLinks(data ?? []))
   }, [user?.id])
 
+  // ── Don't-lose-progress: a small per-user draft in localStorage ────────────
+  // We autosave the title + any YouTube clips (uploads hold File handles that
+  // can't be serialized, so those aren't part of the draft). On return we
+  // restore it and show a subtle "Draft restored" note.
+  const draftKey = `tko:reel-draft:${uid}`
+
+  const clearDraft = useCallback(() => {
+    try { localStorage.removeItem(draftKey) } catch { /* ignore */ }
+    setDraftRestored(false)
+  }, [draftKey])
+
+  // Restore once per user.
+  useEffect(() => {
+    hydratedRef.current = false
+    try {
+      const raw = localStorage.getItem(`tko:reel-draft:${uid}`)
+      if (raw) {
+        const d = JSON.parse(raw) as {
+          title?: string
+          clips?: { url: string; startSec?: number; endSec?: number; title?: string }[]
+        }
+        const ytClips = (d.clips ?? []).filter((c) => c.url && extractYouTubeId(c.url))
+        if ((d.title && d.title.trim()) || ytClips.length > 0) {
+          if (d.title) setTitle(d.title)
+          if (ytClips.length > 0) {
+            setClips(
+              ytClips.map((c) => ({
+                type: 'youtube' as const,
+                url: c.url,
+                startSec: c.startSec || 0,
+                endSec: c.endSec || 0,
+                title: c.title,
+              })),
+            )
+          }
+          setDraftRestored(true)
+        }
+      }
+    } catch {
+      /* corrupt draft — ignore */
+    }
+    hydratedRef.current = true
+    // Restore keyed to the user only; run once per uid.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [uid])
+
+  // Autosave on every title/clip change (after the initial hydration pass, so
+  // we never clobber a restored draft before it's applied).
+  useEffect(() => {
+    if (!hydratedRef.current) return
+    try {
+      const yt = clips
+        .filter((c): c is ClipInput & { type: 'youtube' } => c.type === 'youtube')
+        .map((c) => ({ url: c.url, startSec: c.startSec, endSec: c.endSec, title: c.title }))
+      if (title.trim() || yt.length > 0) {
+        localStorage.setItem(draftKey, JSON.stringify({ title, clips: yt }))
+      } else {
+        localStorage.removeItem(draftKey)
+      }
+    } catch {
+      /* quota / private mode — non-blocking */
+    }
+  }, [title, clips, draftKey])
+
   function addYoutubeClip(url: string) {
     const videoId = extractYouTubeId(url)
     if (!videoId) {
       setError('Invalid YouTube URL')
+      return
+    }
+    // Idempotent: if a YouTube clip with the same video id is already added,
+    // do nothing (no duplicate).
+    const already = clips.some(
+      (c) => c.type === 'youtube' && extractYouTubeId(c.url) === videoId
+    )
+    if (already) {
+      setError('')
       return
     }
     if (clips.length >= limits.max) {
@@ -105,10 +304,36 @@ export function CreateHighlight() {
       return
     }
     const fullUrl = url.startsWith('http') ? url : `https://www.youtube.com/watch?v=${videoId}`
+    // Auto-categorize + persist a normalized clip record so this clip can be
+    // grouped into a match bunch later. Best-effort — never blocks the add.
+    try {
+      recordAddedYouTubeClip({
+        userId: uid,
+        youtubeId: videoId,
+        playerId: uid,
+        playerName: username,
+        title: titleByVideoId[videoId],
+        startSec: start,
+        autoMergeEnabled: autoMergeOn,
+      })
+    } catch {
+      /* non-blocking */
+    }
     setClips((c) => [...c, { type: 'youtube', url: fullUrl, startSec: start, endSec: end || 0 }])
     setYoutubeUrl('')
     setYoutubeStart('')
     setYoutubeEnd('')
+    setError('')
+  }
+
+  // Remove a YouTube clip by url (matched on video id). Lets ClipFinder
+  // deselect an already-added thumbnail and keep its picked state in sync.
+  function removeYoutubeClip(url: string) {
+    const videoId = extractYouTubeId(url)
+    if (!videoId) return
+    setClips((c) =>
+      c.filter((clip) => !(clip.type === 'youtube' && extractYouTubeId(clip.url) === videoId))
+    )
     setError('')
   }
 
@@ -154,13 +379,38 @@ export function CreateHighlight() {
     }
   }
 
-  // Layout switch: clear clips so we don't carry over wrong counts/types.
+  // Layout switch: preserve the user's work when the already-added clips still
+  // fit the new layout. Fixed-arity layouts (grid/side-by-side/pip) need an
+  // exact count — if the current clips don't match, clear them; otherwise keep.
+  // Range layouts (concat/action/ultra) only trim the overflow past max.
   function changeLayout(next: ReelLayout) {
+    const nextLimits = layoutLimits(next)
+    const nextFixedArity = next !== 'concat' && next !== 'action' && next !== 'ultra'
     setLayout(next)
-    setClips([])
+    setClips((prev) => {
+      if (nextFixedArity) {
+        // Keep only if the count already matches the required arity.
+        return prev.length === nextLimits.min ? prev : []
+      }
+      // Range layout: drop only the clips that exceed the new max.
+      return prev.length > nextLimits.max ? prev.slice(0, nextLimits.max) : prev
+    })
     setSuggestionsByIdx({})
     setError('')
   }
+
+  // Default the two-mode picker to Auto. The picker only appears at 2+ clips
+  // (in the simple view); the moment it does, snap the mode to Auto ('action')
+  // unless the user already chose Director ('ultra'). The single-clip case
+  // stays on 'concat' (min 1) so a lone highlight can still be created.
+  useEffect(() => {
+    if (showAdvanced) return
+    if (clips.length >= 2 && layout !== 'action' && layout !== 'ultra') {
+      changeLayout('action')
+    }
+    // changeLayout is a stable local closure; intentionally not a dep.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [clips.length, showAdvanced])
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
@@ -169,10 +419,9 @@ export function CreateHighlight() {
       setError('Finish the sponsor message above, or go Pro to skip it.')
       return
     }
-    if (!title.trim()) {
-      setError('Enter a title')
-      return
-    }
+    // Title is optional — a basic user shouldn't be blocked inventing a name.
+    // Default to a friendly, dated title they can rename later.
+    const finalTitle = title.trim() || `My highlight — ${new Date().toLocaleDateString()}`
 
     const uploadClips = clips.filter((c): c is ClipInput & { type: 'upload' } => c.type === 'upload')
     const youtubeClips = clips.filter((c): c is ClipInput & { type: 'youtube' } => c.type === 'youtube')
@@ -201,7 +450,7 @@ export function CreateHighlight() {
         return
       }
       if (clips.length < 1) {
-        setError('Add at least one clip yourself before inviting friends.')
+        setError('Add at least one clip yourself before inviting your squad.')
         return
       }
       if (clips.length > inviteSlots) {
@@ -295,11 +544,11 @@ export function CreateHighlight() {
       // NOTE: we deliberately don't send `layout` here. Until migration 009 is
       // applied, that column doesn't exist and PostgREST would 400. The
       // resolveLayout() helper recovers layout from combined_video_url.
-      const { data: reelData, error: reelErr } = await supabase
+      const { data: reelRow, error: reelErr } = await supabase
         .from('reels')
         .insert({
           user_id: user!.id,
-          title: title.trim(),
+          title: finalTitle,
           clip_ids: clipIds,
           combined_video_url: combinedUrl,
         })
@@ -307,7 +556,39 @@ export function CreateHighlight() {
         .single()
 
       if (reelErr) throw reelErr
-      navigate(`/reels/${reelData.id}`)
+
+      // Record a feed activity so this shows up on your (and your followers')
+      // Activity tab. Best-effort — never blocks the create.
+      if (reelRow?.id) void recordActivity(user!.id, 'reel_created', reelRow.id, { title: finalTitle })
+
+      // ── "You're in a new clip" ────────────────────────────────────────────
+      // A multi-angle reel is several PEOPLE's uploads of one match, so the
+      // reel does not belong to the uploader alone. Record the cast (owners of
+      // the source clips, resolved from the shared catalogue — never from
+      // anything typed here) and notify everyone but the uploader. Best-effort:
+      // the reel is already saved and must not be undone if this fails.
+      if (reelRow?.id) {
+        try {
+          const videoIds = youtubeClips
+            .map((c) => extractYouTubeId(c.url))
+            .filter((v): v is string => !!v)
+          const candidates = await resolveParticipantsFromVideoIds(videoIds)
+          await recordReelParticipants({
+            reelId: reelRow.id,
+            uploaderId: user!.id,
+            reelTitle: finalTitle,
+            candidates,
+          })
+        } catch {
+          // Never block the "your clip is ready" hand-off on the fan-out.
+        }
+      }
+
+      // Reel is saved — the draft has served its purpose; drop it.
+      clearDraft()
+      // Land on My Clips with a "ready" banner so the user always sees where
+      // their clip went (instead of a detail page that may still be assembling).
+      navigate('/my-clips', { state: { justCreated: true } })
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Failed to create highlight')
     } finally {
@@ -321,7 +602,7 @@ export function CreateHighlight() {
   const activeCat = HIGHLIGHT_CATEGORIES.find((c) => c.id === category) ?? HIGHLIGHT_CATEGORIES[0]
 
   return (
-    <div className="p-8 max-w-3xl mx-auto">
+    <div className="p-4 sm:p-6 lg:p-8 max-w-3xl mx-auto">
       <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3 mb-6">
         <div>
           <h1 className="text-2xl font-bold">Build a reel</h1>
@@ -343,47 +624,120 @@ export function CreateHighlight() {
       </div>
 
       <form onSubmit={handleSubmit} className="space-y-6">
-        <div>
-          <label className="block text-sm text-gray-400 mb-1">Title</label>
-          <input
-            type="text"
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-            className="w-full px-4 py-2 rounded-lg bg-dark border border-dark-border text-white focus:outline-none focus:border-accent"
-            placeholder="4-stack clutch, all angles"
-          />
-        </div>
+        {draftRestored && (
+          <div className="flex items-center justify-between gap-3 rounded-lg border border-accent/30 bg-accent/5 px-3 py-2 text-xs text-gray-300">
+            <span>Draft restored — we kept your title and links from last time.</span>
+            <button
+              type="button"
+              onClick={() => {
+                setTitle('')
+                setClips([])
+                clearDraft()
+              }}
+              className="shrink-0 text-gray-400 hover:text-white underline"
+            >
+              Start fresh
+            </button>
+          </div>
+        )}
+
+        <ChipInput
+          fieldKey="reel_title"
+          label="Title (optional)"
+          value={title}
+          onChange={setTitle}
+          placeholder="4-stack clutch, all angles"
+        />
+
+        <ActionCard
+          icon="bolt"
+          label="Get clips"
+          sublabel="Pull up PlayStation, YouTube, Twitch — grab a clip, send it here"
+          to="/browser"
+        />
 
         <ClipFinder
           onAdd={addYoutubeClip}
+          onRemove={removeYoutubeClip}
           username={(user?.user_metadata as { username?: string } | undefined)?.username}
         />
 
+        {/* Same-match bunch: the other angles of a clip already in the reel. */}
+        {bunchSuggestions.length > 0 && (
+          <div className="rounded-xl border border-accent/40 bg-accent/5 p-4">
+            <div className="flex items-center justify-between gap-2 flex-wrap mb-2">
+              <div>
+                <div className="font-semibold text-white">
+                  Other angles of this match ({bunchSuggestions.length})
+                </div>
+                <div className="text-xs text-gray-400">
+                  Same match, different players — add the whole bunch as one multi-angle set.
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() =>
+                  bunchSuggestions.forEach((m) =>
+                    addYoutubeClip(`https://www.youtube.com/watch?v=${m.clipId}`),
+                  )
+                }
+                className="px-4 py-2 rounded-lg bg-accent text-dark font-semibold hover:shadow-glow"
+              >
+                Add all
+              </button>
+            </div>
+            <div className="flex gap-2 overflow-x-auto pb-1">
+              {bunchSuggestions.map((m) => (
+                <button
+                  key={m.clipId}
+                  type="button"
+                  onClick={() => addYoutubeClip(`https://www.youtube.com/watch?v=${m.clipId}`)}
+                  className="group shrink-0 w-32 text-left rounded-lg overflow-hidden border border-dark-border hover:border-accent/60"
+                  title={titleByVideoId[m.clipId] || m.playerId}
+                >
+                  <div className="relative aspect-video bg-dark">
+                    <img
+                      src={thumbUrl(m.clipId)}
+                      alt=""
+                      loading="lazy"
+                      className="w-full h-full object-cover"
+                      onError={(e) => { (e.currentTarget as HTMLImageElement).style.opacity = '0.2' }}
+                    />
+                    <div className="absolute inset-x-0 bottom-0 bg-black/60 text-[10px] text-white px-1 py-0.5 opacity-0 group-hover:opacity-100">
+                      + Add angle
+                    </div>
+                  </div>
+                  <div className="p-1.5 text-[11px] text-gray-300 truncate">
+                    {m.playerId}
+                    {m.category ? ` · ${m.category}` : ''}
+                  </div>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
         {!showAdvanced ? (
+          // A single clip has no layout choice to make — only show reel type
+          // once there are 2+ clips, so basic users aren't asked a needless question.
+          clips.length < 2 ? null : (
           <div>
-            <label className="block text-sm text-gray-400 mb-2">Reel type</label>
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-              {SIMPLE_PRESETS.map((p) => {
-                const active = layout === p.id
-                return (
-                  <button
-                    key={p.id}
-                    type="button"
-                    onClick={() => changeLayout(p.id)}
-                    className={`p-3 rounded-lg border text-left transition-colors ${
-                      active
-                        ? 'border-accent bg-accent/10'
-                        : 'border-dark-border bg-dark-card hover:border-accent/40'
-                    }`}
-                  >
-                    <div className="font-medium">{p.label}</div>
-                    <div className="text-sm text-gray-500">{p.sub}</div>
-                  </button>
-                )
-              })}
+            <label className="block text-sm text-gray-400 mb-2">How to combine them</label>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              {SIMPLE_PRESETS.map((p) => (
+                <ActionCard
+                  key={p.id}
+                  icon={p.icon}
+                  label={p.label}
+                  sublabel={p.sub}
+                  selected={layout === p.id}
+                  onClick={() => changeLayout(p.id)}
+                />
+              ))}
             </div>
             <p className="text-xs text-gray-500 mt-2">YouTube links first — we sync angles in the browser. Advanced has every layout, invites, and file uploads.</p>
           </div>
+          )
         ) : (
           <div>
             <label className="block text-sm text-gray-400 mb-2">All layouts</label>
@@ -421,11 +775,11 @@ export function CreateHighlight() {
                 onChange={(e) => setInviteFriends(e.target.checked)}
                 className="w-4 h-4 accent-accent"
               />
-              <span className="font-medium">Invite friends to upload their angle</span>
+              <span className="font-medium">Invite your squad to upload their angle</span>
             </label>
             <p className="text-xs text-gray-500 mt-1 ml-6">
-              Share the reel link on social; the reel stays locked until every slot is filled. Great for clans
-              and tournament squads.
+              Share the reel link with people you follow or your clan; the reel stays locked until every slot is
+              filled. Great for clans and tournament squads.
             </p>
             {inviteFriends && (
               <div className="mt-3 ml-6 flex items-center gap-3 flex-wrap">
@@ -441,7 +795,7 @@ export function CreateHighlight() {
                   />
                 </label>
                 <span className="text-xs text-gray-500">
-                  You: {clips.length} · Friends: {Math.max(0, inviteSlots - clips.length)} pending
+                  You: {clips.length} · Squad: {Math.max(0, inviteSlots - clips.length)} pending
                 </span>
               </div>
             )}
@@ -466,7 +820,10 @@ export function CreateHighlight() {
             <div className="space-y-2">
               {savedLinks.map((link) => (
                 <div key={link.id} className="flex items-center gap-2 flex-wrap">
-                  <span className="truncate text-sm text-gray-300 flex-1 min-w-0">{link.url}</span>
+                  <span className="truncate text-sm text-gray-300 flex-1 min-w-0">
+                    <span className="text-accent text-xs mr-1">▶</span>
+                    {prettyClip(link.url, link.title)}
+                  </span>
                   <button
                     type="button"
                     onClick={() => addYoutubeClip(link.url)}
@@ -481,16 +838,30 @@ export function CreateHighlight() {
         )}
 
         <div>
-          <label className="block text-sm text-gray-400 mb-2">
-            {showAdvanced ? 'Add YouTube clip (URL)' : 'Or paste a link manually'}
-          </label>
+          <div className="flex items-center justify-between gap-2 mb-2">
+            <label className="block text-sm text-gray-400">
+              {showAdvanced ? 'Add YouTube clip (URL)' : 'Or paste a link manually'}
+            </label>
+            {/* Blocking-point helper — opens the Ask TKO guided panel straight
+                to the "Make your first clip" walkthrough. */}
+            <button
+              type="button"
+              onClick={() => openAskTko('make-clip')}
+              className="text-[11px] text-accent hover:underline shrink-0"
+            >
+              Need help? Ask TKO
+            </button>
+          </div>
           <div className="flex flex-wrap gap-2">
             <input
               type="text"
               value={youtubeUrl}
               onChange={(e) => setYoutubeUrl(e.target.value)}
               placeholder="https://youtube.com/watch?v=..."
-              className="flex-1 min-w-[200px] px-4 py-2 rounded-lg bg-dark border border-dark-border text-white focus:outline-none focus:border-accent"
+              aria-invalid={!!manualLinkErr}
+              className={`flex-1 min-w-[200px] px-4 py-2 rounded-lg bg-dark border text-white focus:outline-none ${
+                manualLinkErr ? 'border-red-500/70 focus:border-red-500' : 'border-dark-border focus:border-accent'
+              }`}
             />
             {showAdvanced && (
               <>
@@ -513,12 +884,16 @@ export function CreateHighlight() {
             <button
               type="button"
               onClick={() => addYoutubeClip(youtubeUrl)}
-              className="px-4 py-2 rounded-lg border border-accent text-accent hover:bg-accent/10"
+              disabled={!canAddManualLink}
+              title={canAddManualLink ? 'Add this clip' : 'Paste a valid YouTube link first'}
+              className="px-4 py-2 rounded-lg border border-accent text-accent hover:bg-accent/10 disabled:opacity-40 disabled:hover:bg-transparent"
             >
               Add
             </button>
           </div>
-          {showAdvanced ? (
+          {manualLinkErr ? (
+            <p className="text-red-400 text-xs mt-1">{manualLinkErr}</p>
+          ) : showAdvanced ? (
             <p className="text-xs text-gray-500 mt-1">Start/End in seconds. Trims per clip on every layout.</p>
           ) : (
             <p className="text-xs text-gray-500 mt-1">Full video per link. Trims: open Advanced options.</p>
@@ -587,14 +962,26 @@ export function CreateHighlight() {
                   className="rounded-lg bg-dark-card border border-dark-border p-3"
                 >
                   <div className="flex items-center justify-between gap-2">
+                    {c.type === 'youtube' && (() => {
+                      const yid = extractYouTubeId(c.url)
+                      return yid ? (
+                        <img
+                          src={thumbUrl(yid, 'mq')}
+                          alt=""
+                          loading="lazy"
+                          className="w-16 h-9 rounded object-cover shrink-0 border border-dark-border"
+                          onError={(e) => { (e.currentTarget as HTMLImageElement).style.opacity = '0.2' }}
+                        />
+                      ) : null
+                    })()}
                     <span className="truncate text-sm flex-1 min-w-0">
                       {i === 0 && layout === 'pip' && <span className="text-accent text-xs mr-2">MAIN</span>}
                       {layout === 'action' && <span className="text-accent text-xs mr-2">A{i + 1}</span>}
                       {layout === 'ultra' && <span className="text-accent text-xs mr-2">A{i + 1}</span>}
                       {c.type === 'youtube' ? (
                         <>
-                          <span className="text-xs text-gray-500 mr-1">YT</span>
-                          {c.url}
+                          <span className="text-accent text-xs mr-1">▶</span>
+                          {prettyClip(c.url, c.title)}
                           {c.endSec > 0 && (
                             <span className="text-xs text-gray-500 ml-2">
                               {c.startSec}s–{c.endSec}s
@@ -627,6 +1014,25 @@ export function CreateHighlight() {
                             : `Find ${activeCat.label}`}
                         </button>
                       )}
+                      {c.type === 'youtube' && (() => {
+                        const yid = extractYouTubeId(c.url)
+                        if (!yid) return null
+                        const tagged = !!resultByVideoId[yid]
+                        return (
+                          <label
+                            className="text-xs px-2 py-1 rounded border border-chakra/40 text-chakra hover:bg-chakra/10 cursor-pointer"
+                            title="Attach the match result screen — we read outcome + K/D to bunch same-match angles"
+                          >
+                            {ocrBusyId === yid ? 'Reading…' : tagged ? 'Result ✓' : 'Tag result'}
+                            <input
+                              type="file"
+                              accept="image/*"
+                              className="hidden"
+                              onChange={(e) => handleTagResult(yid, e.target.files)}
+                            />
+                          </label>
+                        )
+                      })()}
                       <button
                         type="button"
                         onClick={() => removeClip(i)}

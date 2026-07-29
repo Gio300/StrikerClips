@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { canUseClip, clipsFor, groupByCategory, demoSquad, type SquadClip } from './squad'
 
 const base = (over: Partial<SquadClip>): SquadClip => ({
-  id: 'x', ownerId: 'u1', ownerName: 'A', category: 'kill', title: 't', publishedAt: 0, visibility: 'friends', ...over,
+  id: 'x', ownerId: 'u1', ownerName: 'A', category: 'kill', title: 't', publishedAt: 0, visibility: 'followers', ...over,
 })
 
 describe('squad visibility', () => {
@@ -12,9 +12,9 @@ describe('squad visibility', () => {
   it('private clips are blocked for others', () => {
     expect(canUseClip(base({ visibility: 'private' }), 'u2', true)).toBe(false)
   })
-  it('friends-only needs friendship; public is open', () => {
-    expect(canUseClip(base({ visibility: 'friends' }), 'u2', true)).toBe(true)
-    expect(canUseClip(base({ visibility: 'friends' }), 'u2', false)).toBe(false)
+  it('followers-only needs you to be in their circle; public is open', () => {
+    expect(canUseClip(base({ visibility: 'followers' }), 'u2', true)).toBe(true)
+    expect(canUseClip(base({ visibility: 'followers' }), 'u2', false)).toBe(false)
     expect(canUseClip(base({ visibility: 'public' }), 'u2', false)).toBe(true)
   })
 })

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
+import { formatTag } from '@/lib/identity'
 import type { Server } from '@/types/database'
 
 export function Boards() {
@@ -25,15 +26,23 @@ export function Boards() {
   }
 
   return (
-    <div className="p-8">
+    <div className="p-4 sm:p-6 lg:p-8">
       <div className="flex items-center justify-between mb-8">
-        <h1 className="text-2xl font-bold">Community Boards</h1>
-        <Link
-          to="/boards/create"
-          className="px-4 py-2 rounded-lg bg-accent text-dark font-semibold hover:shadow-glow transition-all"
-        >
-          Create Server
-        </Link>
+        <h1 className="text-2xl font-bold">Clans</h1>
+        <div className="flex items-center gap-2">
+          <Link
+            to="/clans/discover"
+            className="px-4 py-2 rounded-lg border border-dark-border bg-dark-card text-accent font-semibold hover:border-accent/50 transition-all"
+          >
+            Find a clan
+          </Link>
+          <Link
+            to="/boards/create"
+            className="px-4 py-2 rounded-lg bg-accent text-dark font-semibold hover:shadow-glow transition-all"
+          >
+            Create a clan
+          </Link>
+        </div>
       </div>
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
         {servers.map((server) => (
@@ -50,7 +59,12 @@ export function Boards() {
               </div>
             )}
             <div>
-              <h2 className="font-semibold">{server.name}</h2>
+              <h2 className="font-semibold">
+                {server.clan_tag && (
+                  <span className="text-accent mr-1">{formatTag(server.clan_tag)}</span>
+                )}
+                {server.name}
+              </h2>
             </div>
           </Link>
         ))}

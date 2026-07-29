@@ -1,4 +1,14 @@
-# Stripe Connect setup
+# Stripe Connect setup (creator tips — LEGACY Supabase path)
+
+> **This is not the document for subscriptions or Token packs.** Those run
+> through the Express API (`POST /api/checkout`, `POST /api/stripe/webhook`) and
+> are documented in **DEPLOY.md → Payments (Stripe)**. Set up that one first.
+>
+> This page describes the older **Supabase Edge Function** donation/tip flow,
+> which predates the move to the Express + Postgres backend. The Connect
+> onboarding it refers to now also exists natively at `/api/connect/onboard`.
+> Note that in either implementation nothing yet creates a Stripe **Transfer**,
+> so creators can onboard but cannot actually be paid out.
 
 ReelOne uses **Stripe Connect (Express)** for tips. Each creator onboards once
 through Stripe-hosted forms, money is collected via Stripe Checkout, and a

@@ -1,5 +1,5 @@
 /**
- * Describe-a-clip search — the "just tell KillCam what you want" feature.
+ * Describe-a-clip search — the "just tell TKO what you want" feature.
  *
  * A player connects their YouTube once; every video becomes a searchable
  * record. Instead of pasting a URL and scrubbing, they type a plain sentence:

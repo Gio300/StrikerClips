@@ -1,27 +1,19 @@
 import { useAuth } from '@/hooks/useAuth'
+import { isFounder } from '@/lib/founder'
+import { entitlementsFromUser, type Entitlements } from '@/lib/entitlements'
 
 /**
- * Pro / supporter tier. Wire to Supabase `user.user_metadata` or Stripe later.
- * Dev: set `VITE_DEV_PREMIUM=1` in `.env.local` to mock a paid account.
+ * Pro / supporter tier, resolved from the signed-in user's `user_metadata`
+ * (set by a redeem code or Stripe). Dev: `VITE_DEV_PREMIUM=1` mocks a paid
+ * account; founder mode (splash passphrase) opens every paid gate.
+ *
+ * The actual resolution lives in `@/lib/entitlements` (pure, unit-tested). This
+ * hook just feeds it the live user + the founder / dev flags. Because it reads
+ * straight off `user.user_metadata`, a redeemed grant that was persisted to the
+ * user record shows up here immediately after redeem AND after a fresh reload.
  */
-export function useEntitlements() {
+export function useEntitlements(): Entitlements {
   const { user } = useAuth()
   const devPremium = import.meta.env.VITE_DEV_PREMIUM === '1'
-  const md = user?.user_metadata as Record<string, unknown> | undefined
-  // Read both `reelone_tier` (current) and `clutchlens_tier` (legacy) so users
-  // upgraded under the old brand keep their entitlement after the rebrand.
-  const reeloneTier = typeof md?.reelone_tier === 'string' ? md.reelone_tier : ''
-  const legacyTier = typeof md?.clutchlens_tier === 'string' ? md.clutchlens_tier : ''
-  // A grant (e.g. from a redeem code) can carry an expiry. Once it passes,
-  // the tier no longer counts. Codeless legacy tiers (no expiry) never lapse.
-  const expiresRaw = typeof md?.reelone_tier_expires === 'string' ? md.reelone_tier_expires : ''
-  const expired = expiresRaw ? new Date(expiresRaw) < new Date() : false
-  const tier = expired ? '' : (reeloneTier || legacyTier)
-  const isPremium = devPremium || tier === 'pro' || tier === 'supporter' || tier === 'creator'
-
-  return {
-    isPremium,
-    tier: tier || (devPremium ? 'pro' : ''),
-    tierExpiresAt: expiresRaw || null,
-  }
+  return entitlementsFromUser(user, { founder: isFounder(), devPremium })
 }

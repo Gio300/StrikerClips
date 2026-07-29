@@ -1,31 +1,102 @@
 import { useEffect, useState } from 'react'
-import { useNavigate, Link, useParams } from 'react-router-dom'
+import { useNavigate, Link, useParams, useSearchParams } from 'react-router-dom'
+import { Camera } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/hooks/useAuth'
+import { useWallet } from '@/hooks/useWallet'
 import { BRAND } from '@/lib/brand'
+import { prettyClip } from '@/lib/clipLabel'
 import { InviteMenu } from '@/components/InviteMenu'
 import { DonateButton } from '@/components/DonateButton'
+import { FollowControl } from '@/components/FollowControl'
+import { BlockControl } from '@/components/BlockControl'
+import { LiveLinkSettings } from '@/components/LiveLinkSettings'
+import { WinningsLedger } from '@/components/WinningsLedger'
+import { LiveSessionsStrip } from '@/components/LiveSessionsStrip'
+import { PlayerProducedVideos } from '@/components/PlayerProducedVideos'
+import { AutoMergeStatus } from '@/components/AutoMergeStatus'
+import { CollapsibleSection } from '@/components/CollapsibleSection'
+import { ProfileTagBadge } from '@/components/TagBadge'
+import { ArtifactTagsPanel } from '@/components/ArtifactTagsPanel'
+import { UpgradeNudge } from '@/components/UpgradeNudge'
+import { DeleteAccountPanel } from '@/components/DeleteAccountPanel'
+import { DirectMessages } from '@/components/social/DirectMessages'
+import { SocialFeed } from '@/components/social/SocialFeed'
+import { AvailabilityHint, Avatar } from '@/components/ui'
+import { AvatarPicker } from '@/components/AvatarPicker'
+import { useIdentityAvailability } from '@/hooks/useIdentityAvailability'
+import { buildTrophyCloset, trophyCountLabel, type ShinobiDefeatRow } from '@/lib/tkoKing'
 import type {
   Reel,
   UserYoutubeLink,
   Profile,
-  Activity,
-  DmConversation,
-  DmMessage,
-  Poll,
-  PollOption,
-  PollVote,
 } from '@/types/database'
 
 const EMOJI_PICKER = ['👍', '❤️', '😂', '🔥', '👏', '💯', '🎉', '😮']
 
+type ProfileSection = 'wall' | 'feed' | 'messages' | 'about'
+
+function profileSectionFromParam(value: string | null, isOwnProfile: boolean): ProfileSection {
+  const normalized: ProfileSection =
+    value === 'messages'
+      ? 'messages'
+      : value === 'feed' || value === 'activity'
+        ? 'feed'
+        : value === 'about' || value === 'polls' || value === 'profile'
+          ? 'about'
+          : 'wall'
+  if (!isOwnProfile && (normalized === 'feed' || normalized === 'messages')) return 'wall'
+  return normalized
+}
+
+// Compact tokens + sweeps balance with a link to the Store. Subtle by design.
+function WalletChip() {
+  const { tokens, sweeps } = useWallet()
+  return (
+    <div className="mb-6 flex flex-wrap items-center gap-3 text-sm">
+      <span className="inline-flex items-center gap-1.5 rounded-lg border border-dark-border bg-dark-card px-2.5 py-1">
+        <span className="font-semibold text-accent">{tokens.toLocaleString()}</span>
+        <span className="text-xs text-gray-500">Tokens</span>
+      </span>
+      <span className="inline-flex items-center gap-1.5 rounded-lg border border-dark-border bg-dark-card px-2.5 py-1">
+        <span className="font-semibold text-leaf">{sweeps.toLocaleString()}</span>
+        <span className="text-xs text-gray-500">Give Points</span>
+      </span>
+      <Link to="/store" className="text-accent hover:underline text-xs">Store</Link>
+    </div>
+  )
+}
+
 function ProfileContent() {
-  const { user, profile } = useAuth()
+  const { user, profile, loading: authLoading } = useAuth()
   const navigate = useNavigate()
   const { userId } = useParams()
+  const [searchParams, setSearchParams] = useSearchParams()
   const isOwnProfile = !userId || userId === user?.id
 
-  const [activeTab, setActiveTab] = useState<'profile' | 'activity' | 'messages' | 'polls'>('profile')
+  const tabParam = searchParams.get('tab')
+  const dmParam = searchParams.get('dm')
+  const dmTargetParam = searchParams.get('to')
+  const [activeTab, setActiveTab] = useState<ProfileSection>(
+    profileSectionFromParam(tabParam, isOwnProfile),
+  )
+
+  // Keep the active tab in sync with the URL — the Message button navigates to
+  // /profile?tab=messages, and without this the component (already mounted from
+  // the other user's profile) would stay on the Profile tab and the DM wouldn't
+  // open.
+  useEffect(() => {
+    setActiveTab(profileSectionFromParam(tabParam, isOwnProfile))
+  }, [isOwnProfile, tabParam])
+
+  function selectTab(tab: ProfileSection) {
+    setActiveTab(tab)
+    const next = new URLSearchParams(searchParams)
+    next.set('tab', tab)
+    next.delete('dm')
+    next.delete('to')
+    setSearchParams(next, { replace: true })
+  }
   const [reels, setReels] = useState<Reel[]>([])
   const [youtubeLinks, setYoutubeLinks] = useState<UserYoutubeLink[]>([])
   const [editing, setEditing] = useState(false)
@@ -37,10 +108,22 @@ function ProfileContent() {
   const [followersCount, setFollowersCount] = useState(0)
   const [followingCount, setFollowingCount] = useState(0)
   const [isFollowing, setIsFollowing] = useState(false)
+  const [notFound, setNotFound] = useState(false)
+  const [profileLoaded, setProfileLoaded] = useState(false)
 
   const targetUserId = userId ? userId : user?.id
 
+  // Renaming yourself re-claims a platform-unique handle, so it goes through the
+  // same availability check as signup. `excludeId` is your own profile row —
+  // without it, re-saving your current username would report itself as taken.
+  const usernameCheck = useIdentityAvailability('username', username, {
+    excludeId: user?.id,
+  })
+
   useEffect(() => {
+    // Never redirect while auth is still resolving — a signed-in user must not
+    // be bounced to /login just because `user` hasn't hydrated yet.
+    if (authLoading) return
     if (!user && !userId) {
       navigate('/login')
       return
@@ -50,48 +133,52 @@ function ProfileContent() {
       setBio(profile?.bio ?? '')
       setViewProfile(profile ?? null)
     }
-  }, [user, profile, navigate, userId, isOwnProfile])
+  }, [user, profile, navigate, userId, isOwnProfile, authLoading])
 
   useEffect(() => {
     if (!targetUserId) return
     async function load() {
-      if (isOwnProfile) {
-        setUsername(profile?.username ?? '')
-        setBio(profile?.bio ?? '')
-        setViewProfile(profile ?? null)
-      } else {
-        const { data } = await supabase.from('profiles').select('*').eq('id', targetUserId).single()
-        setViewProfile(data ?? null)
-        setUsername(data?.username ?? '')
-        setBio(data?.bio ?? '')
+      setNotFound(false)
+      setProfileLoaded(false)
+      try {
+        if (isOwnProfile) {
+          setUsername(profile?.username ?? '')
+          setBio(profile?.bio ?? '')
+          setViewProfile(profile ?? null)
+        } else {
+          const { data } = await supabase.from('profiles').select('*').eq('id', targetUserId!).single()
+          if (!data) { setNotFound(true); return }
+          setViewProfile(data)
+          setUsername(data?.username ?? '')
+          setBio(data?.bio ?? '')
+        }
+        const [reelsRes, linksRes, followersRes, followingRes, followRes] = await Promise.all([
+          supabase.from('reels').select('*').eq('user_id', targetUserId!).order('created_at', { ascending: false }),
+          isOwnProfile ? supabase.from('user_youtube_links').select('*').eq('user_id', targetUserId!).order('created_at', { ascending: false }) : { data: [] },
+          supabase.from('follows').select('*', { count: 'exact', head: true }).eq('following_id', targetUserId!),
+          supabase.from('follows').select('*', { count: 'exact', head: true }).eq('follower_id', targetUserId!),
+          user ? supabase.from('follows').select('id').eq('follower_id', user.id).eq('following_id', targetUserId!).maybeSingle() : { data: null },
+        ])
+        setReels(reelsRes.data ?? [])
+        if (isOwnProfile) setYoutubeLinks((linksRes as { data?: UserYoutubeLink[] }).data ?? [])
+        setFollowersCount((followersRes as { count?: number }).count ?? 0)
+        setFollowingCount((followingRes as { count?: number }).count ?? 0)
+        setIsFollowing(!!(followRes as { data?: unknown }).data)
+      } catch {
+        // A deep-link to a nonexistent user throws on `.single()`; show not-found.
+        if (!isOwnProfile) setNotFound(true)
+      } finally {
+        setProfileLoaded(true)
       }
-      const [reelsRes, linksRes, followersRes, followingRes, followRes] = await Promise.all([
-        supabase.from('reels').select('*').eq('user_id', targetUserId).order('created_at', { ascending: false }),
-        isOwnProfile ? supabase.from('user_youtube_links').select('*').eq('user_id', targetUserId).order('created_at', { ascending: false }) : { data: [] },
-        supabase.from('follows').select('*', { count: 'exact', head: true }).eq('following_id', targetUserId),
-        supabase.from('follows').select('*', { count: 'exact', head: true }).eq('follower_id', targetUserId),
-        user ? supabase.from('follows').select('id').eq('follower_id', user.id).eq('following_id', targetUserId).maybeSingle() : { data: null },
-      ])
-      setReels(reelsRes.data ?? [])
-      if (isOwnProfile) setYoutubeLinks((linksRes as { data?: UserYoutubeLink[] }).data ?? [])
-      setFollowersCount((followersRes as { count?: number }).count ?? 0)
-      setFollowingCount((followingRes as { count?: number }).count ?? 0)
-      setIsFollowing(!!(followRes as { data?: unknown }).data)
     }
     load()
   }, [targetUserId, isOwnProfile, user?.id, profile])
 
-  async function toggleFollow() {
-    if (!user || !targetUserId || targetUserId === user.id) return
-    if (isFollowing) {
-      await supabase.from('follows').delete().eq('follower_id', user.id).eq('following_id', targetUserId)
-      setIsFollowing(false)
-      setFollowersCount((c) => Math.max(0, c - 1))
-    } else {
-      await supabase.from('follows').insert({ follower_id: user.id, following_id: targetUserId })
-      setIsFollowing(true)
-      setFollowersCount((c) => c + 1)
-    }
+  // FollowControl owns the `follows` write + notification + prefs; we just
+  // sync local UI state (button label + follower count) from its callback.
+  function handleFollowChange(next: boolean) {
+    setIsFollowing(next)
+    setFollowersCount((c) => (next ? c + 1 : Math.max(0, c - 1)))
   }
 
   async function addYoutubeLink(e: React.FormEvent) {
@@ -115,7 +202,12 @@ function ProfileContent() {
 
   async function handleSave() {
     if (!user) return
-    await supabase.from('profiles').update({ username, bio, updated_at: new Date().toISOString() }).eq('id', user.id)
+    // Never write a username that's invalid or already claimed.
+    if (usernameCheck.blocked) return
+    await supabase
+      .from('profiles')
+      .update({ username: usernameCheck.value, bio, updated_at: new Date().toISOString() })
+      .eq('id', user.id)
     setEditing(false)
   }
 
@@ -124,6 +216,15 @@ function ProfileContent() {
     navigate('/')
   }
 
+  if (notFound || (profileLoaded && !viewProfile && targetUserId)) {
+    return (
+      <div className="p-8 flex flex-col items-center justify-center text-center gap-3 py-20">
+        <p className="text-gray-300">User not found.</p>
+        <p className="text-sm text-gray-500">This profile doesn't exist or is no longer available.</p>
+        <Link to="/" className="mt-2 px-4 py-2 rounded-lg bg-accent text-dark font-semibold">Back to home</Link>
+      </div>
+    )
+  }
   if (!viewProfile && targetUserId) {
     return (
       <div className="p-8 flex items-center justify-center">
@@ -133,25 +234,63 @@ function ProfileContent() {
   }
 
   return (
-    <div className="p-8 max-w-3xl mx-auto">
+    <div className="p-4 sm:p-6 lg:p-8 max-w-3xl mx-auto">
       <div className="rounded-xl border border-dark-border bg-dark-card p-6 mb-6">
         <div className="flex items-start gap-6">
-          {viewProfile?.avatar_url ? (
-            <img src={viewProfile.avatar_url} alt="" className="w-20 h-20 rounded-full" />
+          {isOwnProfile ? (
+            <button
+              type="button"
+              onClick={() => setEditing(true)}
+              className="relative shrink-0 rounded-full focus:outline-none"
+              aria-label="Change profile photo"
+              title="Change profile photo"
+            >
+              <Avatar
+                src={viewProfile?.avatar_url}
+                name={username || viewProfile?.username}
+                seed={viewProfile?.id ?? targetUserId}
+                size={80}
+              />
+              <span className="absolute -bottom-1 -right-1 flex h-7 w-7 items-center justify-center rounded-full border-2 border-dark-card bg-accent text-dark">
+                <Camera className="h-4 w-4" aria-hidden />
+              </span>
+            </button>
           ) : (
-            <div className="w-20 h-20 rounded-full bg-accent/20 flex items-center justify-center text-accent text-2xl font-bold">
-              {username[0]?.toUpperCase() ?? '?'}
-            </div>
+            <Avatar
+              src={viewProfile?.avatar_url}
+              name={username || viewProfile?.username}
+              seed={viewProfile?.id ?? targetUserId}
+              size={80}
+            />
           )}
           <div className="flex-1">
             {editing && isOwnProfile ? (
               <>
+                {user && (
+                  <div className="mb-3">
+                    <AvatarPicker
+                      userId={user.id}
+                      username={username}
+                      currentUrl={viewProfile?.avatar_url ?? null}
+                      onChange={(next) =>
+                        setViewProfile((p) => (p ? { ...p, avatar_url: next } : p))
+                      }
+                    />
+                  </div>
+                )}
                 <input
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
-                  className="w-full px-4 py-2 rounded-lg bg-dark border border-dark-border text-white mb-2"
+                  className="w-full px-4 py-2 rounded-lg bg-dark border border-dark-border text-white"
                   placeholder="Username"
                 />
+                <div className="mb-2">
+                  <AvailabilityHint
+                    state={usernameCheck}
+                    onPick={setUsername}
+                    hint="3–20 characters — letters, numbers and underscores."
+                  />
+                </div>
                 <textarea
                   value={bio}
                   onChange={(e) => setBio(e.target.value)}
@@ -160,7 +299,11 @@ function ProfileContent() {
                   rows={3}
                 />
                 <div className="flex gap-2">
-                  <button onClick={handleSave} className="px-4 py-2 rounded-lg bg-accent text-dark font-semibold">
+                  <button
+                    onClick={handleSave}
+                    disabled={usernameCheck.blocked}
+                    className="px-4 py-2 rounded-lg bg-accent text-dark font-semibold disabled:opacity-50"
+                  >
                     Save
                   </button>
                   <button onClick={() => setEditing(false)} className="px-4 py-2 rounded-lg border border-dark-border text-gray-400">
@@ -170,7 +313,10 @@ function ProfileContent() {
               </>
             ) : (
               <>
-                <h1 className="text-xl font-bold">{username}</h1>
+                <h1 className="text-xl font-bold flex items-center gap-2 flex-wrap">
+                  <span>{username}</span>
+                  <ProfileTagBadge user={viewProfile} />
+                </h1>
                 {viewProfile?.power_level != null && viewProfile.power_level > 0 && (
                   <p className="text-accent text-sm mt-1">PL {viewProfile.power_level}</p>
                 )}
@@ -205,14 +351,24 @@ function ProfileContent() {
                     </>
                   ) : (
                     <div className="flex items-center gap-2 flex-wrap">
-                      <button
-                        onClick={toggleFollow}
-                        className={`px-4 py-2 rounded-lg text-sm font-medium ${
-                          isFollowing ? 'border border-dark-border text-gray-400' : 'bg-accent text-dark'
-                        }`}
-                      >
-                        {isFollowing ? 'Unfollow' : 'Follow'}
-                      </button>
+                      {user && targetUserId && (
+                        <FollowControl
+                          followerId={user.id}
+                          targetId={targetUserId}
+                          targetUsername={viewProfile?.username}
+                          isFollowing={isFollowing}
+                          onFollowChange={handleFollowChange}
+                        />
+                      )}
+                      {user && targetUserId && (
+                        <button
+                          type="button"
+                          onClick={() => navigate(`/profile?tab=messages&to=${encodeURIComponent(targetUserId)}`)}
+                          className="px-4 py-2 rounded-lg border border-accent text-accent text-sm font-medium hover:bg-accent/10"
+                        >
+                          Message
+                        </button>
+                      )}
                       {viewProfile && (
                         <DonateButton
                           creatorId={viewProfile.id}
@@ -226,6 +382,16 @@ function ProfileContent() {
                           label="Invite"
                         />
                       )}
+                      {/* Unfollow-first, then a block that says what it costs. */}
+                      {user && targetUserId && (
+                        <BlockControl
+                          userId={user.id}
+                          targetId={targetUserId}
+                          targetUsername={viewProfile?.username}
+                          isFollowing={isFollowing}
+                          onUnfollowed={() => handleFollowChange(false)}
+                        />
+                      )}
                     </div>
                   )}
                 </div>
@@ -235,24 +401,69 @@ function ProfileContent() {
         </div>
       </div>
 
-      {isOwnProfile && (
-        <div className="flex gap-2 border-b border-dark-border mb-6">
-          {(['profile', 'activity', 'messages', 'polls'] as const).map((tab) => (
+      {/* Is this player live right now? (unified live_sessions indicator) */}
+      {targetUserId && <LiveSessionsStrip hostId={targetUserId} />}
+
+      <div className="mb-6 flex gap-1 overflow-x-auto border-b border-dark-border">
+          {(isOwnProfile
+            ? (['wall', 'feed', 'messages', 'about'] as const)
+            : (['wall', 'about'] as const)
+          ).map((tab) => (
             <button
               key={tab}
-              onClick={() => setActiveTab(tab)}
-              className={`px-4 py-2 rounded-t-lg text-sm font-medium capitalize ${
+              onClick={() => selectTab(tab)}
+              className={`shrink-0 rounded-t-lg px-4 py-2 text-sm font-medium ${
                 activeTab === tab ? 'bg-accent/10 text-accent border-b-2 border-accent' : 'text-gray-400 hover:text-white'
               }`}
             >
-              {tab}
+              {tab === 'wall' ? 'Wall' : tab === 'feed' ? 'News Feed' : tab === 'messages' ? 'Messages' : 'About'}
             </button>
           ))}
-        </div>
+      </div>
+
+      {activeTab === 'wall' && targetUserId && (
+        <SocialFeed
+          mode="wall"
+          viewerId={user?.id ?? null}
+          profileId={targetUserId}
+          composerProfile={isOwnProfile ? viewProfile : null}
+        />
       )}
 
-      {activeTab === 'profile' && (
-        <ProfileTab
+      {activeTab === 'feed' && isOwnProfile && user && (
+        <SocialFeed mode="feed" viewerId={user.id} />
+      )}
+
+      {activeTab === 'messages' && isOwnProfile && user && (
+        <DirectMessages
+          userId={user.id}
+          initialConversationId={dmParam}
+          targetUserId={dmTargetParam}
+        />
+      )}
+
+      {activeTab === 'about' && targetUserId && (
+        <ShinobiTrophyCloset userId={targetUserId} isOwnProfile={isOwnProfile} />
+      )}
+
+      {activeTab === 'about' && isOwnProfile && (
+        <UpgradeNudge
+          className="mb-6"
+          title="Go Pro"
+          message="Multi-angle director cuts, the live studio, no ads, and more — starting at $1.99/mo."
+          cta="See tiers"
+        />
+      )}
+
+      {activeTab === 'about' && isOwnProfile && <WalletChip />}
+
+      {activeTab === 'about' && isOwnProfile && user && <WinningsLedger userId={user.id} />}
+
+      {/* Artifact tags — buy / equip the pill you show off next to your name. */}
+      {activeTab === 'about' && isOwnProfile && <ArtifactTagsPanel />}
+
+      {activeTab === 'about' && (
+        <AboutTab
           isOwnProfile={isOwnProfile}
           reels={reels}
           youtubeLinks={youtubeLinks}
@@ -263,14 +474,38 @@ function ProfileContent() {
           addingLink={addingLink}
         />
       )}
-      {activeTab === 'activity' && isOwnProfile && <ActivityTab userId={user!.id} />}
-      {activeTab === 'messages' && isOwnProfile && <MessagesTab userId={user!.id} />}
-      {activeTab === 'polls' && isOwnProfile && <PollsTab userId={user!.id} />}
+
+      {/* Auto-merge unlock status — own profile only (YouTube connected + a paid
+          tier turns cross-player auto-merge ON). */}
+      {activeTab === 'about' && isOwnProfile && (
+        <AutoMergeStatus className="mt-8" />
+      )}
+
+      {/* "My Clips" — produced multi-angle videos this player appears in
+          (clip_records with a youtube_id). Public, so it shows on any profile. */}
+      {activeTab === 'about' && targetUserId && (
+        <PlayerProducedVideos playerId={targetUserId} isOwn={isOwnProfile} />
+      )}
+
+      {/* Settings — how your stream is (or isn't) linked to other people's. */}
+      {isOwnProfile && activeTab === 'about' && user && (
+        <div id="live-link-settings" className="mt-10 pt-6 border-t border-dark-border">
+          <h2 className="text-lg font-bold mb-3">Live settings</h2>
+          <LiveLinkSettings userId={user.id} />
+        </div>
+      )}
+
+      {/* Account settings — in-app deletion (Play / App Store requirement). */}
+      {isOwnProfile && activeTab === 'about' && (
+        <div id="delete-account" className="mt-10 pt-6 border-t border-dark-border">
+          <DeleteAccountPanel />
+        </div>
+      )}
     </div>
   )
 }
 
-function ProfileTab({
+function AboutTab({
   isOwnProfile,
   reels,
   youtubeLinks,
@@ -292,19 +527,26 @@ function ProfileTab({
   return (
     <div>
       {isOwnProfile && (
-        <div className="mb-8">
+        <div className="mb-8 flex flex-wrap gap-3">
           <Link
             to="/highlight/create"
             className="inline-flex items-center gap-2 px-6 py-3 rounded-lg bg-accent text-dark font-semibold hover:shadow-glow transition-all"
           >
             Create a reel
           </Link>
+          {/* Clip-poster (the in-app browser) now lives under "Me". */}
+          <Link
+            to="/browser"
+            className="inline-flex items-center gap-2 px-6 py-3 rounded-lg border border-accent text-accent font-semibold hover:bg-accent/10 transition-all"
+          >
+            Post a clip
+          </Link>
         </div>
       )}
 
       {isOwnProfile && (
-        <>
-          <h2 className="text-lg font-semibold mb-4">My YouTube sources</h2>
+        <div className="mb-8">
+          <CollapsibleSection id="profile-sources" label="Sources" count={youtubeLinks.length}>
           <p className="rounded-lg border border-chakra/20 bg-dark-card/50 p-3 text-sm text-gray-400 mb-4">
             <span className="text-chakra/90 font-medium">Next:</span> connect your YouTube account so {BRAND.name} can
             use the official API to work with <em>only your uploads</em> (no link scraping) for cloud renders and the
@@ -323,11 +565,12 @@ function ProfileTab({
               {addingLink ? 'Adding...' : 'Add'}
             </button>
           </form>
-          <div className="space-y-2 mb-8">
+          <div className="space-y-2">
             {youtubeLinks.map((link) => (
               <div key={link.id} className="flex items-center justify-between rounded-lg border border-dark-border bg-dark-card p-3">
-                <a href={link.url} target="_blank" rel="noopener noreferrer" className="text-accent hover:underline truncate flex-1">
-                  {link.url}
+                <a href={link.url} target="_blank" rel="noopener noreferrer" className="flex items-center gap-2 truncate flex-1 min-w-0">
+                  <span className="text-leaf text-xs shrink-0">✓ saved</span>
+                  <span className="text-accent hover:underline truncate">{prettyClip(link.url, link.title)}</span>
                 </a>
                 <button onClick={() => removeYoutubeLink(link.id)} className="text-red-400 hover:text-red-300 text-sm ml-2">
                   Remove
@@ -336,7 +579,8 @@ function ProfileTab({
             ))}
             {youtubeLinks.length === 0 && <p className="text-gray-400 text-sm">No saved links yet.</p>}
           </div>
-        </>
+          </CollapsibleSection>
+        </div>
       )}
 
       <h2 className="text-lg font-semibold mb-4">{isOwnProfile ? 'My Reels' : 'Reels'}</h2>
@@ -425,458 +669,77 @@ function ReelCard({ reel, showEmoji }: { reel: Reel; showEmoji: boolean }) {
   )
 }
 
-function ActivityTab({ userId }: { userId: string }) {
-  const [activities, setActivities] = useState<(Activity & { profiles?: { username: string } })[]>([])
-  const [loading, setLoading] = useState(true)
+// ─────────────────────────────────────────────────────────────────────────
+//  Shinobi Trophy Closet — each defeated opponent becomes a "Shinobi" entry
+//  (their avatar + a "times beaten" count, shown as "coming soon" for now).
+//  Reads `shinobi_defeats` (db/schema.sql — TKO KING); logic in src/lib/tkoKing.ts.
+// ─────────────────────────────────────────────────────────────────────────
+
+function ShinobiTrophyCloset({ userId, isOwnProfile }: { userId: string; isOwnProfile: boolean }) {
+  const [rows, setRows] = useState<ShinobiDefeatRow[]>([])
+  const [loaded, setLoaded] = useState(false)
 
   useEffect(() => {
+    let cancelled = false
     async function load() {
-      const { data: following } = await supabase.from('follows').select('following_id').eq('follower_id', userId)
-      const ids = following?.map((f) => f.following_id) ?? []
-      ids.push(userId)
       const { data } = await supabase
-        .from('activities')
-        .select('*, profiles(username, power_level)')
-        .in('user_id', ids)
-        .order('created_at', { ascending: false })
-        .limit(50)
-      setActivities(data ?? [])
-      setLoading(false)
-    }
-    load()
-  }, [userId])
-
-  if (loading) return <div className="animate-pulse text-gray-400">Loading activity...</div>
-
-  return (
-    <div className="space-y-4 max-h-[60vh] overflow-y-auto">
-      <h2 className="text-lg font-semibold mb-4">Activity Feed</h2>
-      {activities.length === 0 ? (
-        <p className="text-gray-400">No activity yet. Follow users to see their activity!</p>
-      ) : (
-        activities.map((a) => (
-          <div key={a.id} className="rounded-lg border border-dark-border bg-dark-card p-4">
-            <ActivityItem activity={a} />
-          </div>
-        ))
-      )}
-    </div>
-  )
-}
-
-function ActivityItem({ activity }: { activity: Activity & { profiles?: { username: string; power_level?: number } } }) {
-  const { type, profiles, target_id, target_meta, created_at } = activity
-  const meta = target_meta as { title?: string; question?: string } | null
-  const username = profiles?.username ?? 'Someone'
-  const powerLevel = profiles?.power_level
-
-  const time = new Date(created_at).toLocaleDateString()
-
-  if (type === 'reel_created') {
-    return (
-      <div>
-        <div className="flex items-center gap-2">
-          <span className="font-medium">{username}</span>
-          <span className="text-gray-400 text-sm">created a reel</span>
-        </div>
-        {target_id && (
-          <Link to={`/reels/${target_id}`} className="text-accent hover:underline mt-1 block">
-            {meta?.title ?? 'View reel'}
-          </Link>
-        )}
-        <p className="text-gray-500 text-xs mt-1">{time}</p>
-      </div>
-    )
-  }
-  if (type === 'follow') {
-    return (
-      <div>
-        <div className="flex items-center gap-2">
-          <span className="font-medium">{username}</span>
-          {powerLevel != null && powerLevel > 0 && <span className="text-accent text-sm">· PL {powerLevel}</span>}
-          <span className="text-gray-400 text-sm">followed someone</span>
-        </div>
-        <p className="text-gray-500 text-xs mt-1">{time}</p>
-      </div>
-    )
-  }
-  if (type === 'reel_like') {
-    return (
-      <div>
-        <div className="flex items-center gap-2">
-          <span className="font-medium">{username}</span>
-          {powerLevel != null && powerLevel > 0 && <span className="text-accent text-sm">· PL {powerLevel}</span>}
-          <span className="text-gray-400 text-sm">liked a reel</span>
-        </div>
-        {target_id && (
-          <Link to={`/reels/${target_id}`} className="text-accent hover:underline mt-1 block">
-            View reel
-          </Link>
-        )}
-        <p className="text-gray-500 text-xs mt-1">{time}</p>
-      </div>
-    )
-  }
-  if (type === 'poll_created') {
-    return (
-      <div>
-        <div className="flex items-center gap-2">
-          <span className="font-medium">{username}</span>
-          {powerLevel != null && powerLevel > 0 && <span className="text-accent text-sm">· PL {powerLevel}</span>}
-          <span className="text-gray-400 text-sm">created a poll</span>
-        </div>
-        <p className="text-gray-500 text-xs mt-1">{time}</p>
-      </div>
-    )
-  }
-  return null
-}
-
-function MessagesTab({ userId }: { userId: string }) {
-  const [conversations, setConversations] = useState<(DmConversation & { participants?: { user_id: string; profiles?: { username: string } }[] })[]>([])
-  const [selectedConversation, setSelectedConversation] = useState<string | null>(null)
-  const [messages, setMessages] = useState<(DmMessage & { profiles?: { username: string } })[]>([])
-  const [newMessage, setNewMessage] = useState('')
-  const [newDmUsername, setNewDmUsername] = useState('')
-  const [addToConvUsername, setAddToConvUsername] = useState('')
-  const [creating, setCreating] = useState(false)
-  const [addingToConv, setAddingToConv] = useState(false)
-
-  useEffect(() => {
-    async function load() {
-      const { data: parts } = await supabase
-        .from('dm_participants')
-        .select('conversation_id')
+        .from('shinobi_defeats')
+        .select('opponent_id, beat_count')
         .eq('user_id', userId)
-      const convIds = [...new Set((parts ?? []).map((p) => p.conversation_id))]
-      if (convIds.length === 0) {
-        setConversations([])
-        return
+      const defeats = (data ?? []) as { opponent_id: string; beat_count: number | null }[]
+      const oppIds = [...new Set(defeats.map((d) => d.opponent_id))]
+      const nameMap = new Map<string, { username: string; avatar_url: string | null }>()
+      if (oppIds.length > 0) {
+        const { data: profs } = await supabase.from('profiles').select('id, username, avatar_url').in('id', oppIds)
+        for (const p of profs ?? []) nameMap.set(p.id, { username: p.username, avatar_url: p.avatar_url })
       }
-      const { data: convs } = await supabase.from('dm_conversations').select('*').in('id', convIds)
-      const convsWithParticipants = await Promise.all(
-        (convs ?? []).map(async (c) => {
-          const { data: p } = await supabase
-            .from('dm_participants')
-            .select('user_id, profiles(username, power_level)')
-            .eq('conversation_id', c.id)
-          return { ...c, participants: p ?? [] }
-        })
+      if (cancelled) return
+      setRows(
+        defeats.map((d) => ({
+          opponent_id: d.opponent_id,
+          beat_count: d.beat_count,
+          opponent_username: nameMap.get(d.opponent_id)?.username ?? null,
+          opponent_avatar_url: nameMap.get(d.opponent_id)?.avatar_url ?? null,
+        })),
       )
-      setConversations(convsWithParticipants)
+      setLoaded(true)
     }
     load()
+    return () => { cancelled = true }
   }, [userId])
 
-  useEffect(() => {
-    if (!selectedConversation) {
-      setMessages([])
-      return
-    }
-    async function load() {
-      const { data } = await supabase
-        .from('dm_messages')
-        .select('*, profiles(username, power_level)')
-        .eq('conversation_id', selectedConversation)
-        .order('created_at', { ascending: true })
-      setMessages(data ?? [])
-    }
-    load()
-    const channel = supabase
-      .channel(`dm:${selectedConversation}`)
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'dm_messages', filter: `conversation_id=eq.${selectedConversation}` }, () => load())
-      .subscribe()
-    return () => {
-      supabase.removeChannel(channel)
-    }
-  }, [selectedConversation])
-
-  async function startConversation(e: React.FormEvent) {
-    e.preventDefault()
-    if (!newDmUsername.trim() || creating) return
-    setCreating(true)
-    const { data: target } = await supabase.from('profiles').select('id').ilike('username', newDmUsername.trim()).single()
-    if (!target) {
-      setCreating(false)
-      return
-    }
-    const { data: existing } = await supabase
-      .from('dm_participants')
-      .select('conversation_id')
-      .eq('user_id', userId)
-    for (const p of existing ?? []) {
-      const { data: other } = await supabase.from('dm_participants').select('user_id').eq('conversation_id', p.conversation_id).eq('user_id', target.id).single()
-      if (other) {
-        setSelectedConversation(p.conversation_id)
-        setNewDmUsername('')
-        setCreating(false)
-        return
-      }
-    }
-    const { data: conv } = await supabase.from('dm_conversations').insert({}).select().single()
-    if (conv) {
-      await supabase.from('dm_participants').insert([
-        { conversation_id: conv.id, user_id: userId },
-        { conversation_id: conv.id, user_id: target.id },
-      ])
-      setConversations((prev) => [...prev, { ...conv, participants: [] }])
-      setSelectedConversation(conv.id)
-    }
-    setNewDmUsername('')
-    setCreating(false)
-  }
-
-  const { profile } = useAuth()
-
-  async function addPersonToConversation(e: React.FormEvent) {
-    e.preventDefault()
-    if (!addToConvUsername.trim() || !selectedConversation || addingToConv) return
-    setAddingToConv(true)
-    const { data: target } = await supabase.from('profiles').select('id').ilike('username', addToConvUsername.trim()).single()
-    if (target) {
-      await supabase.from('dm_participants').insert({ conversation_id: selectedConversation, user_id: target.id }).then(() => {
-        setConversations((prev) => prev.map((c) => (c.id === selectedConversation ? { ...c, participants: [...(c.participants ?? []), { user_id: target.id, profiles: { username: addToConvUsername.trim() } }] } : c)))
-      })
-    }
-    setAddToConvUsername('')
-    setAddingToConv(false)
-  }
-
-  async function sendMessage(e: React.FormEvent) {
-    e.preventDefault()
-    const content = newMessage.trim()
-    if (!content || !selectedConversation) return
-    setNewMessage('')
-    await supabase.from('dm_messages').insert({ conversation_id: selectedConversation, user_id: userId, content })
-    setMessages((prev) => [...prev, { id: crypto.randomUUID(), conversation_id: selectedConversation, user_id: userId, content, created_at: new Date().toISOString(), profiles: { username: profile?.username } }])
-  }
+  const closet = buildTrophyCloset(rows)
+  // Hide entirely until loaded; on other people's profiles hide when empty.
+  if (!loaded) return null
+  if (closet.length === 0 && !isOwnProfile) return null
 
   return (
-    <div className="flex gap-4">
-      <div className="w-64 shrink-0 space-y-2">
-        <form onSubmit={startConversation} className="flex gap-2">
-          <input
-            value={newDmUsername}
-            onChange={(e) => setNewDmUsername(e.target.value)}
-            placeholder="Username to message"
-            className="flex-1 px-3 py-2 rounded-lg bg-dark border border-dark-border text-white text-sm"
-          />
-          <button type="submit" disabled={creating} className="px-3 py-2 rounded-lg bg-accent text-dark text-sm font-medium">
-            New
-          </button>
-        </form>
-        <div className="space-y-1 max-h-48 overflow-y-auto">
-          {conversations.map((c) => {
-            const others = c.participants?.filter((p) => p.user_id !== userId) ?? []
-            const name = others.length > 0
-              ? others.map((o) => (o as { profiles?: { username: string } })?.profiles?.username ?? '?').join(', ')
-              : 'Chat'
-            return (
-              <button
-                key={c.id}
-                onClick={() => setSelectedConversation(c.id)}
-                className={`w-full text-left px-3 py-2 rounded-lg text-sm ${
-                  selectedConversation === c.id ? 'bg-accent/20 text-accent' : 'bg-dark-border/30 text-gray-300 hover:bg-dark-border/50'
-                }`}
-              >
-                {name}
-              </button>
-            )
-          })}
-        </div>
-      </div>
-      <div className="flex-1 flex flex-col min-h-64 rounded-lg border border-dark-border bg-dark-card">
-        {selectedConversation ? (
-          <>
-            <div className="p-2 border-b border-dark-border flex items-center gap-2">
-              <span className="text-sm text-gray-400">Add people:</span>
-              <form onSubmit={addPersonToConversation} className="flex gap-2 flex-1">
-                <input
-                  value={addToConvUsername}
-                  onChange={(e) => setAddToConvUsername(e.target.value)}
-                  placeholder="Username"
-                  className="flex-1 px-3 py-1.5 rounded bg-dark border border-dark-border text-white text-sm"
-                />
-                <button type="submit" disabled={addingToConv} className="px-2 py-1 rounded bg-accent/20 text-accent text-sm">
-                  Add
-                </button>
-              </form>
-            </div>
-            <div className="flex-1 overflow-y-auto p-4 space-y-2">
-              {messages.map((m) => (
-                <div key={m.id} className={`flex ${m.user_id === userId ? 'justify-end' : 'justify-start'}`}>
-                  <div className={`max-w-[80%] px-3 py-2 rounded-lg ${m.user_id === userId ? 'bg-accent/20 text-accent' : 'bg-dark-border/30 text-gray-300'}`}>
-                    <p className="text-xs text-gray-500">
-                    {(m.profiles as { username?: string })?.username ?? 'Unknown'}
-                    {(m.profiles as { power_level?: number })?.power_level != null && (m.profiles as { power_level?: number }).power_level! > 0 && (
-                      <span className="text-accent ml-1">· PL {(m.profiles as { power_level?: number }).power_level}</span>
-                    )}
-                  </p>
-                    <p>{m.content}</p>
-                  </div>
-                </div>
-              ))}
-            </div>
-            <form onSubmit={sendMessage} className="p-4 border-t border-dark-border flex gap-2">
-              <input
-                value={newMessage}
-                onChange={(e) => setNewMessage(e.target.value)}
-                placeholder="Type a message..."
-                className="flex-1 px-4 py-2 rounded-lg bg-dark border border-dark-border text-white"
-              />
-              <button type="submit" className="px-4 py-2 rounded-lg bg-accent text-dark font-medium">
-                Send
-              </button>
-            </form>
-          </>
+    <div className="mb-6">
+      <CollapsibleSection id={`shinobi-closet-${userId}`} label="Trophy Closet" count={closet.length}>
+        <p className="text-xs text-gray-500 mb-3">
+          Every Shinobi {isOwnProfile ? 'you have' : 'they have'} beaten, collected here. Per-opponent tallies are{' '}
+          <span className="text-accent">coming soon</span>.
+        </p>
+        {closet.length === 0 ? (
+          <p className="text-sm text-gray-500">No Shinobi yet — win a TKO King battle to start your closet.</p>
         ) : (
-          <div className="flex-1 flex items-center justify-center text-gray-400">
-            Select a conversation or start a new one
+          <div className="grid grid-cols-3 sm:grid-cols-4 gap-3">
+            {closet.map((t) => (
+              <Link
+                key={t.opponentId}
+                to={`/profile/${t.opponentId}`}
+                className="rounded-xl border border-dark-border bg-dark-card p-3 text-center hover:border-accent/50 transition-colors"
+              >
+                <div className="flex justify-center">
+                  <Avatar src={t.avatarUrl} name={t.username} seed={t.opponentId} size={48} />
+                </div>
+                <p className="text-xs text-gray-200 mt-2 truncate">@{t.username}</p>
+                <p className="text-[10px] text-gray-500 mt-0.5">beaten · {trophyCountLabel(t)}</p>
+              </Link>
+            ))}
           </div>
         )}
-      </div>
-    </div>
-  )
-}
-
-function PollsTab({ userId }: { userId: string }) {
-  const { profile } = useAuth()
-  const [polls, setPolls] = useState<(Poll & { poll_options?: PollOption[]; profiles?: { username: string; power_level?: number } })[]>([])
-  const [question, setQuestion] = useState('')
-  const [options, setOptions] = useState(['', ''])
-  const [creating, setCreating] = useState(false)
-
-  useEffect(() => {
-    async function load() {
-      const { data } = await supabase
-        .from('polls')
-        .select('*, poll_options(*), profiles(username, power_level)')
-        .order('created_at', { ascending: false })
-        .limit(20)
-      setPolls(data ?? [])
-    }
-    load()
-  }, [])
-
-  async function createPoll(e: React.FormEvent) {
-    e.preventDefault()
-    const opts = options.filter((o) => o.trim())
-    if (!question.trim() || opts.length < 2 || creating) return
-    setCreating(true)
-    const { data: poll } = await supabase.from('polls').insert({ user_id: userId, question: question.trim() }).select().single()
-    if (poll) {
-      await supabase.from('poll_options').insert(opts.map((text, i) => ({ poll_id: poll.id, text: text.trim(), order: i })))
-      setPolls((prev) => [{ ...poll, poll_options: opts.map((t, i) => ({ id: '', poll_id: poll.id, text: t.trim(), order: i })), profiles: { username: profile?.username ?? 'You' } }, ...prev])
-      setQuestion('')
-      setOptions(['', ''])
-    }
-    setCreating(false)
-  }
-
-  return (
-    <div className="space-y-6">
-      <div>
-        <h2 className="text-lg font-semibold mb-4">Create Poll</h2>
-        <form onSubmit={createPoll} className="space-y-2">
-          <input
-            value={question}
-            onChange={(e) => setQuestion(e.target.value)}
-            placeholder="Poll question"
-            className="w-full px-4 py-2 rounded-lg bg-dark border border-dark-border text-white"
-          />
-          {options.map((opt, i) => (
-            <input
-              key={i}
-              value={opt}
-              onChange={(e) => {
-                const next = [...options]
-                next[i] = e.target.value
-                setOptions(next)
-              }}
-              placeholder={`Option ${i + 1}`}
-              className="w-full px-4 py-2 rounded-lg bg-dark border border-dark-border text-white"
-            />
-          ))}
-          <div className="flex gap-2">
-            <button type="button" onClick={() => setOptions((o) => [...o, ''])} className="text-accent text-sm">
-              + Add option
-            </button>
-            <button type="submit" disabled={creating} className="px-4 py-2 rounded-lg bg-accent text-dark font-medium">
-              Create Poll
-            </button>
-          </div>
-        </form>
-      </div>
-      <div>
-        <h2 className="text-lg font-semibold mb-4">Polls</h2>
-        <div className="space-y-4">
-          {polls.map((poll) => (
-            <PollCard key={poll.id} poll={poll} userId={userId} />
-          ))}
-        </div>
-        {polls.length === 0 && <p className="text-gray-400">No polls yet.</p>}
-      </div>
-    </div>
-  )
-}
-
-function PollCard({ poll, userId }: { poll: Poll & { poll_options?: PollOption[]; profiles?: { username: string; power_level?: number } }; userId: string }) {
-  const [votes, setVotes] = useState<PollVote[]>([])
-  const [myVote, setMyVote] = useState<string | null>(null)
-
-  useEffect(() => {
-    async function load() {
-      const { data } = await supabase.from('poll_votes').select('*').eq('poll_id', poll.id)
-      setVotes(data ?? [])
-      const mine = (data ?? []).find((v) => v.user_id === userId)
-      setMyVote(mine?.poll_option_id ?? null)
-    }
-    load()
-  }, [poll.id, userId])
-
-  async function vote(optionId: string) {
-    if (myVote) {
-      await supabase.from('poll_votes').delete().eq('poll_id', poll.id).eq('user_id', userId)
-      setMyVote(null)
-      setVotes((v) => v.filter((x) => !(x.poll_option_id === optionId && x.user_id === userId)))
-    }
-    await supabase.from('poll_votes').insert({ poll_id: poll.id, poll_option_id: optionId, user_id: userId })
-    setMyVote(optionId)
-    setVotes((v) => [...v, { id: '', poll_id: poll.id, poll_option_id: optionId, user_id: userId, created_at: '' }])
-  }
-
-  const opts = poll.poll_options ?? []
-  const total = votes.length
-
-  return (
-    <div className="rounded-lg border border-dark-border bg-dark-card p-4">
-      <p className="font-medium mb-2">{poll.question}</p>
-      <p className="text-xs text-gray-500 mb-2">
-        by {(poll.profiles as { username?: string })?.username ?? 'Unknown'}
-        {(poll.profiles as { power_level?: number })?.power_level != null && (poll.profiles as { power_level?: number }).power_level! > 0 && (
-          <span className="text-accent ml-1">· PL {(poll.profiles as { power_level?: number }).power_level}</span>
-        )}
-      </p>
-      <div className="space-y-2">
-        {opts.map((opt) => {
-          const count = votes.filter((v) => v.poll_option_id === opt.id).length
-          const pct = total > 0 ? Math.round((count / total) * 100) : 0
-          return (
-            <button
-              key={opt.id}
-              onClick={() => vote(opt.id)}
-              className={`w-full text-left px-3 py-2 rounded-lg border ${
-                myVote === opt.id ? 'border-accent bg-accent/10 text-accent' : 'border-dark-border text-gray-300'
-              }`}
-            >
-              <div className="flex justify-between">
-                <span>{opt.text}</span>
-                <span className="text-sm text-gray-500">{pct}% ({count})</span>
-              </div>
-            </button>
-          )
-        })}
-      </div>
+      </CollapsibleSection>
     </div>
   )
 }

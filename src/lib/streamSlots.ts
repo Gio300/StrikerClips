@@ -2,7 +2,7 @@
  * Live-stream slots. Our YouTube channel can only restream a limited number of
  * live streams at once, so channel airtime is a scarce resource: first-come-
  * first-serve to go live now, or schedule a future window. Hosting on the
- * KillCam channel (our audience + our ads) is a Pro perk; free users can still
+ * TKO channel (our audience + our ads) is a Pro perk; free users can still
  * stream on their OWN channel and link it.
  */
 
@@ -38,7 +38,7 @@ export function canGoLiveNow(
   total = CHANNEL_SLOTS,
 ): { ok: boolean; reason?: string } {
   if (!tierCanHostOnChannel(isPremium)) {
-    return { ok: false, reason: 'Going live on the KillCam channel is a Pro feature — link your own stream on free.' }
+    return { ok: false, reason: 'Going live on the TKO channel is a Pro feature — link your own stream on free.' }
   }
   if (slotsOpenAt(claims, now, total) <= 0) {
     return { ok: false, reason: 'All live slots are full right now — schedule a window instead.' }

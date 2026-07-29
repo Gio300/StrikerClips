@@ -1,11 +1,13 @@
 import { useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { Capacitor } from '@capacitor/core'
+import { Browser as CapBrowser } from '@capacitor/browser'
 import { useClipTray } from '@/hooks/useClipTray'
 import { extractYouTubeId } from '@/lib/youtubeApi'
 
 /**
  * In-app browser — the surface where a player pulls up the PlayStation /
- * Xbox site (or any app) and pastes a KillCam clip link to post it anywhere.
+ * Xbox site (or any app) and pastes a TKO clip link to post it anywhere.
  *
  * On the web build many sites block being framed (X-Frame-Options / CSP), so
  * we always offer "Open in new tab". Inside the mobile wrapper (Capacitor /
@@ -44,18 +46,33 @@ export function Browser() {
   const [copied, setCopied] = useState(false)
   const [stashed, setStashed] = useState('')
   const iframeRef = useRef<HTMLIFrameElement>(null)
+  const isNative = Capacitor.isNativePlatform()
 
   const flash = (msg: string) => { setStashed(msg); setTimeout(() => setStashed(''), 1800) }
+
+  // On native (Capacitor) open the URL in the in-app browser so the site loads
+  // inside our app and the user can navigate freely. On web, keep the existing
+  // behavior: open a new tab (most sites block being framed).
+  const openUrl = async (url: string) => {
+    if (!url) return
+    if (isNative) {
+      await CapBrowser.open({ url, presentationStyle: 'popover' })
+    } else {
+      window.open(url, '_blank', 'noopener,noreferrer')
+    }
+  }
 
   const go = (raw: string) => {
     const url = normalizeUrl(raw)
     if (!url) return
     setCurrent(url)
     setAddress(url)
+    // On native, prefer the in-app browser over trying to iframe the site.
+    if (isNative) void openUrl(url)
   }
 
   const openExternal = () => {
-    if (current) window.open(current, '_blank', 'noopener,noreferrer')
+    if (current) void openUrl(current)
   }
 
   const copyClip = async () => {
@@ -74,22 +91,22 @@ export function Browser() {
   // Stash whatever's open in the browser into the shared tray, ready to drop
   // into a reel. YouTube video pages are the sweet spot; anything else stashes
   // as a plain link the user can still share.
-  const sendCurrentToKillCam = () => {
+  const sendCurrentToTko = () => {
     if (!current) return
     const isVideo = !!extractYouTubeId(current)
     stash({ url: current, source: 'browser', fromHost: host })
-    flash(isVideo ? 'Clip sent to KillCam ✓' : 'Link sent to KillCam ✓')
+    flash(isVideo ? 'Clip sent to TKO ✓' : 'Link sent to TKO ✓')
   }
 
-  const sendClipToKillCam = () => {
+  const sendClipToTko = () => {
     const url = clip.trim()
     if (!url) return
     stash({ url, source: 'browser' })
-    flash('Sent to KillCam ✓')
+    flash('Sent to TKO ✓')
   }
 
   return (
-    <div className="flex flex-col h-[calc(100vh-0px)]">
+    <div className="flex flex-col h-[calc(100dvh-4rem-env(safe-area-inset-bottom))] sm:h-[calc(100vh-0px)]">
       {/* Address + actions */}
       <div className="p-3 border-b border-dark-border bg-dark-card/60 flex flex-wrap items-center gap-2">
         <div className="flex items-center gap-2 flex-1 min-w-[220px]">
@@ -104,8 +121,8 @@ export function Browser() {
           <button onClick={() => go(address)} className="px-3 py-2 rounded-lg bg-kunai text-dark text-sm font-semibold shrink-0">Go</button>
         </div>
         {current && (
-          <button onClick={sendCurrentToKillCam} className="px-3 py-2 rounded-lg bg-accent text-dark text-sm font-semibold shrink-0 hover:shadow-glow">
-            + Send to KillCam
+          <button onClick={sendCurrentToTko} className="px-3 py-2 rounded-lg bg-accent text-dark text-sm font-semibold shrink-0 hover:shadow-glow">
+            + Send to TKO
           </button>
         )}
         {current && (
@@ -114,7 +131,7 @@ export function Browser() {
           </button>
         )}
         <button
-          onClick={() => navigate('/create')}
+          onClick={() => navigate('/highlight/create')}
           className="px-3 py-2 rounded-lg border border-accent/50 text-accent text-sm shrink-0 hover:bg-accent/10"
           title="Open the reel builder — your tray is waiting there"
         >
@@ -129,7 +146,7 @@ export function Browser() {
         /* Start page: shortcuts + clip helper */
         <div className="flex-1 overflow-y-auto p-5">
           <h1 className="text-xl font-bold">Post your clips anywhere</h1>
-          <p className="text-sm text-gray-500 mt-1">Pull up your console or any app, then drop your KillCam link into it.</p>
+          <p className="text-sm text-gray-500 mt-1">Pull up your console or any app, then drop your TKO link into it.</p>
 
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-5">
             {SHORTCUTS.map((s) => (
@@ -145,16 +162,16 @@ export function Browser() {
 
           <div className="mt-8 rounded-xl border border-dark-border bg-dark-card p-4 max-w-2xl">
             <div className="text-sm font-medium text-white">Gather a clip</div>
-            <p className="text-xs text-gray-500 mt-1">Paste a YouTube / KillCam link — copy it to share, or send it to your tray to build a reel from it.</p>
+            <p className="text-xs text-gray-500 mt-1">Paste a YouTube / TKO link — copy it to share, or send it to your tray to build a reel from it.</p>
             <div className="mt-3 flex flex-wrap gap-2">
               <input
                 value={clip}
                 onChange={(e) => setClip(e.target.value)}
-                placeholder="https://youtu.be/…  or  killcam.app/reels/…"
+                placeholder="https://youtu.be/…  or  tko.cam/reels/…"
                 className="flex-1 min-w-[200px] px-3 py-2 rounded-lg bg-dark border border-dark-border text-white text-sm focus:outline-none focus:border-kunai"
               />
-              <button onClick={sendClipToKillCam} className="px-4 py-2 rounded-lg bg-accent text-dark text-sm font-semibold">
-                + Send to KillCam
+              <button onClick={sendClipToTko} className="px-4 py-2 rounded-lg bg-accent text-dark text-sm font-semibold">
+                + Send to TKO
               </button>
               <button onClick={copyClip} className="px-4 py-2 rounded-lg border border-dark-border text-gray-200 text-sm hover:border-kunai/40">
                 {copied ? 'Copied ✓' : 'Copy link'}
@@ -162,8 +179,21 @@ export function Browser() {
             </div>
           </div>
         </div>
+      ) : isNative ? (
+        /* Native: the site is open in the in-app browser, not framed here. */
+        <div className="flex-1 flex items-center justify-center bg-black p-6">
+          <div className="text-center max-w-sm">
+            <p className="text-sm text-gray-400">
+              <span className="text-gray-200">{host}</span> is open in the in-app browser.
+              Come back here to send your clip to TKO.
+            </p>
+            <button onClick={openExternal} className="mt-3 px-4 py-2 rounded-lg bg-kunai text-dark text-sm font-semibold">
+              Open {host} ↗
+            </button>
+          </div>
+        </div>
       ) : (
-        /* Framed site */
+        /* Framed site (web) */
         <div className="flex-1 relative bg-black">
           <iframe
             ref={iframeRef}

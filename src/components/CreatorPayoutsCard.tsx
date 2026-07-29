@@ -1,19 +1,19 @@
-import { useEffect, useState } from 'react'
-import { supabase } from '@/lib/supabase'
-import { useAuth } from '@/hooks/useAuth'
-import { donationsEnabled } from '@/lib/featureFlags'
-import type { CreatorStripeAccount } from '@/types/database'
+import { useCallback, useEffect, useState } from 'react'
+import { Link } from 'react-router-dom'
+import {
+  certifyCreatorTaxProfile,
+  fetchCreatorFees,
+  fetchConnectStatus,
+  retryCreatorFees,
+  startConnectOnboarding,
+  type CreatorPlatformFee,
+} from '@/lib/creatorCommerceApi'
+
+type ConnectStatus = NonNullable<Awaited<ReturnType<typeof fetchConnectStatus>>['data']>
 
 /**
- * CreatorPayoutsCard — drops on /dashboard.
- *
- * Three states:
- *   1. Donations not enabled at deploy level (no `VITE_STRIPE_PUBLISHABLE_KEY`):
- *      explain politely; no buttons.
- *   2. Donations enabled, creator hasn't onboarded with Stripe Connect:
- *      "Connect Stripe" button hits the `stripe-connect-link` edge function
- *      and redirects to Stripe.
- *   3. Onboarded: show charges/payouts state + lifetime tip total.
+ * Stripe-hosted onboarding collects identity, bank, and tax information. TKO
+ * stores only readiness flags and the user's electronic-delivery consent.
  */
 export function CreatorPayoutsCard({
   paidTotalCents,
@@ -22,113 +22,241 @@ export function CreatorPayoutsCard({
   paidTotalCents: number
   pendingDonations: number
 }) {
-  const { user } = useAuth()
-  const [account, setAccount] = useState<CreatorStripeAccount | null>(null)
+  const [status, setStatus] = useState<ConnectStatus | null>(null)
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [taxFormType, setTaxFormType] = useState<'w9' | 'w8'>('w9')
+  const [taxCertified, setTaxCertified] = useState(false)
+  const [electronicConsent, setElectronicConsent] = useState(false)
+  const [sellerFeeConsent, setSellerFeeConsent] = useState(false)
+  const [fees, setFees] = useState<CreatorPlatformFee[]>([])
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    const [result, feeResult] = await Promise.all([
+      fetchConnectStatus(),
+      fetchCreatorFees(),
+    ])
+    if (result.ok) {
+      setStatus(result.data)
+      setError(null)
+    } else {
+      setError(result.error || 'Payout status is unavailable.')
+    }
+    if (feeResult.ok) setFees(feeResult.data?.fees ?? [])
+    setLoading(false)
+  }, [])
 
   useEffect(() => {
-    if (!user) return
-    let cancelled = false
-    async function load() {
-      const { data } = await supabase
-        .from('creator_stripe_accounts')
-        .select('*')
-        .eq('user_id', user!.id)
-        .maybeSingle()
-      if (cancelled) return
-      setAccount((data ?? null) as CreatorStripeAccount | null)
-      setLoading(false)
-    }
-    load()
-    return () => {
-      cancelled = true
-    }
-  }, [user])
+    void load()
+  }, [load])
 
   async function startOnboarding() {
     setBusy(true)
     setError(null)
-    try {
-      const { data, error: fnErr } = await supabase.functions.invoke('stripe-connect-link', {
-        body: { return_url: window.location.href },
-      })
-      if (fnErr) throw fnErr
-      const url = (data as { url?: string } | null)?.url
-      if (!url) throw new Error('No onboarding URL returned')
-      window.location.href = url
-    } catch (e) {
-      setError(humanize(e))
-      setBusy(false)
+    const result = await startConnectOnboarding()
+    if (result.ok && result.data?.url) {
+      window.location.href = result.data.url
+      return
     }
+    setError(result.error || 'Stripe onboarding could not start.')
+    setBusy(false)
   }
 
-  if (!donationsEnabled) {
-    return (
-      <div className="rounded-xl border border-dark-border bg-dark-card p-5">
-        <h2 className="font-semibold mb-1">Payouts</h2>
-        <p className="text-sm text-gray-400">
-          Donations are not enabled on this deploy yet. The dashboard, donations table, and tip-history
-          UI are in place — when the operator sets <code className="text-accent">VITE_STRIPE_PUBLISHABLE_KEY</code>
-          {' '}and the Stripe edge function secrets, this card will let you connect your bank for payouts.
-        </p>
-      </div>
-    )
+  async function saveTaxConsent() {
+    if (!taxCertified || !electronicConsent || !sellerFeeConsent) {
+      setError('Confirm all seller payout statements to continue.')
+      return
+    }
+    setBusy(true)
+    setError(null)
+    const result = await certifyCreatorTaxProfile(taxFormType)
+    if (!result.ok) {
+      setError(result.error || 'Tax consent could not be saved.')
+      setBusy(false)
+      return
+    }
+    await load()
+    setBusy(false)
   }
+
+  async function retryFees() {
+    setBusy(true)
+    setError(null)
+    const result = await retryCreatorFees()
+    if (!result.ok) setError(result.error || 'Seller charges could not be retried.')
+    await load()
+    setBusy(false)
+  }
+
+  const connectReady = status?.transfers_enabled === true && status?.payouts_enabled === true
+  const outstandingFees = fees
+    .filter((fee) => fee.status === 'pending' || fee.status === 'failed')
+    .reduce((sum, fee) => sum + Number(fee.seller_fee_cents || 0), 0)
 
   return (
-    <div className="rounded-xl border border-accent/30 bg-accent/5 p-5">
-      <div className="flex items-baseline justify-between mb-2">
-        <h2 className="font-semibold">Payouts via Stripe</h2>
-        {account?.charges_enabled && account.payouts_enabled ? (
-          <span className="text-[11px] px-2 py-0.5 rounded-full border border-leaf/40 bg-leaf/10 text-leaf">
-            Active
-          </span>
-        ) : account?.stripe_account_id ? (
-          <span className="text-[11px] px-2 py-0.5 rounded-full border border-chakra/40 bg-chakra/10 text-chakra">
-            Onboarding
-          </span>
-        ) : (
-          <span className="text-[11px] px-2 py-0.5 rounded-full border border-dark-border text-gray-400">
-            Not connected
-          </span>
-        )}
+    <section className="rounded-lg border border-accent/30 bg-dark-card p-5">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h2 className="font-semibold text-white">Creator payouts</h2>
+          <p className="mt-1 text-sm text-gray-400">
+            Pro keeps 50%, Elite keeps 65%, and Legend or Founder keeps 80% of eligible sales.
+          </p>
+        </div>
+        <StatusPill loading={loading} status={status} />
       </div>
-      <p className="text-sm text-gray-300 mb-3">
-        Lifetime tips: <strong className="font-mono">${(paidTotalCents / 100).toFixed(2)}</strong>
-        {pendingDonations > 0 && (
-          <span className="text-gray-500 ml-2">
-            ({pendingDonations} pending)
-          </span>
-        )}
-      </p>
 
-      {loading ? (
-        <p className="text-xs text-gray-500">Loading…</p>
-      ) : !account?.charges_enabled ? (
-        <button
-          type="button"
-          disabled={busy}
-          onClick={startOnboarding}
-          className="px-4 py-2 rounded-lg bg-accent text-dark text-sm font-semibold disabled:opacity-50"
-        >
-          {busy ? 'Redirecting…' : account?.stripe_account_id ? 'Continue onboarding' : 'Connect Stripe'}
-        </button>
-      ) : (
-        <p className="text-xs text-gray-500">
-          You can receive tips. Stripe pays out on its standard schedule.
-        </p>
+      <div className="mt-4 grid grid-cols-2 gap-3">
+        <Metric label="Lifetime paid" value={`$${(paidTotalCents / 100).toFixed(2)}`} />
+        <Metric label="Pending tips" value={String(pendingDonations)} />
+      </div>
+
+      {!loading && status?.seller_eligible === false && (
+        <div className="mt-4 rounded-lg border border-accent/30 bg-accent/5 p-4">
+          <p className="text-sm text-gray-200">Selling and Stripe payouts start with Pro.</p>
+          <Link to="/upgrade" className="mt-3 inline-flex rounded-md bg-accent px-4 py-2 text-sm font-semibold text-dark">
+            View seller tiers
+          </Link>
+        </div>
       )}
-      {error && <p className="text-kunai text-xs mt-2">{error}</p>}
-    </div>
+
+      {!loading && status?.seller_eligible !== false && !connectReady && (
+        <div className="mt-4">
+          <p className="text-sm text-gray-300">
+            Stripe securely collects your identity, payout bank, and W-9 or W-8 information.
+          </p>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={startOnboarding}
+            className="mt-3 rounded-md bg-accent px-4 py-2 text-sm font-semibold text-dark disabled:opacity-50"
+          >
+            {busy ? 'Opening Stripe...' : status?.connected ? 'Continue Stripe setup' : 'Connect Stripe'}
+          </button>
+        </div>
+      )}
+
+      {!loading && connectReady && !status?.ready && (
+        <div className="mt-4 rounded-lg border border-chakra/30 bg-chakra/5 p-4">
+          <h3 className="font-semibold text-white">Finish tax delivery setup</h3>
+          <p className="mt-1 text-xs leading-5 text-gray-400">
+            Complete your tax identity inside Stripe first. TKO never asks for or stores your SSN,
+            EIN, or foreign tax ID.
+          </p>
+          <label className="mt-3 block text-xs font-semibold uppercase text-gray-400">
+            Tax profile used in Stripe
+            <select
+              value={taxFormType}
+              onChange={(event) => setTaxFormType(event.target.value as 'w9' | 'w8')}
+              className="mt-1 block w-full rounded-md border border-dark-border bg-dark px-3 py-2 text-sm normal-case text-white"
+            >
+              <option value="w9">W-9 (US person or business)</option>
+              <option value="w8">W-8 (non-US person or business)</option>
+            </select>
+          </label>
+          <label className="mt-3 flex gap-3 text-sm text-gray-200">
+            <input
+              type="checkbox"
+              checked={taxCertified}
+              onChange={(event) => setTaxCertified(event.target.checked)}
+              className="mt-1 h-4 w-4 accent-accent"
+            />
+            <span>I certify that I completed and reviewed my tax identity information in Stripe.</span>
+          </label>
+          <label className="mt-3 flex gap-3 text-sm text-gray-200">
+            <input
+              type="checkbox"
+              checked={electronicConsent}
+              onChange={(event) => setElectronicConsent(event.target.checked)}
+              className="mt-1 h-4 w-4 accent-accent"
+            />
+            <span>I consent to electronic delivery of applicable tax forms, including Form 1099.</span>
+          </label>
+          <label className="mt-3 flex gap-3 text-sm text-gray-200">
+            <input
+              type="checkbox"
+              checked={sellerFeeConsent}
+              onChange={(event) => setSellerFeeConsent(event.target.checked)}
+              className="mt-1 h-4 w-4 accent-accent"
+            />
+            <span>
+              I authorize TKO.cam to debit my Stripe account balance for disclosed seller costs,
+              including payment processing, payouts, the active-account fee, and tax-form filing.
+              These charges do not include my personal or business income taxes.
+            </span>
+          </label>
+          <button
+            type="button"
+            disabled={busy || !taxCertified || !electronicConsent || !sellerFeeConsent}
+            onClick={saveTaxConsent}
+            className="mt-4 rounded-md bg-chakra px-4 py-2 text-sm font-semibold text-dark disabled:opacity-40"
+          >
+            {busy ? 'Saving...' : 'Enable seller payouts'}
+          </button>
+        </div>
+      )}
+
+      {!loading && status?.ready && (
+        <div className="mt-4 text-sm text-leaf">
+          <p>Payouts are active. Stripe handles your bank deposits and tax-form delivery.</p>
+          <p className="mt-1 text-xs text-gray-400">
+            Documented Stripe and tax-form filing costs are deducted from seller proceeds.
+          </p>
+        </div>
+      )}
+
+      {!loading && outstandingFees > 0 && (
+        <div className="mt-4 rounded-lg border border-kunai/30 bg-kunai/5 p-4">
+          <p className="text-sm font-semibold text-white">
+            Seller charges due: ${(outstandingFees / 100).toFixed(2)}
+          </p>
+          <p className="mt-1 text-xs leading-5 text-gray-400">
+            These are documented external Stripe or tax-form filing costs. TKO will retry them
+            against your connected-account balance without making that balance negative.
+          </p>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={retryFees}
+            className="mt-3 rounded-md border border-kunai/50 px-4 py-2 text-sm font-semibold text-white disabled:opacity-40"
+          >
+            {busy ? 'Retrying...' : 'Retry seller charges'}
+          </button>
+        </div>
+      )}
+
+      {error && <p className="mt-3 text-xs text-kunai">{error}</p>}
+    </section>
   )
 }
 
-function humanize(err: unknown): string {
-  const msg = err instanceof Error ? err.message : String(err)
-  if (msg.includes('Function not found') || msg.includes('FUNCTION_INVOCATION_FAILED')) {
-    return 'Stripe edge function not deployed yet. See docs/stripe-setup.md.'
-  }
-  return msg
+function StatusPill({
+  loading,
+  status,
+}: {
+  loading: boolean
+  status: ConnectStatus | null
+}) {
+  const label = loading
+    ? 'Checking'
+    : status?.ready
+      ? `Active - ${status.seller_share_percent ?? 0}%`
+      : status?.connected
+        ? 'Setup needed'
+        : 'Not connected'
+  return (
+    <span className="rounded-full border border-dark-border px-2.5 py-1 text-xs text-gray-300">
+      {label}
+    </span>
+  )
+}
+
+function Metric({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-md border border-dark-border bg-dark p-3">
+      <p className="text-xs text-gray-500">{label}</p>
+      <p className="mt-1 font-mono text-lg text-white">{value}</p>
+    </div>
+  )
 }

@@ -21,3 +21,8 @@ src-tauri/WixTools
 _*
 /android
 /appicons
+
+# Android release signing — NEVER commit a keystore or its passwords.
+android/keystore.properties
+*.jks
+*.keystore

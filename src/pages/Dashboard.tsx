@@ -120,7 +120,7 @@ export function Dashboard() {
 
   if (!user) {
     return (
-      <div className="p-8 max-w-3xl mx-auto">
+      <div className="p-4 sm:p-6 lg:p-8 max-w-3xl mx-auto">
         <h1 className="text-2xl font-bold mb-4">Creator Dashboard</h1>
         <div className="rounded-xl border border-dark-border bg-dark-card p-8 text-center">
           <Link to="/login" className="text-accent hover:underline">Log in</Link>
@@ -131,7 +131,7 @@ export function Dashboard() {
   }
 
   return (
-    <div className="p-8 max-w-5xl mx-auto">
+    <div className="p-4 sm:p-6 lg:p-8 max-w-5xl mx-auto">
       <h1 className="text-2xl font-bold mb-1">Creator Dashboard</h1>
       <p className="text-gray-400 mb-6">
         Your reach, your tips, your payouts — all in one place.

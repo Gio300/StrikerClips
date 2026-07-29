@@ -16,7 +16,7 @@ type ShareButtonsProps = {
 export function ShareButtons({ url, title, className = '' }: ShareButtonsProps) {
   const [copied, setCopied] = useState(false)
   const shareUrl = url ?? (typeof window !== 'undefined' ? window.location.href : '')
-  const shareTitle = title?.trim() ? title : 'Check out this KillCam clip'
+  const shareTitle = title?.trim() ? title : 'Check out this TKO clip'
 
   const enc = encodeURIComponent
   const fbAppId = import.meta.env.VITE_FACEBOOK_APP_ID as string | undefined

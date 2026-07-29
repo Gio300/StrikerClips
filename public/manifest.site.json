@@ -1,0 +1,23 @@
+{
+  "$comment": "Marketing-site manifest. It shares /app/ with the product manifest and opens the installed TKO app.",
+  "id": "/app/",
+  "name": "TKO.cam",
+  "short_name": "TKO",
+  "description": "Every angle of the knockout. One cam - multi-angle highlights, live events, clans, and tournaments.",
+  "lang": "en",
+  "dir": "ltr",
+  "start_url": "/app/",
+  "scope": "/",
+  "display": "standalone",
+  "display_override": ["standalone", "minimal-ui", "browser"],
+  "orientation": "any",
+  "background_color": "#0A0A0C",
+  "theme_color": "#0A0A0C",
+  "categories": ["entertainment", "sports", "games"],
+  "icons": [
+    { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "maskable" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

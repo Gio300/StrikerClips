@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
-import { loadYouTubeApi, extractYouTubeId, type YTPlayer } from '@/lib/youtubeApi'
+import { loadYouTubeApi, extractYouTubeId, CLEAN_PLAYER_VARS, type YTPlayer } from '@/lib/youtubeApi'
 import { useClipTray } from '@/hooks/useClipTray'
 import { thumbUrl } from '@/lib/youtubeConnect'
 import {
@@ -68,7 +68,7 @@ export function Director() {
     }
     playerRef.current = new YT.Player(mountRef.current, {
       videoId,
-      playerVars: { controls: 0, modestbranding: 1, rel: 0, playsinline: 1 },
+      playerVars: { ...CLEAN_PLAYER_VARS },
       events: {
         onReady: (e) => { try { setDuration(e.target.getDuration()) } catch { /* noop */ } },
       },

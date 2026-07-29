@@ -2,6 +2,9 @@ import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/hooks/useAuth'
+import { topBadge, type BadgeMeta } from '@/lib/badges'
+import { BadgeChip } from '@/components/BadgeChip'
+import { Avatar } from '@/components/ui'
 import type { StreamMessage } from '@/types/database'
 
 /**
@@ -13,10 +16,25 @@ import type { StreamMessage } from '@/types/database'
  * layered on later without touching the wire format.
  */
 
-type EnrichedMessage = StreamMessage & { username?: string }
+// `meta` carries whatever badge-bearing metadata we have for the sender. Only
+// the signed-in user's own (optimistic) messages carry it today — profiles
+// fetched for other senders don't expose user_metadata, so their badge simply
+// degrades to nothing. See badges.ts.
+type EnrichedMessage = StreamMessage & {
+  username?: string
+  avatarUrl?: string | null
+  meta?: BadgeMeta
+}
+
+/** Short local time (e.g. "3:07 PM") for a chat message row. */
+function fmtChatTime(iso: string): string {
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return ''
+  return d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
+}
 
 export function StreamChat({ streamId, title }: { streamId: string; title?: string | null }) {
-  const { user } = useAuth()
+  const { user, profile } = useAuth()
   const [messages, setMessages] = useState<EnrichedMessage[]>([])
   const [draft, setDraft] = useState('')
   const [sending, setSending] = useState(false)
@@ -44,16 +62,24 @@ export function StreamChat({ streamId, title }: { streamId: string; title?: stri
       }
       const rows = (data ?? []) as StreamMessage[]
       const userIds = Array.from(new Set(rows.map((r) => r.user_id).filter(Boolean) as string[]))
-      let nameMap = new Map<string, string>()
+      let nameMap = new Map<string, { username: string; avatar_url: string | null }>()
       if (userIds.length > 0) {
         const { data: profiles } = await supabase
           .from('profiles')
-          .select('id, username')
+          .select('id, username, avatar_url')
           .in('id', userIds)
-        nameMap = new Map((profiles ?? []).map((p) => [p.id, p.username]))
+        nameMap = new Map(
+          (profiles ?? []).map((p) => [p.id, { username: p.username, avatar_url: p.avatar_url ?? null }]),
+        )
       }
       if (cancelled) return
-      setMessages(rows.map((r) => ({ ...r, username: r.user_id ? nameMap.get(r.user_id) : undefined })))
+      setMessages(
+        rows.map((r) => ({
+          ...r,
+          username: r.user_id ? nameMap.get(r.user_id)?.username : undefined,
+          avatarUrl: r.user_id ? nameMap.get(r.user_id)?.avatar_url ?? null : null,
+        })),
+      )
 
       channel = supabase
         .channel(`stream-chat:${streamId}`)
@@ -63,15 +89,20 @@ export function StreamChat({ streamId, title }: { streamId: string; title?: stri
           async (payload) => {
             const row = payload.new as StreamMessage
             let username: string | undefined
+            let avatarUrl: string | null = null
             if (row.user_id) {
               const { data: prof } = await supabase
                 .from('profiles')
-                .select('username')
+                .select('username, avatar_url')
                 .eq('id', row.user_id)
                 .maybeSingle()
               username = prof?.username
+              avatarUrl = prof?.avatar_url ?? null
             }
-            setMessages((prev) => [...prev, { ...row, username }])
+            // Dedupe against an optimistic copy we may have already added.
+            setMessages((prev) =>
+              prev.some((m) => m.id === row.id) ? prev : [...prev, { ...row, username, avatarUrl }],
+            )
           },
         )
         .subscribe()
@@ -99,15 +130,44 @@ export function StreamChat({ streamId, title }: { streamId: string; title?: stri
     setSending(true)
     setError(null)
     const content = draft.trim().slice(0, 500)
-    const { error: err } = await supabase
+    const { data: inserted, error: err } = await supabase
       .from('stream_messages')
       .insert({ stream_id: streamId, user_id: user.id, content })
+      .select()
+      .single()
     setSending(false)
     if (err) {
       setError(err.message)
       return
     }
     setDraft('')
+    // Show it right away. The standalone backend has no realtime echo, so we
+    // append locally; the real backend WILL echo — deduped by id in the
+    // realtime handler above.
+    const myName =
+      profile?.username ??
+      ((user.user_metadata as Record<string, unknown> | undefined)?.username as string | undefined)
+    const row =
+      (inserted as StreamMessage | null) ?? {
+        id: `local-${Date.now()}`,
+        stream_id: streamId,
+        user_id: user.id,
+        content,
+        created_at: new Date().toISOString(),
+      }
+    setMessages((prev) =>
+      prev.some((m) => m.id === row.id)
+        ? prev
+        : [
+            ...prev,
+            {
+              ...row,
+              username: myName,
+              avatarUrl: profile?.avatar_url ?? null,
+              meta: user.user_metadata as BadgeMeta,
+            },
+          ],
+    )
   }
 
   return (
@@ -123,16 +183,29 @@ export function StreamChat({ streamId, title }: { streamId: string; title?: stri
           messages.map((m) => (
             <div key={m.id} className="leading-snug">
               {m.user_id ? (
-                <Link
-                  to={`/profile/${m.user_id}`}
-                  className="text-accent font-semibold mr-1.5 hover:underline"
-                >
-                  {m.username ?? 'someone'}
-                </Link>
+                <>
+                  <Avatar
+                    src={m.avatarUrl}
+                    name={m.username}
+                    seed={m.user_id}
+                    size={18}
+                    className="mr-1.5 align-text-bottom"
+                  />
+                  {topBadge(m.meta) && <BadgeChip badge={topBadge(m.meta)!} compact className="mr-1" />}
+                  <Link
+                    to={`/profile/${m.user_id}`}
+                    className="text-accent font-semibold mr-1.5 hover:underline"
+                  >
+                    {m.username ?? 'someone'}
+                  </Link>
+                </>
               ) : (
                 <span className="text-gray-500 font-semibold mr-1.5">deleted</span>
               )}
               <span className="text-gray-200 break-words">{m.content}</span>
+              {m.created_at && (
+                <span className="text-[10px] text-gray-600 ml-1.5 align-baseline">{fmtChatTime(m.created_at)}</span>
+              )}
             </div>
           ))
         )}

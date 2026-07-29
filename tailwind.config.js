@@ -1,37 +1,40 @@
 /** @type {import('tailwindcss').Config} */
 export default {
   content: [
-    "./index.html",
-    "./src/**/*.{js,ts,jsx,tsx}",
+    './index.html',
+    './src/**/*.{js,ts,jsx,tsx}',
   ],
   theme: {
     extend: {
       colors: {
         dark: {
-          DEFAULT: '#0a0814',
-          card: '#13111d',
-          border: '#251f33',
-          elevated: '#1a1726',
+          DEFAULT: '#07070a',
+          card: '#111116',
+          border: '#292930',
+          elevated: '#18181f',
         },
-        // Cyan kept as the original "accent" so the rest of the codebase keeps working.
         accent: {
-          DEFAULT: '#00d4ff',
-          muted: '#00a8cc',
-          glow: 'rgba(0, 212, 255, 0.3)',
+          DEFAULT: '#2ed3dc',
+          muted: '#1fa5ad',
+          glow: 'rgba(46, 211, 220, 0.24)',
         },
-        // New shinobi palette
         kunai: {
-          DEFAULT: '#ef4444',
-          dark: '#b91c1c',
-          glow: 'rgba(239, 68, 68, 0.35)',
+          DEFAULT: '#ff5b3d',
+          dark: '#d83e26',
+          glow: 'rgba(255, 91, 61, 0.28)',
         },
         chakra: {
-          DEFAULT: '#f59e0b',
-          dark: '#b45309',
+          DEFAULT: '#ffb224',
+          dark: '#c77b00',
         },
         leaf: {
-          DEFAULT: '#22c55e',
-          dark: '#15803d',
+          DEFAULT: '#2ccb7f',
+          dark: '#178b54',
+        },
+        trust: {
+          DEFAULT: '#5a7cff',
+          dark: '#3655cf',
+          glow: 'rgba(90, 124, 255, 0.28)',
         },
       },
       fontFamily: {
@@ -40,20 +43,23 @@ export default {
         brand: ['Orbitron', 'system-ui', 'sans-serif'],
       },
       boxShadow: {
-        glow: '0 0 20px rgba(0, 212, 255, 0.2)',
-        'glow-lg': '0 0 40px rgba(0, 212, 255, 0.25)',
-        kunai: '0 0 24px rgba(239, 68, 68, 0.35)',
-        'kunai-lg': '0 0 48px rgba(239, 68, 68, 0.4)',
-        chakra: '0 0 24px rgba(245, 158, 11, 0.35)',
+        glow: '0 0 0 1px rgba(46, 211, 220, 0.22)',
+        'glow-lg': '0 12px 36px rgba(0, 0, 0, 0.32)',
+        kunai: '0 0 0 1px rgba(255, 91, 61, 0.2)',
+        'kunai-lg': '0 12px 32px rgba(0, 0, 0, 0.32)',
+        chakra: '0 0 0 1px rgba(255, 178, 36, 0.2)',
+        trust: '0 0 0 1px rgba(90, 124, 255, 0.2)',
       },
       backgroundImage: {
-        'gradient-kunai': 'linear-gradient(135deg, #ef4444 0%, #f59e0b 100%)',
-        'gradient-shinobi': 'linear-gradient(135deg, #22c55e 0%, #ef4444 100%)',
-        'gradient-mist': 'linear-gradient(180deg, rgba(239,68,68,0.12) 0%, rgba(10,8,20,0) 60%)',
+        'gradient-kunai': 'linear-gradient(120deg, #ff5b3d 0%, #ff8a3d 100%)',
+        'gradient-shinobi': 'linear-gradient(120deg, #2ed3dc 0%, #5a7cff 100%)',
+        'gradient-mist': 'linear-gradient(180deg, rgba(255,91,61,0.06) 0%, rgba(7,7,10,0) 62%)',
       },
       animation: {
         'fade-in': 'fadeIn 0.4s ease-out',
         'slide-up': 'slideUp 0.4s ease-out',
+        'slide-in-right': 'slideInRight 0.3s ease-out',
+        'slide-in-left': 'slideInLeft 0.3s ease-out',
         'pulse-soft': 'pulseSoft 2.5s ease-in-out infinite',
       },
       keyframes: {
@@ -64,6 +70,14 @@ export default {
         slideUp: {
           '0%': { opacity: '0', transform: 'translateY(12px)' },
           '100%': { opacity: '1', transform: 'translateY(0)' },
+        },
+        slideInRight: {
+          '0%': { transform: 'translateX(100%)' },
+          '100%': { transform: 'translateX(0)' },
+        },
+        slideInLeft: {
+          '0%': { transform: 'translateX(-100%)' },
+          '100%': { transform: 'translateX(0)' },
         },
         pulseSoft: {
           '0%,100%': { opacity: '0.6' },

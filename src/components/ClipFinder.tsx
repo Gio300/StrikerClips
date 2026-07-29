@@ -2,8 +2,10 @@ import { useEffect, useMemo, useState } from 'react'
 import { useAuth } from '@/hooks/useAuth'
 import {
   isYouTubeConnectConfigured,
+  isYouTubeApiConfigured,
   connectYouTube,
   fetchMyUploads,
+  fetchUploadsByHandle,
   videosFromLinks,
   enrichVideos,
   saveLibrary,
@@ -11,21 +13,32 @@ import {
   clearLibrary,
   thumbUrl,
 } from '@/lib/youtubeConnect'
+import { recordYouTubeLink } from '@/lib/youtubeLink'
 import { parseDescribe, matchLibrary, describeSummary, type LibraryVideo } from '@/lib/describeClip'
 import { demoLibrary } from '@/lib/demoClips'
 import { useClipTray } from '@/hooks/useClipTray'
 import { extractYouTubeId } from '@/lib/youtubeApi'
+import { prettyClip } from '@/lib/clipLabel'
+import { ConnectedBadge } from '@/components/ConnectedBadge'
 import { demoSquad, clipsFor, groupByCategory, ytUrl, CATEGORY_LABEL } from '@/lib/squad'
 
 /**
  * ClipFinder — "connect your YouTube, then just describe the clip."
  *
  * The flagship create path. The player links their channel once (real OAuth
- * when killcam.app has a Client ID, manual add otherwise), then types plain
+ * when tko.cam has a Client ID, manual add otherwise), then types plain
  * language — "my ultimate against Rekt last night" — and we surface matching
  * videos as tappable thumbnails. Picking one hands its URL to the reel builder.
  */
-export function ClipFinder({ onAdd, username }: { onAdd: (url: string) => void; username?: string }) {
+export function ClipFinder({
+  onAdd,
+  onRemove,
+  username,
+}: {
+  onAdd: (url: string) => void
+  onRemove?: (url: string) => void
+  username?: string
+}) {
   const { user } = useAuth()
   const uid = user?.id ?? 'anon'
   const { items: tray, remove: removeTray } = useClipTray()
@@ -69,9 +82,27 @@ export function ClipFinder({ onAdd, username }: { onAdd: (url: string) => void; 
     if (!links.length) return
     setBusy('add')
     try {
+      // A bare @handle (or channel URL) pulls the WHOLE channel's uploads — the
+      // no-OAuth path that works in the installed app.
+      const handleTok = links.find((l) => /^@/.test(l) || /youtube\.com\/@/.test(l))
+      if (handleTok && isYouTubeApiConfigured()) {
+        const vids = await fetchUploadsByHandle(handleTok)
+        if (vids.length) {
+          const merged = [...vids.filter((f) => !library.some((l) => l.id === f.id)), ...library]
+          setLibrary(merged)
+          saveLibrary(uid, merged)
+          // ONE source of truth: also record the backend link so every screen
+          // (TKO King, auto-merge, Go Live) agrees you're connected.
+          void recordYouTubeLink(uid, handleTok)
+          setManual('')
+          return
+        }
+        setErr('No public uploads found on that handle.')
+        return
+      }
       const fresh = videosFromLinks(links)
       if (!fresh.length) {
-        setErr('No valid YouTube links or IDs found.')
+        setErr('No valid YouTube links or IDs found. Paste clip links or your @handle.')
         return
       }
       const merged = [...fresh.filter((f) => !library.some((l) => l.id === f.id)), ...library]
@@ -106,8 +137,11 @@ export function ClipFinder({ onAdd, username }: { onAdd: (url: string) => void; 
     const url = `https://www.youtube.com/watch?v=${v.id}`
     setPicked((prev) => {
       const next = new Set(prev)
-      if (next.has(v.id)) next.delete(v.id)
-      else {
+      if (next.has(v.id)) {
+        // Already added — remove it from the reel and clear the badge.
+        next.delete(v.id)
+        onRemove?.(url)
+      } else {
         next.add(v.id)
         onAdd(url)
       }
@@ -119,7 +153,10 @@ export function ClipFinder({ onAdd, username }: { onAdd: (url: string) => void; 
     <div className="rounded-xl border border-dark-border bg-dark-card p-4 space-y-4">
       <div className="flex items-center justify-between gap-2 flex-wrap">
         <div>
-          <div className="font-semibold text-white">Find a clip by describing it</div>
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="font-semibold text-white">Find a clip by describing it</span>
+            {connected && <ConnectedBadge label="Your YouTube — connected" />}
+          </div>
           <div className="text-xs text-gray-500">
             Link your YouTube once, then say who you fought and when — no URLs.
           </div>
@@ -146,7 +183,7 @@ export function ClipFinder({ onAdd, username }: { onAdd: (url: string) => void; 
                   type="button"
                   onClick={() => { onAdd(it.url); removeTray(it.id) }}
                   className="group shrink-0 w-32 text-left rounded-lg overflow-hidden border border-dark-border hover:border-accent/60 transition-colors"
-                  title={it.url}
+                  title={prettyClip(it.url)}
                 >
                   <div className="relative aspect-video bg-dark">
                     {yid ? (
@@ -168,10 +205,10 @@ export function ClipFinder({ onAdd, username }: { onAdd: (url: string) => void; 
         </div>
       )}
 
-      {/* Squad shelf — use your friends' clips (all live on KillCam's channel) */}
+      {/* Squad shelf — use clips from people you follow / your clan (all live on TKO's channel) */}
       <div className="rounded-lg border border-dark-border bg-dark-card p-3">
         <div className="text-sm font-medium text-white">Squad clips</div>
-        <div className="text-xs text-gray-500 mb-2">Tap a teammate to use their clips in your reel.</div>
+        <div className="text-xs text-gray-500 mb-2">Tap a squadmate — people you follow or share a clan with — to use their clips in your reel.</div>
         <div className="flex gap-2 overflow-x-auto pb-1">
           {squad.members.map((m) => {
             const on = squadOpen === m.id
@@ -222,41 +259,49 @@ export function ClipFinder({ onAdd, username }: { onAdd: (url: string) => void; 
 
       {!connected && (
         <div className="space-y-3">
-          <button
-            type="button"
-            onClick={canOAuth ? handleConnect : loadDemo}
-            disabled={busy === 'connect'}
-            className="w-full py-3 rounded-lg bg-accent text-dark font-semibold hover:shadow-glow disabled:opacity-50"
-          >
-            {busy === 'connect'
-              ? 'Opening YouTube…'
-              : canOAuth
-                ? 'Connect YouTube — pull my clips automatically'
-                : 'See it in action — load demo clips'}
-          </button>
-          {!canOAuth && (
-            <div className="text-xs text-gray-500">
-              One-tap connect to <em>your</em> YouTube turns on the moment killcam.app has its Google client ID. Until
-              then: tap above to preview the gallery + search, or paste your own links below — they show up with
-              thumbnails right away.
-            </div>
+          {canOAuth && (
+            <button
+              type="button"
+              onClick={handleConnect}
+              disabled={busy === 'connect'}
+              className="w-full py-3 rounded-lg bg-accent text-dark font-semibold hover:shadow-glow disabled:opacity-50"
+            >
+              {busy === 'connect' ? 'Opening YouTube…' : 'Connect YouTube — pull my clips automatically'}
+            </button>
           )}
+          {/* Primary path: paste your own YouTube links. */}
           <div className="flex flex-wrap gap-2">
             <input
               value={manual}
               onChange={(e) => setManual(e.target.value)}
               placeholder="Paste one or more YouTube links…"
-              className="flex-1 min-w-[200px] px-4 py-2 rounded-lg bg-dark border border-dark-border text-white focus:outline-none focus:border-accent"
+              className="flex-1 min-w-[200px] px-4 py-3 rounded-lg bg-dark border border-dark-border text-white focus:outline-none focus:border-accent"
             />
             <button
               type="button"
               onClick={handleManualAdd}
               disabled={busy === 'add'}
-              className="px-4 py-2 rounded-lg border border-accent text-accent hover:bg-accent/10 disabled:opacity-50"
+              className="px-5 py-3 rounded-lg bg-accent text-dark font-semibold hover:shadow-glow disabled:opacity-50"
             >
-              {busy === 'add' ? 'Adding…' : 'Add videos'}
+              {busy === 'add' ? 'Adding…' : 'Add'}
             </button>
           </div>
+          {!canOAuth && (
+            <div className="text-xs text-gray-500">
+              Paste your clip links above — they show up with thumbnails right away. One-tap connect to <em>your</em>{' '}
+              YouTube turns on the moment tko.cam has its Google client ID.
+            </div>
+          )}
+          {/* Secondary: preview with demo clips. */}
+          {!canOAuth && (
+            <button
+              type="button"
+              onClick={loadDemo}
+              className="text-xs text-gray-400 hover:text-accent underline"
+            >
+              or see it in action — load demo clips
+            </button>
+          )}
         </div>
       )}
 
