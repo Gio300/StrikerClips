@@ -3,7 +3,17 @@ import { Link } from 'react-router-dom'
 import { useAuth } from '@/hooks/useAuth'
 import { fetchMyNotifications, markRead, markAllRead } from '@/lib/notifications'
 import { supabase } from '@/lib/supabase'
+import { LiveLinkOptOut } from '@/components/LiveLinkOptOut'
 import type { Notification } from '@/types/database'
+
+/**
+ * Kinds that announce a live LINK. These rows carry an extra action — "don't
+ * connect me" — because the moment you're told your stream was joined to
+ * somebody else's is the moment you might want out of it, and making someone
+ * hunt through settings for that is the wrong answer. `related_id` on these
+ * rows is the live_groups id. See src/components/LiveLinkOptOut.
+ */
+const LIVE_LINK_KINDS = new Set(['live_link_created', 'live_battle_both_live'])
 
 /**
  * Notifications inbox.
@@ -66,7 +76,7 @@ export function NotificationsPage() {
 
   if (!user) {
     return (
-      <div className="p-8 max-w-2xl mx-auto">
+      <div className="p-4 sm:p-6 lg:p-8 max-w-2xl mx-auto">
         <h1 className="text-2xl font-bold mb-4">Notifications</h1>
         <div className="rounded-xl border border-dark-border bg-dark-card p-8 text-center">
           <Link to="/login" className="text-accent hover:underline">
@@ -82,7 +92,7 @@ export function NotificationsPage() {
   const unreadCount = items.filter((n) => !n.read_at).length
 
   return (
-    <div className="p-8 max-w-2xl mx-auto">
+    <div className="p-4 sm:p-6 lg:p-8 max-w-2xl mx-auto">
       <div className="flex items-center justify-between mb-6 gap-4 flex-wrap">
         <div>
           <h1 className="text-2xl font-bold">Notifications</h1>
@@ -136,6 +146,7 @@ export function NotificationsPage() {
               n={n}
               actorName={n.actor_id ? actorMap.get(n.actor_id) : undefined}
               onClick={onClick}
+              viewerId={user.id}
             />
           ))}
         </ul>
@@ -148,11 +159,15 @@ function NotificationRow({
   n,
   actorName,
   onClick,
+  viewerId,
 }: {
   n: Notification
   actorName: string | undefined
   onClick: (n: Notification) => void
+  viewerId: string
 }) {
+  // "Your streams were linked" comes with a way out, right on the row.
+  const linkGroupId = LIVE_LINK_KINDS.has(n.kind) ? n.related_id : null
   const inner = (
     <div
       className={`rounded-lg border p-3 transition-colors ${
@@ -180,12 +195,21 @@ function NotificationRow({
     </div>
   )
 
+  // The opt-out sits OUTSIDE the row's link, or tapping it would navigate away
+  // to the stage instead of doing what it says.
+  const optOut = linkGroupId ? (
+    <div className="mt-1 pl-11">
+      <LiveLinkOptOut groupId={linkGroupId} userId={viewerId} />
+    </div>
+  ) : null
+
   if (n.link) {
     return (
       <li>
         <Link to={n.link} onClick={() => onClick(n)} className="block">
           {inner}
         </Link>
+        {optOut}
       </li>
     )
   }
@@ -198,6 +222,7 @@ function NotificationRow({
       >
         {inner}
       </button>
+      {optOut}
     </li>
   )
 }
@@ -221,6 +246,13 @@ function KindIcon({ kind, unread }: { kind: string; unread: boolean }) {
         return '⚖️'
       case 'live_group_invite':
         return '🎥'
+      case 'live_invite':
+        return '🎙️'
+      case 'live_link_created':
+      case 'live_battle_both_live':
+        return '🔗'
+      case 'live_link_proposed':
+        return '🤔'
       case 'reel_invite':
         return '🎬'
       case 'follow':

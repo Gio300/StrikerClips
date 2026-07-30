@@ -3,7 +3,7 @@
 /**
  * youtube-uploader.ts — picks rows out of `public.pending_uploads`,
  * downloads the source video(s) referenced on the reel, bakes a multi-angle
- * composite with ffmpeg, uploads to the ReelOne YouTube channel, and writes
+ * composite with ffmpeg, uploads to the TKO YouTube channel, and writes
  * the resulting `youtube_video_id` back to the row.
  *
  * Operator setup is documented in `docs/youtube-uploader.md`. Required env:
@@ -69,6 +69,9 @@ const YOUTUBE_CLIENT_SECRET = required('YOUTUBE_CLIENT_SECRET')
 const YOUTUBE_REFRESH_TOKEN = required('YOUTUBE_REFRESH_TOKEN')
 const FFMPEG_PATH = process.env.FFMPEG_PATH || 'ffmpeg'
 const YT_DLP_PATH = process.env.YT_DLP_PATH || 'yt-dlp'
+const BRAND_WATERMARK =
+  process.env.TKO_WATERMARK_PATH ||
+  join(process.cwd(), 'public', 'brand', 'tko-video-watermark.png')
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
   auth: { persistSession: false, autoRefreshToken: false },
@@ -125,7 +128,7 @@ async function processOne(row: PendingUploadRow) {
       throw new Error('No YouTube source clips on reel — uploader requires at least one yt-dlp-able URL.')
     }
 
-    workdir = await mkdtemp(join(tmpdir(), 'reelone-upload-'))
+    workdir = await mkdtemp(join(tmpdir(), 'tko-upload-'))
     console.log(`[uploader] workdir ${workdir}`)
 
     // 1. Download each source clip with yt-dlp.
@@ -145,9 +148,10 @@ async function processOne(row: PendingUploadRow) {
     //    `combined_video_url` (already a baked mp4 stored in Supabase Storage)
     //    we just download that. Otherwise we fall back to a 2x2 grid for up
     //    to 4 angles, or single source for 1 angle.
+    const unbrandedPath = join(workdir, 'unbranded.mp4')
     const finalPath = join(workdir, 'final.mp4')
     if (reel.combined_video_url && /\.(mp4|webm|mov)$/i.test(reel.combined_video_url)) {
-      await downloadFile(reel.combined_video_url, finalPath)
+      await downloadFile(reel.combined_video_url, unbrandedPath)
     } else if (localFiles.length === 1) {
       // Single-source: re-encode for YouTube-friendly settings.
       await runFfmpeg([
@@ -155,7 +159,7 @@ async function processOne(row: PendingUploadRow) {
         '-i', localFiles[0],
         '-c:v', 'libx264', '-preset', 'medium', '-crf', '20',
         '-c:a', 'aac', '-b:a', '160k',
-        finalPath,
+        unbrandedPath,
       ])
     } else {
       // 2x2 (or up to 2x2) grid using xstack.
@@ -181,23 +185,24 @@ async function processOne(row: PendingUploadRow) {
         '-map', '[v]', '-map', '[a]',
         '-c:v', 'libx264', '-preset', 'medium', '-crf', '20',
         '-c:a', 'aac', '-b:a', '160k',
-        finalPath,
+        unbrandedPath,
       )
       await runFfmpeg(args)
     }
+    await addBrandWatermark(unbrandedPath, finalPath)
 
     // 3. Upload to YouTube.
     const accessToken = await getAccessToken()
     const ownerHandle = await fetchOwnerHandle(reel.user_id)
     const description = (reel.description ?? '').trim() +
-      `\n\nOriginal angle by @${ownerHandle ?? 'reelone-creator'} on ReelOne.\n` +
-      `Multi-angle composite generated automatically. https://reelone.app/reels/${reel.id}`
+      `\n\nOriginal angle by @${ownerHandle ?? 'tko-creator'} on TKO.cam.\n` +
+      `Multi-angle composite generated automatically. https://tko.cam/app/reels/${reel.id}`
     const videoId = await youtubeUpload({
       accessToken,
       filePath: finalPath,
       title: reel.title.slice(0, 95),
       description: description.slice(0, 4900),
-      tags: ['ReelOne', 'gaming', 'highlight'],
+      tags: ['TKO', 'TKOcam', 'gaming', 'highlight', 'multi-angle'],
     })
 
     await supabase
@@ -255,6 +260,27 @@ async function fetchOwnerHandle(userId: string): Promise<string | null> {
 async function runFfmpeg(args: string[]): Promise<void> {
   console.log('[ffmpeg]', args.join(' '))
   await execFileP(FFMPEG_PATH, args, { maxBuffer: 1024 * 1024 * 256 })
+}
+
+async function addBrandWatermark(input: string, output: string): Promise<void> {
+  await runFfmpeg([
+    '-y',
+    '-i', input,
+    '-i', BRAND_WATERMARK,
+    '-filter_complex',
+    '[1:v][0:v]scale2ref=w=oh*mdar:h=ih*0.11[wm][base];' +
+      '[wm]format=rgba,colorchannelmixer=aa=0.82[brand];' +
+      '[base][brand]overlay=W-w-24:H-h-24[v]',
+    '-map', '[v]',
+    '-map', '0:a?',
+    '-c:v', 'libx264',
+    '-preset', 'medium',
+    '-crf', '20',
+    '-c:a', 'aac',
+    '-b:a', '160k',
+    '-movflags', '+faststart',
+    output,
+  ])
 }
 
 async function downloadFile(url: string, dest: string): Promise<void> {

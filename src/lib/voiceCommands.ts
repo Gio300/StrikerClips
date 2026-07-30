@@ -1,5 +1,5 @@
 /**
- * Voice/text command parser for the KillCam director + accessibility.
+ * Voice/text command parser for the TKO director + accessibility.
  *
  * Pure + synchronous so it's trivially testable and runs on-device. Each user
  * speaks on their OWN phone/account, so "who" is already known — this only has

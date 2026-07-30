@@ -27,7 +27,7 @@ export function StatCheck() {
   }, [])
 
   return (
-    <div className="p-8 max-w-4xl mx-auto">
+    <div className="p-4 sm:p-6 lg:p-8 max-w-4xl mx-auto">
       <h1 className="text-2xl font-bold mb-2">Stat Check</h1>
       <p className="text-gray-400 mb-6">
         Submit videos showing character buffs for a tournament. Select a tournament to submit or review stat checks.

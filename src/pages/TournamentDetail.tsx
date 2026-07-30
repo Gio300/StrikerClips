@@ -1,10 +1,34 @@
 import { useEffect, useMemo, useState } from 'react'
-import { useParams, Link } from 'react-router-dom'
+import { useParams, useSearchParams, Link } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/hooks/useAuth'
 import { InviteMenu } from '@/components/InviteMenu'
+import { TournamentChat } from '@/components/TournamentChat'
+import { ShareButton } from '@/components/ShareButton'
+import { CollapsibleSection } from '@/components/CollapsibleSection'
 import { invalidateInviteContext } from '@/hooks/useInviteContext'
 import { notify, notifyMany } from '@/lib/notifications'
+import { useEntitlements } from '@/hooks/useEntitlements'
+import { predictionQuota, predictionUpgradeNudge } from '@/lib/tiers'
+import { IS_MOBILE_STORE_BUILD } from '@/lib/storeBuild'
+import { oracleBadgeForCorrect, BADGES } from '@/lib/badges'
+import { BadgeChip } from '@/components/BadgeChip'
+import { Avatar } from '@/components/ui'
+import { TournamentPrizePoolPanel } from '@/components/TournamentPrizePoolPanel'
+import { TournamentBracket } from '@/components/TournamentBracket'
+import { effectiveDisplayName } from '@/lib/founder'
+import { isTkoHost } from '@/lib/tkoKing'
+import {
+  submitPrediction,
+  withdrawPrediction,
+  gradePrediction,
+  loadPredictions,
+  getStats,
+  getOpenForTournament,
+  getPredictionForTournament,
+  canPredict,
+  type PredictionPick,
+} from '@/lib/predictions'
 import type {
   Tournament,
   TournamentAdmin,
@@ -29,17 +53,22 @@ type TournamentResult = {
 }
 
 type AdminRow = TournamentAdmin & { username?: string }
-type EntrantRow = TournamentEntrant & { username?: string; team_server_name?: string }
+type EntrantRow = TournamentEntrant & {
+  username?: string
+  avatar_url?: string | null
+  team_server_name?: string
+}
 type SubmissionRow = StatCheckSubmission & { submitter_username?: string }
 
 // ─────────────────────────────────────────────────────────────────────────
 // Top-level page
 // ─────────────────────────────────────────────────────────────────────────
 
-type Section = 'overview' | 'entrants' | 'stat-check' | 'admins' | 'results'
+type Section = 'overview' | 'entrants' | 'bracket' | 'stat-check' | 'admins' | 'results' | 'chat'
 
 export function TournamentDetail() {
   const { id } = useParams()
+  const [searchParams] = useSearchParams()
   const { user } = useAuth()
 
   const [tournament, setTournament] = useState<Tournament | null>(null)
@@ -48,9 +77,20 @@ export function TournamentDetail() {
   const [admins, setAdmins] = useState<AdminRow[]>([])
   const [entrants, setEntrants] = useState<EntrantRow[]>([])
   const [loading, setLoading] = useState(true)
-  const [section, setSection] = useState<Section>('overview')
+  // Deep-link into a section: shared invite links use `?chat=1`; notification
+  // links use `?section=<name>`.
+  const initialSection: Section = (() => {
+    if (searchParams.get('chat') === '1') return 'chat'
+    const s = searchParams.get('section')
+    const valid: Section[] = ['overview', 'entrants', 'bracket', 'stat-check', 'admins', 'results', 'chat']
+    return valid.includes(s as Section) ? (s as Section) : 'overview'
+  })()
+  const [section, setSection] = useState<Section>(initialSection)
 
-  const isOwner = Boolean(user?.id && tournament?.created_by === user.id)
+  // A global TKO host (founder host code) passes every tournament host/admin
+  // check everywhere — including owner-only creator decisions.
+  const isHost = isTkoHost(user)
+  const isOwner = Boolean((user?.id && tournament?.created_by === user.id) || isHost)
   const myAdmin = useMemo(() => admins.find((a) => a.user_id === user?.id), [admins, user])
   const isAdmin = Boolean(isOwner || myAdmin)
   const canApproveStatCheck = isOwner || Boolean(myAdmin?.can_approve_stat_check)
@@ -61,7 +101,7 @@ export function TournamentDetail() {
     if (!id) return
     let cancelled = false
     async function load() {
-      const { data: t } = await supabase.from('tournaments').select('*').eq('id', id).single()
+      const { data: t } = await supabase.from('tournaments').select('*').eq('id', id!).single()
       if (cancelled) return
       setTournament((t ?? null) as Tournament | null)
       if (!t) {
@@ -72,18 +112,18 @@ export function TournamentDetail() {
         supabase
           .from('stat_check_submissions')
           .select('*')
-          .eq('tournament_id', id)
+          .eq('tournament_id', id!)
           .order('created_at', { ascending: false }),
         supabase
           .from('tournament_results')
           .select('*')
-          .eq('tournament_id', id)
+          .eq('tournament_id', id!)
           .order('created_at', { ascending: false }),
-        supabase.from('tournament_admins').select('*').eq('tournament_id', id),
+        supabase.from('tournament_admins').select('*').eq('tournament_id', id!),
         supabase
           .from('tournament_entrants')
           .select('*')
-          .eq('tournament_id', id)
+          .eq('tournament_id', id!)
           .order('created_at', { ascending: true }),
       ])
       if (cancelled) return
@@ -105,13 +145,22 @@ export function TournamentDetail() {
       }
       const [profiles, servers] = await Promise.all([
         userIds.size > 0
-          ? supabase.from('profiles').select('id, username').in('id', Array.from(userIds))
-          : Promise.resolve({ data: [] as { id: string; username: string }[], error: null }),
+          ? supabase.from('profiles').select('id, username, avatar_url').in('id', Array.from(userIds))
+          : Promise.resolve({
+              data: [] as { id: string; username: string; avatar_url: string | null }[],
+              error: null,
+            }),
         serverIds.size > 0
           ? supabase.from('servers').select('id, name').in('id', Array.from(serverIds))
           : Promise.resolve({ data: [] as { id: string; name: string }[], error: null }),
       ])
       const nameMap = new Map((profiles.data ?? []).map((p) => [p.id, p.username]))
+      const avatarMap = new Map(
+        (profiles.data ?? []).map((p) => [
+          p.id,
+          (p as { avatar_url?: string | null }).avatar_url ?? null,
+        ]),
+      )
       const serverMap = new Map((servers.data ?? []).map((s) => [s.id, s.name]))
 
       setSubmissions(
@@ -128,6 +177,7 @@ export function TournamentDetail() {
         entRows.map((e) => ({
           ...e,
           username: nameMap.get(e.user_id) ?? 'Unknown',
+          avatar_url: avatarMap.get(e.user_id) ?? null,
           team_server_name: e.team_server_id ? serverMap.get(e.team_server_id) : undefined,
         })),
       )
@@ -141,7 +191,7 @@ export function TournamentDetail() {
 
   if (loading || !tournament) {
     return (
-      <div className="p-8 max-w-4xl mx-auto">
+      <div className="p-4 sm:p-6 lg:p-8 max-w-4xl mx-auto">
         {loading ? (
           <div className="animate-pulse text-gray-400">Loading tournament…</div>
         ) : (
@@ -156,10 +206,15 @@ export function TournamentDetail() {
     )
   }
 
-  const sections: Section[] = ['overview', 'entrants', 'stat-check', 'admins', 'results']
+  const sections: Section[] = ['overview', 'entrants', 'bracket', 'stat-check', 'admins', 'results', 'chat']
+
+  // Absolute link back to this tournament's chatroom for sharing/inviting.
+  const shareOrigin =
+    typeof window !== 'undefined' ? window.location.origin : 'https://tko.cam'
+  const chatShareUrl = `${shareOrigin}/tournaments/${tournament.id}?chat=1`
 
   return (
-    <div className="p-8 max-w-5xl mx-auto">
+    <div className="p-4 sm:p-6 lg:p-8 max-w-5xl mx-auto">
       <Link
         to="/tournaments"
         className="text-accent hover:underline text-sm mb-4 inline-block"
@@ -170,6 +225,12 @@ export function TournamentDetail() {
       <div className="flex flex-wrap items-center gap-3 mb-1">
         <h1 className="text-2xl font-bold">{tournament.name}</h1>
         <StatusPill status={(tournament.status ?? 'draft') as TournamentStatus} />
+        <ShareButton
+          url={chatShareUrl}
+          title={`${tournament.name} — chat & follow along`}
+          text={`Jump into the chatroom for "${tournament.name}" on TKO. Watch and read for free — sign in to chat.`}
+          className="ml-auto inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-dark-border text-gray-200 text-sm hover:border-accent/50 shrink-0"
+        />
       </div>
       {tournament.description && (
         <p className="text-gray-400 mb-4">{tournament.description}</p>
@@ -201,6 +262,25 @@ export function TournamentDetail() {
         ))}
       </div>
 
+      {/* Oracle prediction sits above the fold — it's the flagship engagement
+          hook, so it leads the overview rather than hiding below the rules. */}
+      {section === 'overview' && (
+        <div className="mb-6">
+          <OraclePredictionCard
+            tournament={tournament}
+            entrants={entrants}
+            winnerResult={results[0] ?? null}
+            user={user}
+          />
+        </div>
+      )}
+
+      {section === 'overview' && (
+        <div className="mb-6">
+          <TournamentPrizePoolPanel tournamentId={tournament.id} isHost={Boolean(isAdmin || isOwner)} />
+        </div>
+      )}
+
       {section === 'overview' && (
         <OverviewSection
           tournament={tournament}
@@ -213,7 +293,7 @@ export function TournamentDetail() {
             setEntrants((prev) => [...prev, ...newEntrants])
             if (sub) {
               setSubmissions((prev) => [
-                { ...sub, submitter_username: user?.email?.split('@')[0] },
+                { ...sub, submitter_username: effectiveDisplayName(user?.email?.split('@')[0]) },
                 ...prev,
               ])
             }
@@ -229,6 +309,14 @@ export function TournamentDetail() {
           tournamentId={tournament.id}
           isOwner={isOwner}
           user={user}
+        />
+      )}
+
+      {section === 'bracket' && (
+        <TournamentBracket
+          tournamentId={tournament.id}
+          entrants={entrants.filter((entrant) => entrant.status === 'accepted')}
+          canManage={Boolean(isAdmin || isOwner)}
         />
       )}
 
@@ -268,6 +356,26 @@ export function TournamentDetail() {
           canManage={Boolean(isAdmin || isOwner)}
         />
       )}
+
+      {section === 'chat' && (
+        <div className="space-y-4">
+          <div className="rounded-xl border border-dark-border bg-dark-card p-4 flex flex-wrap items-center gap-3">
+            <div className="min-w-0">
+              <h2 className="font-semibold">Tournament chatroom</h2>
+              <p className="text-sm text-gray-400">
+                Anyone can watch and read along. Sign in to join the conversation.
+              </p>
+            </div>
+            <ShareButton
+              url={chatShareUrl}
+              title={`${tournament.name} — chat & follow along`}
+              text={`Jump into the chatroom for "${tournament.name}" on TKO. Watch and read for free — sign in to chat.`}
+              className="ml-auto inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-accent/40 text-accent text-sm hover:border-accent shrink-0"
+            />
+          </div>
+          <TournamentChat tournamentId={tournament.id} title={tournament.name} />
+        </div>
+      )}
     </div>
   )
 }
@@ -278,12 +386,16 @@ function labelFor(s: Section): string {
       return 'Overview'
     case 'entrants':
       return 'Entrants'
+    case 'bracket':
+      return 'Bracket'
     case 'stat-check':
       return 'Stat Check'
     case 'admins':
       return 'Admins'
     case 'results':
       return 'Results'
+    case 'chat':
+      return 'Chat'
   }
 }
 
@@ -330,40 +442,61 @@ function OverviewSection({
 
   return (
     <div className="space-y-6">
-      <div className="rounded-xl border border-dark-border bg-dark-card p-6 grid sm:grid-cols-2 gap-6">
-        <div>
-          <h2 className="font-semibold mb-2">Schedule</h2>
-          <dl className="text-sm space-y-1.5">
-            <Row label="Starts">
-              {tournament.start_at
-                ? new Date(tournament.start_at).toLocaleString()
-                : <span className="text-gray-500">TBD</span>}
-            </Row>
-            <Row label="Ends">
-              {tournament.end_at
-                ? new Date(tournament.end_at).toLocaleString()
-                : <span className="text-gray-500">Open-ended</span>}
-            </Row>
-            <Row label="Status">{tournament.status ?? 'draft'}</Row>
-            {tournament.prize_pool && <Row label="Prize">{tournament.prize_pool}</Row>}
-          </dl>
+      <div className="grid border-y border-dark-border py-4 sm:grid-cols-3">
+        <div className="py-2 sm:border-r sm:border-dark-border sm:px-4">
+          <p className="text-xs text-gray-500">Entry</p>
+          <p className="mt-1 font-semibold text-white">Host-set competition</p>
+          <p className="mt-1 text-xs text-gray-400">Free entry or a non-cash Sweeps prize pool.</p>
         </div>
-        <div>
-          <h2 className="font-semibold mb-2">Entrants</h2>
-          <p className="text-3xl font-bold text-accent">
-            {acceptedCount}
-            <span className="text-sm text-gray-500 ml-1">accepted</span>
-          </p>
-          {entrants.filter((e) => e.status === 'pending').length > 0 && (
-            <p className="text-xs text-gray-500 mt-1">
-              {entrants.filter((e) => e.status === 'pending').length} pending invites
-            </p>
-          )}
+        <div className="border-t border-dark-border py-2 sm:border-r sm:border-t-0 sm:px-4">
+          <p className="text-xs text-gray-500">Verification</p>
+          <p className="mt-1 font-semibold text-white">Stat checks</p>
+          <p className="mt-1 text-xs text-gray-400">Results are reviewed before ranking.</p>
+        </div>
+        <div className="border-t border-dark-border py-2 sm:border-t-0 sm:px-4">
+          <p className="text-xs text-gray-500">Recognition</p>
+          <p className="mt-1 font-semibold text-white">Power and prestige</p>
+          <p className="mt-1 text-xs text-gray-400">Wins build rank, artifacts, and clan standing.</p>
         </div>
       </div>
 
-      <div className="rounded-xl border border-dark-border bg-dark-card p-6">
-        <h2 className="font-semibold mb-2">Rules</h2>
+      {/* Secondary detail blocks collapse under one-word sections so the prize
+          + Oracle card stay front-and-center. Schedule opens by default; Rules
+          tucks away. */}
+      <CollapsibleSection id={`tourn-schedule-${tournament.id}`} label="Schedule" defaultOpen>
+        <div className="grid sm:grid-cols-2 gap-6">
+          <div>
+            <h3 className="text-xs uppercase tracking-wider text-gray-500 mb-2">When</h3>
+            <dl className="text-sm space-y-1.5">
+              <Row label="Starts">
+                {tournament.start_at
+                  ? new Date(tournament.start_at).toLocaleString()
+                  : <span className="text-gray-500">TBD</span>}
+              </Row>
+              <Row label="Ends">
+                {tournament.end_at
+                  ? new Date(tournament.end_at).toLocaleString()
+                  : <span className="text-gray-500">Open-ended</span>}
+              </Row>
+              <Row label="Status">{tournament.status ?? 'draft'}</Row>
+            </dl>
+          </div>
+          <div>
+            <h3 className="text-xs uppercase tracking-wider text-gray-500 mb-2">Entrants</h3>
+            <p className="text-3xl font-bold text-accent">
+              {acceptedCount}
+              <span className="text-sm text-gray-500 ml-1">accepted</span>
+            </p>
+            {entrants.filter((e) => e.status === 'pending').length > 0 && (
+              <p className="text-xs text-gray-500 mt-1">
+                {entrants.filter((e) => e.status === 'pending').length} pending invites
+              </p>
+            )}
+          </div>
+        </div>
+      </CollapsibleSection>
+
+      <CollapsibleSection id={`tourn-rules-${tournament.id}`} label="Rules">
         {tournament.rules ? (
           <pre className="whitespace-pre-wrap text-gray-300 text-sm font-mono">{tournament.rules}</pre>
         ) : (
@@ -373,7 +506,7 @@ function OverviewSection({
               : 'No rules specified.'}
           </p>
         )}
-      </div>
+      </CollapsibleSection>
 
       {/* Enter tournament CTA */}
       {user && !isAcceptedEntrant && tournament.status !== 'closed' && (
@@ -663,7 +796,7 @@ function EnterTournamentDialog({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm">
+    <div className="fixed inset-0 z-[80] flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm">
       <form
         onSubmit={handleSubmit}
         className="w-full max-w-2xl max-h-[90vh] overflow-y-auto rounded-xl border border-dark-border bg-dark-card shadow-2xl"
@@ -763,7 +896,7 @@ function EnterTournamentDialog({
                   {myServers.length === 0 && (
                     <span className="block text-[11px] text-gray-500 mt-1">
                       You're not in any clans.{' '}
-                      <Link to="/servers/new" className="text-accent hover:underline">
+                      <Link to="/boards/create" className="text-accent hover:underline">
                         Create one
                       </Link>
                       .
@@ -959,7 +1092,7 @@ function EntrantsList({
                 <span className="font-semibold">{teamKey}</span>
                 {members[0].team_server_name && (
                   <Link
-                    to={`/servers/${members[0].team_server_id}`}
+                    to={`/boards/${members[0].team_server_id}`}
                     className="text-xs text-accent hover:underline"
                   >
                     @{members[0].team_server_name}
@@ -975,6 +1108,7 @@ function EntrantsList({
                   key={m.id}
                   className="flex flex-wrap items-center gap-2 py-2 text-sm"
                 >
+                  <Avatar src={m.avatar_url} name={m.username} seed={m.user_id} size={24} />
                   <Link
                     to={`/profile/${m.user_id}`}
                     className="text-accent hover:underline"
@@ -1361,7 +1495,7 @@ function SubmissionCard({
             placeholder="Notes for the player (optional)…"
             className="w-full px-3 py-2 rounded-lg bg-dark border border-dark-border text-white text-sm resize-none"
           />
-          <div className="grid grid-cols-3 gap-2">
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
             <button
               onClick={() => onCreatorDecision(s, 'allow', creatorNotes)}
               className="px-2 py-1 rounded text-xs font-semibold bg-leaf/15 border border-leaf/40 text-leaf hover:bg-leaf/30"
@@ -1805,5 +1939,260 @@ function PermToggle({
       />
       <span className="text-gray-300">{label}</span>
     </label>
+  )
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Oracle Prediction — cash-free "guess the winner" card.
+//
+// Before a result is recorded the signed-in user picks who they think will win
+// (from the accepted entrants when known, else a free-text fallback). Their TIER
+// caps how many tournaments they can have an OPEN prediction on at once. Once a
+// winner is on record the card locks and grades their guess; a correct call
+// grants a cosmetic asset into their locker + Oracle-badge progress. No cash.
+// (Scaffold: predictions live in localStorage — see src/lib/predictions.ts.)
+// ─────────────────────────────────────────────────────────────────────────
+
+function OraclePredictionCard({
+  tournament,
+  entrants,
+  winnerResult,
+  user,
+}: {
+  tournament: Tournament
+  entrants: EntrantRow[]
+  winnerResult: TournamentResult | null
+  user: { id: string } | null
+}) {
+  const { tier } = useEntitlements()
+  const userId = user?.id ?? ''
+  const [refreshKey, setRefreshKey] = useState(0)
+  const [selectedId, setSelectedId] = useState('')
+  const [freeText, setFreeText] = useState('')
+  const [error, setError] = useState('')
+  const bump = () => setRefreshKey((k) => k + 1)
+
+  // Accepted entrants become the pick list; keyed by user_id so a correct guess
+  // matches tournament_results.winner_profile_id at resolution time.
+  const options = useMemo(
+    () =>
+      entrants
+        .filter((e) => e.status === 'accepted')
+        .map((e) => ({
+          id: e.user_id,
+          label: e.team_name?.trim()
+            ? `${e.username ?? 'Player'} · ${e.team_name}`
+            : e.username ?? 'Player',
+        })),
+    [entrants],
+  )
+
+  const myPrediction = useMemo(
+    () => (userId ? getPredictionForTournament(userId, tournament.id) : null),
+    [userId, tournament.id, refreshKey],
+  )
+  const stats = useMemo(
+    () => (userId ? getStats(userId) : null),
+    [userId, refreshKey],
+  )
+
+  // Hydrate this user's predictions from the server on mount / user change.
+  useEffect(() => {
+    if (!userId) return
+    void loadPredictions(userId).then(bump)
+  }, [userId])
+
+  // Once a winner is recorded, ask the server to grade any still-open
+  // prediction. Note that we do NOT pass the winner: the server reads it off
+  // `tournament_results`, so every user is graded against the same result.
+  useEffect(() => {
+    if (!userId || !winnerResult) return
+    if (getOpenForTournament(userId, tournament.id)) {
+      void gradePrediction(userId, tournament.id).then(bump)
+    }
+  }, [userId, winnerResult, tournament.id])
+
+  async function submit() {
+    setError('')
+    let pick: PredictionPick | null = null
+    if (options.length > 0 && selectedId) {
+      const opt = options.find((o) => o.id === selectedId)
+      pick = opt ? { winnerId: opt.id, label: opt.label } : null
+    } else if (freeText.trim()) {
+      const v = freeText.trim()
+      pick = { winnerId: v, label: v }
+    }
+    if (!pick) {
+      setError('Pick who you think will win first.')
+      return
+    }
+    // The server re-checks the quota against the account's real tier; `tier`
+    // here only drives the upgrade nudge copy below.
+    const res = await submitPrediction({ userId, tournamentId: tournament.id, pick })
+    if (res.ok) {
+      setSelectedId('')
+      setFreeText('')
+      bump()
+    } else if (res.reason === 'quota') {
+      setError(IS_MOBILE_STORE_BUILD
+        ? 'Prediction limit reached. Additional prediction capacity is not available in the mobile app.'
+        : predictionUpgradeNudge(tier))
+    } else if (res.reason === 'exists') {
+      setError('You already have an open prediction on this tournament.')
+    } else {
+      setError('Sign in to make a prediction.')
+    }
+  }
+
+  async function handleCancel() {
+    if (await withdrawPrediction(userId, tournament.id)) bump()
+  }
+
+  const header = (
+    <div className="flex items-center gap-2 mb-1">
+      <span aria-hidden>🔮</span>
+      <h2 className="font-semibold">Oracle Prediction</h2>
+      <span className="rounded-full border border-purple-400/40 bg-purple-500/10 px-2 py-0.5 text-[10px] uppercase tracking-wide text-purple-200">
+        Cosmetic reward · no cash
+      </span>
+    </div>
+  )
+
+  if (!user) {
+    return (
+      <div className="rounded-xl border border-purple-400/30 bg-purple-500/5 p-6">
+        {header}
+        <p className="text-sm text-gray-400 mt-2">
+          <Link to="/login" className="text-accent hover:underline">Log in</Link> to call the winner.
+          Correct calls earn cosmetic gear and Oracle badges — never cash.
+        </p>
+      </div>
+    )
+  }
+
+  const decided = Boolean(winnerResult)
+  const quota = predictionQuota(tier)
+  const open = stats?.openCount ?? 0
+  const atCap = !canPredict(open, tier)
+  const badgeId = stats ? oracleBadgeForCorrect(stats.correctCount) : null
+  const badge = badgeId ? BADGES[badgeId] : null
+
+  return (
+    <div className="rounded-xl border border-purple-400/30 bg-purple-500/5 p-6">
+      {header}
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-gray-400 mb-4">
+        <span>
+          Predictions used:{' '}
+          <span className="text-gray-200 font-semibold">
+            {open}/{quota === Infinity ? '∞' : quota}
+          </span>
+        </span>
+        {stats && (
+          <>
+            <span>Streak: <span className="text-gray-200 font-semibold">{stats.streak}</span></span>
+            <span>
+              Accuracy:{' '}
+              <span className="text-gray-200 font-semibold">
+                {Math.round(stats.accuracy * 100)}%
+              </span>
+            </span>
+          </>
+        )}
+        {badge && <BadgeChip badge={badge} />}
+        <Link to="/oracle" className="text-accent hover:underline ml-auto">Oracle hub →</Link>
+      </div>
+
+      {/* Locked outcome once the tournament has a recorded winner. */}
+      {decided ? (
+        myPrediction && myPrediction.status !== 'open' ? (
+          <div
+            className={`rounded-lg border p-4 ${
+              myPrediction.status === 'correct'
+                ? 'border-leaf/40 bg-leaf/5'
+                : 'border-kunai/40 bg-kunai/5'
+            }`}
+          >
+            <p className="text-sm">
+              You called <strong>{myPrediction.pick.label}</strong> —{' '}
+              {myPrediction.status === 'correct' ? (
+                <span className="text-leaf font-semibold">correct! 🎉 A reward landed in your locker.</span>
+              ) : (
+                <span className="text-kunai font-semibold">not this time.</span>
+              )}
+            </p>
+            <p className="text-xs text-gray-500 mt-1">
+              Winner on record: {winnerResult?.winner_username ?? 'recorded'}.
+            </p>
+          </div>
+        ) : (
+          <div className="rounded-lg border border-dark-border bg-dark p-4 text-sm text-gray-400">
+            This tournament is decided — predictions are closed.
+            {!myPrediction && ' You didn’t make a call on this one.'}
+          </div>
+        )
+      ) : myPrediction && myPrediction.status === 'open' ? (
+        // Existing open prediction — show it with a cancel option.
+        <div className="rounded-lg border border-purple-400/40 bg-purple-500/10 p-4">
+          <p className="text-sm">
+            Your call: <strong>{myPrediction.pick.label}</strong>
+            <span className="text-xs text-gray-400 ml-2">(locks when a winner is recorded)</span>
+          </p>
+          <button
+            type="button"
+            onClick={handleCancel}
+            className="mt-3 text-xs text-gray-400 hover:text-kunai"
+          >
+            Cancel prediction
+          </button>
+        </div>
+      ) : atCap ? (
+        // At their tier cap and no prediction here yet — nudge to upgrade.
+        <div className="rounded-lg border border-chakra/40 bg-chakra/10 p-4">
+          <p className="text-sm text-chakra">
+            {IS_MOBILE_STORE_BUILD
+              ? 'Prediction limit reached. Additional prediction capacity is not available in the mobile app.'
+              : predictionUpgradeNudge(tier)}
+          </p>
+          {!IS_MOBILE_STORE_BUILD && (
+            <Link to="/upgrade" className="mt-2 inline-block text-xs text-accent hover:underline">
+              See tiers →
+            </Link>
+          )}
+        </div>
+      ) : (
+        // Make a new prediction.
+        <div className="space-y-3">
+          <p className="text-sm text-gray-400">Who takes it? Correct calls earn cosmetic rewards + Oracle badges.</p>
+          {options.length > 0 ? (
+            <select
+              value={selectedId}
+              onChange={(e) => setSelectedId(e.target.value)}
+              className="w-full px-3 py-2 rounded-lg bg-dark border border-dark-border text-white text-sm"
+            >
+              <option value="">Select an entrant…</option>
+              {options.map((o) => (
+                <option key={o.id} value={o.id}>{o.label}</option>
+              ))}
+            </select>
+          ) : (
+            <input
+              type="text"
+              value={freeText}
+              onChange={(e) => setFreeText(e.target.value)}
+              placeholder="Name the team / player you think wins"
+              className="w-full px-3 py-2 rounded-lg bg-dark border border-dark-border text-white text-sm"
+            />
+          )}
+          {error && <p className="text-kunai text-sm">{error}</p>}
+          <button
+            type="button"
+            onClick={submit}
+            className="px-4 py-2 rounded-lg bg-purple-500 text-white text-sm font-semibold hover:bg-purple-500/90"
+          >
+            Lock in prediction
+          </button>
+        </div>
+      )}
+    </div>
   )
 }

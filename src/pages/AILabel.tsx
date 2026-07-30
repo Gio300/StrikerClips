@@ -197,7 +197,7 @@ export function AILabel() {
   }, [labels])
 
   return (
-    <div className="p-6 max-w-6xl mx-auto">
+    <div className="p-4 sm:p-6 max-w-6xl mx-auto">
       <div className="mb-4 flex items-baseline justify-between gap-3 flex-wrap">
         <div>
           <h1 className="text-2xl font-bold">AI label tool</h1>

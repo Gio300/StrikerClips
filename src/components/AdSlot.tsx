@@ -1,6 +1,8 @@
-import { useEffect, useMemo, useRef } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { adConfig } from '@/lib/adConfig'
+import { useEntitlements } from '@/hooks/useEntitlements'
+import { hidesAds } from '@/lib/tiers'
 
 type AdShape = 'banner' | 'leaderboard' | 'square' | 'mobile-banner'
 type AdSlotProps = {
@@ -8,6 +10,8 @@ type AdSlotProps = {
   slotId: string
   /** Visual aspect / target placement. Defaults to 'banner'. */
   shape?: AdShape
+  /** When true, shows a small ✕ that lets a free user hide this one slot. */
+  dismissable?: boolean
   className?: string
 }
 
@@ -26,8 +30,19 @@ type AdSlotProps = {
  * different creatives, demonstrating where ads will appear without spamming
  * the same one twice.
  */
-export function AdSlot({ slotId, shape = 'banner', className = '' }: AdSlotProps) {
-  const ref = useRef<HTMLDivElement>(null)
+export function AdSlot({ slotId, shape = 'banner', dismissable = false, className = '' }: AdSlotProps) {
+  const ref = useRef<HTMLModElement>(null)
+  const { tier } = useEntitlements()
+  const [dismissed, setDismissed] = useState(false)
+  // Paid tiers (ad_free / pro / supporter / creator + founder) never see ads —
+  // every slot everywhere short-circuits here, so nothing has to remember to
+  // wrap AdSlot in a gate.
+  const adsHidden = hidesAds(tier)
+  // AdSense publisher id + per-slot ids come from the single config surface
+  // (src/lib/adConfig.ts → VITE_ADSENSE_CLIENT / VITE_ADSENSE_<SLOT>). When both
+  // the client and this slot's id are set we serve a real unit; otherwise the
+  // house-ad fallback below renders. Paid users never reach here (FreeUserAdSlot
+  // / AdGate short-circuit on hidesAds()).
   const slotKey = adConfig.slots[slotId]
   const hasAdsense = Boolean(adConfig.clientId && slotKey)
 
@@ -46,6 +61,9 @@ export function AdSlot({ slotId, shape = 'banner', className = '' }: AdSlotProps
   // Stable creative per (slotId, mount) so it doesn't flicker on re-render.
   const creative = useMemo(() => pickCreative(slotId), [slotId])
   const heightClass = SHAPE_HEIGHT[shape]
+
+  // Paid users (and anyone who dismissed this slot) get nothing.
+  if (adsHidden || dismissed) return null
 
   if (hasAdsense) {
     return (
@@ -66,7 +84,61 @@ export function AdSlot({ slotId, shape = 'banner', className = '' }: AdSlotProps
     )
   }
 
-  return <HouseAd creative={creative} shape={shape} className={className} />
+  // No AdSense id for this slot. By default we render a clearly-labeled
+  // PLACEHOLDER (so the team can see the ad's footprint in every flow); with
+  // VITE_AD_HOUSE_ADS=1 we serve a clickable in-house creative instead.
+  const fallback = adConfig.houseAds ? (
+    <HouseAd creative={creative} shape={shape} className={className} />
+  ) : (
+    <AdPlaceholder shape={shape} className={className} />
+  )
+
+  if (!dismissable) return fallback
+  return (
+    <div className="relative">
+      {fallback}
+      <button
+        type="button"
+        aria-label="Hide this ad"
+        onClick={() => setDismissed(true)}
+        className="absolute top-1 right-1 z-20 h-6 w-6 flex items-center justify-center rounded-full bg-black/60 text-gray-300 text-xs hover:text-white hover:bg-black/80 border border-dark-border"
+      >
+        ✕
+      </button>
+    </div>
+  )
+}
+
+/* ------------------------------------------------------------------------- */
+/* Labeled placeholder (default when AdSense isn't configured)                */
+/* ------------------------------------------------------------------------- */
+
+const SHAPE_LABEL: Record<AdShape, string> = {
+  'banner': 'Banner ad · 320×110',
+  'leaderboard': 'Leaderboard ad · 728×90',
+  'square': 'Square ad · 300×250',
+  'mobile-banner': 'Mobile banner · 320×100',
+}
+
+/**
+ * A tasteful, clearly-labeled "your ad here" box shown at the slot's real size.
+ * This is what makes ad real-estate VISIBLE before any network is wired: an
+ * "Advertisement" pill, a dashed frame, and the placement's target dimensions.
+ */
+function AdPlaceholder({ shape, className }: { shape: AdShape; className: string }) {
+  return (
+    <div
+      role="img"
+      aria-label="Advertisement placeholder"
+      className={`relative ${SHAPE_HEIGHT[shape]} rounded-lg border border-dashed border-dark-border bg-dark-elevated/40 overflow-hidden flex flex-col items-center justify-center text-center px-4 ${className}`}
+    >
+      <span className="absolute top-2 left-2 px-1.5 py-0.5 rounded bg-black/50 text-[10px] uppercase tracking-wide text-gray-400 border border-dark-border">
+        Advertisement
+      </span>
+      <div className="text-sm font-semibold text-gray-300">Sponsored — your ad here</div>
+      <div className="mt-0.5 text-[11px] text-gray-500">{SHAPE_LABEL[shape]}</div>
+    </div>
+  )
 }
 
 /* ------------------------------------------------------------------------- */
@@ -87,7 +159,7 @@ const CREATIVES: Creative[] = [
   {
     id: 'create-reel',
     to: '/highlight/create',
-    eyebrow: 'Sponsored · KillCam',
+    eyebrow: 'Sponsored · TKO',
     headline: 'Every angle, one clutch reel',
     body: 'Combine up to 8 angles: action cam, ultra director, squad grid. Built for any game.',
     cta: 'Create a highlight',
@@ -105,7 +177,7 @@ const CREATIVES: Creative[] = [
   {
     id: 'signup',
     to: '/signup',
-    eyebrow: 'Sponsored · KillCam',
+    eyebrow: 'Sponsored · TKO',
     headline: 'Free account. Unlimited reels.',
     body: 'Connect YouTube, invite friends, run tournaments, and share your best angles.',
     cta: 'Sign up free',

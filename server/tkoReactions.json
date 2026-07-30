@@ -1,0 +1,1596 @@
+[
+  {
+    "id": "ghosted",
+    "text": "He got ghost on 'em.",
+    "tags": [
+      "hype",
+      "knockout",
+      "replay"
+    ],
+    "delivery": "hype",
+    "voice": "hype"
+  },
+  {
+    "id": "needs_milk",
+    "text": "He needs some milk!",
+    "tags": [
+      "crowd",
+      "humor",
+      "knockout"
+    ],
+    "delivery": "shout",
+    "voice": "shout"
+  },
+  {
+    "id": "grind_rap",
+    "text": "Man, he turned it down just to grind off the rap.",
+    "tags": [
+      "crowd",
+      "humor"
+    ],
+    "delivery": "hype",
+    "voice": "hype"
+  },
+  {
+    "id": "no_time",
+    "text": "Ain't nobody got time for that!",
+    "tags": [
+      "humor",
+      "knockout"
+    ],
+    "delivery": "shout",
+    "voice": "shout"
+  },
+  {
+    "id": "shut_down",
+    "text": "Shut him down!",
+    "tags": [
+      "defense",
+      "hype",
+      "knockout"
+    ],
+    "delivery": "shout",
+    "voice": "shout"
+  },
+  {
+    "id": "sonned",
+    "text": "He totally sonned him, yo.",
+    "tags": [
+      "crowd",
+      "hype",
+      "knockout"
+    ],
+    "delivery": "hype",
+    "voice": "hype"
+  },
+  {
+    "id": "sleep_buddy",
+    "text": "Put that ninja to sleep, buddy.",
+    "tags": [
+      "knockout",
+      "replay"
+    ],
+    "delivery": "hype",
+    "voice": "hype"
+  },
+  {
+    "id": "smacking_ninjas",
+    "text": "They over there smacking ninjas.",
+    "tags": [
+      "crowd",
+      "hype",
+      "momentum"
+    ],
+    "delivery": "hype",
+    "voice": "hype"
+  },
+  {
+    "id": "wanna_be_famous",
+    "text": "Mom, leave me alone, I wanna be famous!",
+    "tags": [
+      "crowd",
+      "humor",
+      "sung"
+    ],
+    "delivery": "sing",
+    "voice": "sing"
+  },
+  {
+    "id": "dont_disconnect",
+    "text": "I hope the other team don't disconnect.",
+    "tags": [
+      "crowd",
+      "humor",
+      "momentum"
+    ],
+    "delivery": "hype",
+    "voice": "hype"
+  },
+  {
+    "id": "live_on_tko",
+    "text": "This is really live on TKO right now!",
+    "tags": [
+      "brand",
+      "hype",
+      "live",
+      "opening"
+    ],
+    "delivery": "hype",
+    "voice": "hype"
+  },
+  {
+    "id": "momentum",
+    "text": "These guys got momentum.",
+    "tags": [
+      "analyst",
+      "momentum"
+    ],
+    "delivery": "hype",
+    "voice": "hype"
+  },
+  {
+    "id": "flexing",
+    "text": "They flexing on those cats hard too.",
+    "tags": [
+      "crowd",
+      "hype",
+      "momentum"
+    ],
+    "delivery": "hype",
+    "voice": "hype"
+  },
+  {
+    "id": "savage_heard",
+    "text": "Bruh is so savage, ya heard?",
+    "tags": [
+      "crowd",
+      "hype",
+      "knockout"
+    ],
+    "delivery": "hype",
+    "voice": "hype"
+  },
+  {
+    "id": "dont_mess",
+    "text": "Don't mess with these cats, bruh.",
+    "tags": [
+      "crowd",
+      "momentum",
+      "warning"
+    ],
+    "delivery": "hype",
+    "voice": "hype"
+  },
+  {
+    "id": "mad_tight",
+    "text": "These dudes is mad tight, bro.",
+    "tags": [
+      "crowd",
+      "teamwork"
+    ],
+    "delivery": "hype",
+    "voice": "hype"
+  },
+  {
+    "id": "best_in_hearts",
+    "text": "Can't stop the best we're making, feel it riding in our hearts.",
+    "tags": [
+      "crowd",
+      "sung",
+      "victory"
+    ],
+    "delivery": "sing",
+    "voice": "sing"
+  },
+  {
+    "id": "lets_go",
+    "text": "Lesss gooo!",
+    "tags": [
+      "hype",
+      "knockout",
+      "opening",
+      "victory"
+    ],
+    "delivery": "scream",
+    "voice": "shout"
+  },
+  {
+    "id": "game_hype",
+    "text": "This game is hype!",
+    "tags": [
+      "hype",
+      "live",
+      "momentum",
+      "opening"
+    ],
+    "delivery": "hype",
+    "voice": "hype"
+  },
+  {
+    "id": "stop_hurting",
+    "text": "Please, stop hurting these people.",
+    "tags": [
+      "humor",
+      "knockout",
+      "scared"
+    ],
+    "delivery": "scared",
+    "voice": "crowd"
+  },
+  {
+    "id": "ruthless",
+    "text": "This guy is ruthless right here.",
+    "tags": [
+      "analyst",
+      "knockout",
+      "mvp"
+    ],
+    "delivery": "hype",
+    "voice": "hype"
+  },
+  {
+    "id": "so_savage",
+    "text": "It's so savage.",
+    "tags": [
+      "hype",
+      "knockout"
+    ],
+    "delivery": "hype",
+    "voice": "hype"
+  },
+  {
+    "id": "giving_mvp",
+    "text": "He's giving MVP right now.",
+    "tags": [
+      "analyst",
+      "momentum",
+      "mvp"
+    ],
+    "delivery": "hype",
+    "voice": "hype"
+  },
+  {
+    "id": "spl_level",
+    "text": "That's S.P.L. level play right there.",
+    "tags": [
+      "analyst",
+      "mvp",
+      "replay"
+    ],
+    "delivery": "hype",
+    "voice": "hype"
+  },
+  {
+    "id": "get_contract",
+    "text": "Get this man a contract, he's going pro!",
+    "tags": [
+      "hype",
+      "mvp",
+      "victory"
+    ],
+    "delivery": "shout",
+    "voice": "shout"
+  },
+  {
+    "id": "beastly",
+    "text": "He's beastly, bruh.",
+    "tags": [
+      "crowd",
+      "knockout",
+      "mvp"
+    ],
+    "delivery": "hype",
+    "voice": "hype"
+  },
+  {
+    "id": "giving_tko",
+    "text": "It's giving TKO, smacking them ninjas up.",
+    "tags": [
+      "brand",
+      "hype",
+      "knockout"
+    ],
+    "delivery": "hype",
+    "voice": "hype"
+  },
+  {
+    "id": "cant_beat",
+    "text": "You can't beat this guy!",
+    "tags": [
+      "knockout",
+      "mvp",
+      "scream"
+    ],
+    "delivery": "scream",
+    "voice": "shout"
+  },
+  {
+    "id": "atrocity",
+    "text": "This is an atrocity.",
+    "tags": [
+      "analyst",
+      "humor",
+      "knockout"
+    ],
+    "delivery": "hype",
+    "voice": "hype"
+  },
+  {
+    "id": "heating_up",
+    "text": "He's heating up.",
+    "tags": [
+      "analyst",
+      "momentum"
+    ],
+    "delivery": "hype",
+    "voice": "hype"
+  },
+  {
+    "id": "real_shinobi",
+    "text": "Now that's a real shinobi right there.",
+    "tags": [
+      "analyst",
+      "mvp",
+      "replay"
+    ],
+    "delivery": "hype",
+    "voice": "hype"
+  },
+  {
+    "id": "dont_give_up",
+    "text": "Don't give up, y'all.",
+    "tags": [
+      "comeback",
+      "crowd"
+    ],
+    "delivery": "hype",
+    "voice": "hype"
+  },
+  {
+    "id": "hurt_me_hurt_may",
+    "text": "Hurt me, hurt may!",
+    "tags": [
+      "crowd",
+      "humor"
+    ],
+    "delivery": "hype",
+    "voice": "hype"
+  },
+  {
+    "id": "on_fire",
+    "text": "He's on fire!",
+    "tags": [
+      "knockout",
+      "momentum",
+      "scream"
+    ],
+    "delivery": "shout",
+    "voice": "shout"
+  },
+  {
+    "id": "oh_no",
+    "text": "Ooooooh nooooooo!",
+    "tags": [
+      "crowd",
+      "knockout",
+      "scared"
+    ],
+    "delivery": "scared",
+    "voice": "crowd"
+  },
+  {
+    "id": "leave_him_alone",
+    "text": "Leave him alone!",
+    "tags": [
+      "humor",
+      "knockout",
+      "scared"
+    ],
+    "delivery": "scared",
+    "voice": "crowd"
+  },
+  {
+    "id": "why_do_him_like_that",
+    "text": "Why he do him like that? He ain't gotta do him like that though.",
+    "tags": [
+      "crowd",
+      "humor",
+      "knockout",
+      "replay"
+    ],
+    "delivery": "hype",
+    "voice": "hype"
+  },
+  {
+    "id": "aura_leaking",
+    "text": "His aura leaking, yo.",
+    "tags": [
+      "hype",
+      "knockout",
+      "mvp"
+    ],
+    "delivery": "hype",
+    "voice": "hype"
+  },
+  {
+    "id": "sky_glizzy",
+    "text": "Sky Glizzy!",
+    "tags": [
+      "crowd",
+      "knockout",
+      "scream"
+    ],
+    "delivery": "scream",
+    "voice": "shout"
+  },
+  {
+    "id": "never_forget",
+    "text": "I'll never forget that one, my guy.",
+    "tags": [
+      "analyst",
+      "knockout",
+      "replay"
+    ],
+    "delivery": "hype",
+    "voice": "hype"
+  },
+  {
+    "id": "why_just_why",
+    "text": "Why, just why!",
+    "tags": [
+      "humor",
+      "knockout",
+      "scared"
+    ],
+    "delivery": "scared",
+    "voice": "crowd"
+  },
+  {
+    "id": "what_day_what",
+    "text": "What day, what!?",
+    "tags": [
+      "crowd",
+      "humor"
+    ],
+    "delivery": "hype",
+    "voice": "hype"
+  },
+  {
+    "id": "get_em",
+    "text": "Get 'em!",
+    "tags": [
+      "crowd",
+      "knockout",
+      "tactical"
+    ],
+    "delivery": "shout",
+    "voice": "shout"
+  },
+  {
+    "id": "last_uchiha",
+    "text": "So much for the last of the Uchiha.",
+    "tags": [
+      "analyst",
+      "humor",
+      "knockout"
+    ],
+    "delivery": "hype",
+    "voice": "hype"
+  },
+  {
+    "id": "desire_quote",
+    "text": "Those who are bound by desire see only that which can be held in their hand.",
+    "tags": [
+      "analyst",
+      "replay",
+      "wisdom"
+    ],
+    "delivery": "calm",
+    "voice": "analyst"
+  },
+  {
+    "id": "catches_bullets",
+    "text": "Catches bullets with his teeth.",
+    "tags": [
+      "analyst",
+      "humor",
+      "replay"
+    ],
+    "delivery": "hype",
+    "voice": "hype"
+  },
+  {
+    "id": "catches_bullets_question",
+    "text": "Catches bullets with his teeth?",
+    "tags": [
+      "crowd",
+      "humor",
+      "replay"
+    ],
+    "delivery": "hype",
+    "voice": "hype"
+  },
+  {
+    "id": "see_through_deception",
+    "text": "A ninja must see through deception.",
+    "tags": [
+      "replay",
+      "tactical",
+      "wisdom"
+    ],
+    "delivery": "calm",
+    "voice": "analyst"
+  },
+  {
+    "id": "aware_surroundings",
+    "text": "A ninja must always be aware of his surroundings.",
+    "tags": [
+      "replay",
+      "tactical",
+      "wisdom"
+    ],
+    "delivery": "calm",
+    "voice": "analyst"
+  },
+  {
+    "id": "strikes_while_sleeps",
+    "text": "A ninja strikes while the enemy sleeps.",
+    "tags": [
+      "replay",
+      "tactical",
+      "wisdom"
+    ],
+    "delivery": "calm",
+    "voice": "analyst"
+  },
+  {
+    "id": "run_it_back",
+    "text": "Run it right back!",
+    "tags": [
+      "crowd",
+      "knockout",
+      "replay"
+    ],
+    "delivery": "shout",
+    "voice": "shout"
+  },
+  {
+    "id": "clean_work",
+    "text": "That was clean work.",
+    "tags": [
+      "analyst",
+      "knockout",
+      "replay"
+    ],
+    "delivery": "hype",
+    "voice": "hype"
+  },
+  {
+    "id": "whole_lobby",
+    "text": "The whole lobby felt that one!",
+    "tags": [
+      "crowd",
+      "hype",
+      "knockout"
+    ],
+    "delivery": "hype",
+    "voice": "hype"
+  },
+  {
+    "id": "clip_that",
+    "text": "Clip that right now!",
+    "tags": [
+      "knockout",
+      "live",
+      "replay"
+    ],
+    "delivery": "shout",
+    "voice": "shout"
+  },
+  {
+    "id": "replay_it",
+    "text": "Replay that. I need to see it again.",
+    "tags": [
+      "crowd",
+      "replay"
+    ],
+    "delivery": "hype",
+    "voice": "hype"
+  },
+  {
+    "id": "angle_caught",
+    "text": "That angle caught everything.",
+    "tags": [
+      "analyst",
+      "brand",
+      "replay"
+    ],
+    "delivery": "hype",
+    "voice": "hype"
+  },
+  {
+    "id": "nowhere_to_hide",
+    "text": "Eight angles up. Nowhere to hide.",
+    "tags": [
+      "brand",
+      "live",
+      "replay"
+    ],
+    "delivery": "hype",
+    "voice": "hype"
+  },
+  {
+    "id": "keep_pressure",
+    "text": "Keep that pressure on 'em!",
+    "tags": [
+      "crowd",
+      "momentum",
+      "tactical"
+    ],
+    "delivery": "shout",
+    "voice": "shout"
+  },
+  {
+    "id": "base_stolen",
+    "text": "They stole that base clean!",
+    "tags": [
+      "base",
+      "hype",
+      "objective"
+    ],
+    "delivery": "hype",
+    "voice": "hype"
+  },
+  {
+    "id": "flag_run",
+    "text": "That flag run was perfect!",
+    "tags": [
+      "flag",
+      "hype",
+      "objective"
+    ],
+    "delivery": "hype",
+    "voice": "hype"
+  },
+  {
+    "id": "healer_down",
+    "text": "Healer down! Push now!",
+    "tags": [
+      "knockout",
+      "tactical",
+      "teamplay"
+    ],
+    "delivery": "shout",
+    "voice": "shout"
+  },
+  {
+    "id": "ult_ready",
+    "text": "Ultimate is ready. Set it up!",
+    "tags": [
+      "setup",
+      "tactical",
+      "teamplay"
+    ],
+    "delivery": "hype",
+    "voice": "hype"
+  },
+  {
+    "id": "back_em_up",
+    "text": "Back 'em up on the point!",
+    "tags": [
+      "objective",
+      "tactical",
+      "teamplay"
+    ],
+    "delivery": "shout",
+    "voice": "shout"
+  },
+  {
+    "id": "hold_scroll",
+    "text": "Hold that scroll. Don't give it up!",
+    "tags": [
+      "objective",
+      "tactical",
+      "teamplay"
+    ],
+    "delivery": "hype",
+    "voice": "hype"
+  },
+  {
+    "id": "lock_point",
+    "text": "Lock the point down!",
+    "tags": [
+      "defense",
+      "objective",
+      "tactical"
+    ],
+    "delivery": "shout",
+    "voice": "shout"
+  },
+  {
+    "id": "protect_runner",
+    "text": "Protect the runner. Clear the lane!",
+    "tags": [
+      "flag",
+      "tactical",
+      "teamplay"
+    ],
+    "delivery": "hype",
+    "voice": "hype"
+  },
+  {
+    "id": "rotate_left",
+    "text": "Rotate left. The flank is open.",
+    "tags": [
+      "analyst",
+      "tactical",
+      "teamplay"
+    ],
+    "delivery": "hype",
+    "voice": "hype"
+  },
+  {
+    "id": "flank_open",
+    "text": "That flank just opened wide.",
+    "tags": [
+      "analyst",
+      "tactical"
+    ],
+    "delivery": "hype",
+    "voice": "hype"
+  },
+  {
+    "id": "outnumbered",
+    "text": "Outnumbered and still standing!",
+    "tags": [
+      "clutch",
+      "comeback",
+      "hype"
+    ],
+    "delivery": "hype",
+    "voice": "hype"
+  },
+  {
+    "id": "clutch",
+    "text": "That was clutch!",
+    "tags": [
+      "clutch",
+      "knockout",
+      "replay"
+    ],
+    "delivery": "shout",
+    "voice": "shout"
+  },
+  {
+    "id": "comeback",
+    "text": "The comeback is real!",
+    "tags": [
+      "comeback",
+      "hype",
+      "momentum"
+    ],
+    "delivery": "hype",
+    "voice": "hype"
+  },
+  {
+    "id": "defense",
+    "text": "That defense refused to break.",
+    "tags": [
+      "analyst",
+      "defense",
+      "objective"
+    ],
+    "delivery": "hype",
+    "voice": "hype"
+  },
+  {
+    "id": "clean_cancel",
+    "text": "Clean cancel. Perfect timing.",
+    "tags": [
+      "analyst",
+      "replay",
+      "tactical"
+    ],
+    "delivery": "hype",
+    "voice": "hype"
+  },
+  {
+    "id": "perfect_timing",
+    "text": "The timing on that was ridiculous.",
+    "tags": [
+      "analyst",
+      "knockout",
+      "replay"
+    ],
+    "delivery": "hype",
+    "voice": "hype"
+  },
+  {
+    "id": "read_the_play",
+    "text": "He read that play before it happened.",
+    "tags": [
+      "analyst",
+      "replay",
+      "tactical"
+    ],
+    "delivery": "hype",
+    "voice": "hype"
+  },
+  {
+    "id": "movement",
+    "text": "Look at the movement!",
+    "tags": [
+      "analyst",
+      "hype",
+      "replay"
+    ],
+    "delivery": "hype",
+    "voice": "hype"
+  },
+  {
+    "id": "combo",
+    "text": "That combo kept going!",
+    "tags": [
+      "hype",
+      "knockout",
+      "replay"
+    ],
+    "delivery": "hype",
+    "voice": "hype"
+  },
+  {
+    "id": "no_escape",
+    "text": "There was no escape from that.",
+    "tags": [
+      "analyst",
+      "knockout",
+      "replay"
+    ],
+    "delivery": "hype",
+    "voice": "hype"
+  },
+  {
+    "id": "full_squad",
+    "text": "The full squad is locked in.",
+    "tags": [
+      "analyst",
+      "momentum",
+      "teamwork"
+    ],
+    "delivery": "hype",
+    "voice": "hype"
+  },
+  {
+    "id": "team_wipe",
+    "text": "That was a full team wipe!",
+    "tags": [
+      "knockout",
+      "momentum",
+      "scream"
+    ],
+    "delivery": "scream",
+    "voice": "shout"
+  },
+  {
+    "id": "erased",
+    "text": "They erased that whole push.",
+    "tags": [
+      "analyst",
+      "defense",
+      "knockout"
+    ],
+    "delivery": "hype",
+    "voice": "hype"
+  },
+  {
+    "id": "deleted",
+    "text": "Deleted off the point!",
+    "tags": [
+      "hype",
+      "knockout",
+      "objective"
+    ],
+    "delivery": "shout",
+    "voice": "shout"
+  },
+  {
+    "id": "sent_home",
+    "text": "Sent straight back to spawn.",
+    "tags": [
+      "crowd",
+      "humor",
+      "knockout"
+    ],
+    "delivery": "hype",
+    "voice": "hype"
+  },
+  {
+    "id": "froze",
+    "text": "He froze when the pressure hit.",
+    "tags": [
+      "analyst",
+      "knockout"
+    ],
+    "delivery": "hype",
+    "voice": "hype"
+  },
+  {
+    "id": "check_map",
+    "text": "Check the map. Trouble is coming.",
+    "tags": [
+      "analyst",
+      "tactical",
+      "warning"
+    ],
+    "delivery": "hype",
+    "voice": "hype"
+  },
+  {
+    "id": "dont_chase",
+    "text": "Don't chase. Hold the objective.",
+    "tags": [
+      "analyst",
+      "objective",
+      "tactical"
+    ],
+    "delivery": "hype",
+    "voice": "hype"
+  },
+  {
+    "id": "need_heals",
+    "text": "I need heals! I need heals!",
+    "tags": [
+      "scared",
+      "tactical",
+      "teamplay"
+    ],
+    "delivery": "scream",
+    "voice": "shout"
+  },
+  {
+    "id": "touch_point",
+    "text": "Touch the point! Keep it alive!",
+    "tags": [
+      "comeback",
+      "objective",
+      "tactical"
+    ],
+    "delivery": "scream",
+    "voice": "shout"
+  },
+  {
+    "id": "last_second",
+    "text": "Last-second save!",
+    "tags": [
+      "clutch",
+      "comeback",
+      "objective"
+    ],
+    "delivery": "shout",
+    "voice": "shout"
+  },
+  {
+    "id": "match_point",
+    "text": "This is match point. Lock in.",
+    "tags": [
+      "live",
+      "tactical",
+      "warning"
+    ],
+    "delivery": "hype",
+    "voice": "hype"
+  },
+  {
+    "id": "reset",
+    "text": "Reset, regroup, and hit it together.",
+    "tags": [
+      "tactical",
+      "teamplay"
+    ],
+    "delivery": "hype",
+    "voice": "hype"
+  },
+  {
+    "id": "all_angles",
+    "text": "Every angle saw that knockout.",
+    "tags": [
+      "brand",
+      "knockout",
+      "replay"
+    ],
+    "delivery": "hype",
+    "voice": "hype"
+  },
+  {
+    "id": "replay_receipt",
+    "text": "The replay brought receipts.",
+    "tags": [
+      "brand",
+      "humor",
+      "replay"
+    ],
+    "delivery": "hype",
+    "voice": "hype"
+  },
+  {
+    "id": "caught_every_angle",
+    "text": "Caught clean from every angle.",
+    "tags": [
+      "analyst",
+      "brand",
+      "replay"
+    ],
+    "delivery": "hype",
+    "voice": "hype"
+  },
+  {
+    "id": "mvp_energy",
+    "text": "That's MVP energy right there.",
+    "tags": [
+      "analyst",
+      "hype",
+      "mvp"
+    ],
+    "delivery": "hype",
+    "voice": "hype"
+  },
+  {
+    "id": "pro_level",
+    "text": "That is pro-level execution.",
+    "tags": [
+      "analyst",
+      "mvp",
+      "replay"
+    ],
+    "delivery": "hype",
+    "voice": "hype"
+  },
+  {
+    "id": "contract_ready",
+    "text": "Somebody get the contract ready.",
+    "tags": [
+      "crowd",
+      "mvp",
+      "victory"
+    ],
+    "delivery": "hype",
+    "voice": "hype"
+  },
+  {
+    "id": "made_highlight",
+    "text": "That just made the highlight reel.",
+    "tags": [
+      "brand",
+      "knockout",
+      "replay"
+    ],
+    "delivery": "hype",
+    "voice": "hype"
+  },
+  {
+    "id": "camera_work",
+    "text": "The camera switch landed right on time.",
+    "tags": [
+      "analyst",
+      "brand",
+      "replay"
+    ],
+    "delivery": "hype",
+    "voice": "hype"
+  },
+  {
+    "id": "live_director",
+    "text": "TKO caught the play before chat could call it.",
+    "tags": [
+      "brand",
+      "live",
+      "replay"
+    ],
+    "delivery": "hype",
+    "voice": "hype"
+  },
+  {
+    "id": "crowd_loud",
+    "text": "The whole crowd just woke up!",
+    "tags": [
+      "crowd",
+      "hype",
+      "knockout"
+    ],
+    "delivery": "hype",
+    "voice": "hype"
+  },
+  {
+    "id": "chat_explodes",
+    "text": "Chat is exploding right now!",
+    "tags": [
+      "crowd",
+      "hype",
+      "live"
+    ],
+    "delivery": "hype",
+    "voice": "hype"
+  },
+  {
+    "id": "feed_going",
+    "text": "The feed is going crazy!",
+    "tags": [
+      "crowd",
+      "hype",
+      "live"
+    ],
+    "delivery": "hype",
+    "voice": "hype"
+  },
+  {
+    "id": "unstoppable",
+    "text": "They look unstoppable right now.",
+    "tags": [
+      "analyst",
+      "momentum",
+      "mvp"
+    ],
+    "delivery": "hype",
+    "voice": "hype"
+  },
+  {
+    "id": "answer_back",
+    "text": "And they answer right back!",
+    "tags": [
+      "comeback",
+      "hype",
+      "momentum"
+    ],
+    "delivery": "hype",
+    "voice": "hype"
+  },
+  {
+    "id": "not_done",
+    "text": "This match is not done yet.",
+    "tags": [
+      "analyst",
+      "comeback",
+      "warning"
+    ],
+    "delivery": "hype",
+    "voice": "hype"
+  },
+  {
+    "id": "tight_game",
+    "text": "This game is way too close.",
+    "tags": [
+      "analyst",
+      "live",
+      "warning"
+    ],
+    "delivery": "hype",
+    "voice": "hype"
+  },
+  {
+    "id": "respect",
+    "text": "You have to respect that play.",
+    "tags": [
+      "analyst",
+      "replay"
+    ],
+    "delivery": "hype",
+    "voice": "hype"
+  },
+  {
+    "id": "good_fight",
+    "text": "Good fight. Both squads came ready.",
+    "tags": [
+      "analyst",
+      "closing",
+      "victory"
+    ],
+    "delivery": "hype",
+    "voice": "hype"
+  },
+  {
+    "id": "locked_in",
+    "text": "They are completely locked in.",
+    "tags": [
+      "analyst",
+      "momentum",
+      "teamwork"
+    ],
+    "delivery": "hype",
+    "voice": "hype"
+  },
+  {
+    "id": "focus",
+    "text": "That focus never moved.",
+    "tags": [
+      "analyst",
+      "mvp",
+      "replay"
+    ],
+    "delivery": "hype",
+    "voice": "hype"
+  },
+  {
+    "id": "teamwork",
+    "text": "That is what clean teamwork looks like.",
+    "tags": [
+      "analyst",
+      "replay",
+      "teamwork"
+    ],
+    "delivery": "hype",
+    "voice": "hype"
+  },
+  {
+    "id": "communication",
+    "text": "You can hear the communication working.",
+    "tags": [
+      "analyst",
+      "tactical",
+      "teamwork"
+    ],
+    "delivery": "hype",
+    "voice": "hype"
+  },
+  {
+    "id": "coordinated",
+    "text": "Every move was coordinated.",
+    "tags": [
+      "analyst",
+      "replay",
+      "teamwork"
+    ],
+    "delivery": "hype",
+    "voice": "hype"
+  },
+  {
+    "id": "setup",
+    "text": "They built that setup from the ground up.",
+    "tags": [
+      "analyst",
+      "replay",
+      "tactical"
+    ],
+    "delivery": "hype",
+    "voice": "hype"
+  },
+  {
+    "id": "trap",
+    "text": "Walked straight into the trap.",
+    "tags": [
+      "humor",
+      "knockout",
+      "tactical"
+    ],
+    "delivery": "hype",
+    "voice": "hype"
+  },
+  {
+    "id": "baited",
+    "text": "They took the bait, and paid for it.",
+    "tags": [
+      "analyst",
+      "knockout",
+      "tactical"
+    ],
+    "delivery": "hype",
+    "voice": "hype"
+  },
+  {
+    "id": "counter",
+    "text": "Perfect counter!",
+    "tags": [
+      "knockout",
+      "replay",
+      "shout"
+    ],
+    "delivery": "shout",
+    "voice": "shout"
+  },
+  {
+    "id": "punished",
+    "text": "Every mistake got punished.",
+    "tags": [
+      "analyst",
+      "knockout"
+    ],
+    "delivery": "hype",
+    "voice": "hype"
+  },
+  {
+    "id": "read_like_book",
+    "text": "Read them like a book.",
+    "tags": [
+      "analyst",
+      "replay",
+      "tactical"
+    ],
+    "delivery": "hype",
+    "voice": "hype"
+  },
+  {
+    "id": "blink_missed",
+    "text": "Blink and you miss the whole play.",
+    "tags": [
+      "hype",
+      "knockout",
+      "replay"
+    ],
+    "delivery": "hype",
+    "voice": "hype"
+  },
+  {
+    "id": "instant_replay",
+    "text": "Instant replay. Put that back on screen.",
+    "tags": [
+      "brand",
+      "live",
+      "replay"
+    ],
+    "delivery": "hype",
+    "voice": "hype"
+  },
+  {
+    "id": "slow_it_down",
+    "text": "Slow that down. Watch the setup.",
+    "tags": [
+      "analyst",
+      "replay"
+    ],
+    "delivery": "hype",
+    "voice": "hype"
+  },
+  {
+    "id": "zoom_in",
+    "text": "Zoom in on that finish!",
+    "tags": [
+      "knockout",
+      "replay",
+      "shout"
+    ],
+    "delivery": "shout",
+    "voice": "shout"
+  },
+  {
+    "id": "rewind",
+    "text": "Rewind it one more time.",
+    "tags": [
+      "crowd",
+      "replay"
+    ],
+    "delivery": "hype",
+    "voice": "hype"
+  },
+  {
+    "id": "frame_by_frame",
+    "text": "Frame by frame, that was flawless.",
+    "tags": [
+      "analyst",
+      "replay"
+    ],
+    "delivery": "hype",
+    "voice": "hype"
+  },
+  {
+    "id": "receipts",
+    "text": "TKO got the receipts.",
+    "tags": [
+      "brand",
+      "humor",
+      "replay"
+    ],
+    "delivery": "hype",
+    "voice": "hype"
+  },
+  {
+    "id": "lights_flash",
+    "text": "Lights up. TKO time.",
+    "tags": [
+      "brand",
+      "hype",
+      "opening"
+    ],
+    "delivery": "hype",
+    "voice": "hype"
+  },
+  {
+    "id": "tko_time",
+    "text": "This is TKO time!",
+    "tags": [
+      "brand",
+      "hype",
+      "live",
+      "opening"
+    ],
+    "delivery": "shout",
+    "voice": "shout"
+  },
+  {
+    "id": "winner",
+    "text": "And there is your winner!",
+    "tags": [
+      "closing",
+      "scream",
+      "victory"
+    ],
+    "delivery": "scream",
+    "voice": "shout"
+  },
+  {
+    "id": "victory",
+    "text": "That squad earned every second of this win.",
+    "tags": [
+      "analyst",
+      "closing",
+      "victory"
+    ],
+    "delivery": "hype",
+    "voice": "hype"
+  },
+  {
+    "id": "round_over",
+    "text": "Round over. That finish said everything.",
+    "tags": [
+      "analyst",
+      "closing",
+      "victory"
+    ],
+    "delivery": "hype",
+    "voice": "hype"
+  },
+  {
+    "id": "crown",
+    "text": "Put the crown on 'em.",
+    "tags": [
+      "crowd",
+      "mvp",
+      "victory"
+    ],
+    "delivery": "hype",
+    "voice": "hype"
+  },
+  {
+    "id": "next_match",
+    "text": "Who wants the next match?",
+    "tags": [
+      "closing",
+      "crowd",
+      "victory"
+    ],
+    "delivery": "hype",
+    "voice": "hype"
+  },
+  {
+    "id": "good_game",
+    "text": "Good game. Run the next one.",
+    "tags": [
+      "closing",
+      "crowd",
+      "victory"
+    ],
+    "delivery": "hype",
+    "voice": "hype"
+  },
+  {
+    "id": "final_word",
+    "text": "Every angle, one story. TKO caught it all.",
+    "tags": [
+      "analyst",
+      "brand",
+      "closing",
+      "victory"
+    ],
+    "delivery": "hype",
+    "voice": "hype"
+  },
+  {
+    "id": "opening_pressure",
+    "text": "We are live, and the pressure is already up.",
+    "tags": [
+      "analyst",
+      "live",
+      "opening"
+    ],
+    "delivery": "hype",
+    "voice": "hype"
+  },
+  {
+    "id": "opening_squad",
+    "text": "Squads loaded. Cameras synced. Let's work.",
+    "tags": [
+      "brand",
+      "live",
+      "opening"
+    ],
+    "delivery": "hype",
+    "voice": "hype"
+  },
+  {
+    "id": "opening_chat",
+    "text": "Chat, lock in. This one is moving fast.",
+    "tags": [
+      "crowd",
+      "live",
+      "opening"
+    ],
+    "delivery": "hype",
+    "voice": "hype"
+  },
+  {
+    "id": "opening_show",
+    "text": "TKO is live. Every angle is ready.",
+    "tags": [
+      "brand",
+      "live",
+      "opening"
+    ],
+    "delivery": "hype",
+    "voice": "hype"
+  },
+  {
+    "id": "opening_energy",
+    "text": "You can feel the energy before the first hit.",
+    "tags": [
+      "hype",
+      "live",
+      "opening"
+    ],
+    "delivery": "hype",
+    "voice": "hype"
+  },
+  {
+    "id": "victory_roar",
+    "text": "Make some noise for that squad!",
+    "tags": [
+      "closing",
+      "crowd",
+      "victory"
+    ],
+    "delivery": "shout",
+    "voice": "shout"
+  },
+  {
+    "id": "mvp_card",
+    "text": "Put the MVP card on the screen.",
+    "tags": [
+      "analyst",
+      "closing",
+      "mvp",
+      "victory"
+    ],
+    "delivery": "hype",
+    "voice": "hype"
+  },
+  {
+    "id": "mvp_numbers",
+    "text": "The numbers say MVP, and the footage agrees.",
+    "tags": [
+      "analyst",
+      "mvp",
+      "victory"
+    ],
+    "delivery": "hype",
+    "voice": "hype"
+  },
+  {
+    "id": "objective_master",
+    "text": "They controlled every objective that mattered.",
+    "tags": [
+      "analyst",
+      "objective",
+      "victory"
+    ],
+    "delivery": "hype",
+    "voice": "hype"
+  },
+  {
+    "id": "final_replay",
+    "text": "One last replay for the win.",
+    "tags": [
+      "closing",
+      "replay",
+      "victory"
+    ],
+    "delivery": "hype",
+    "voice": "hype"
+  }
+]

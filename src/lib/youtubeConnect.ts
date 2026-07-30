@@ -12,7 +12,7 @@
  *  2. MANUAL (works today, zero setup): the user adds their channel handle or a
  *     few video links once; we build the same LibraryVideo[] and cache it. Every
  *     video still gets a real thumbnail. This is the fallback until the Client ID
- *     is set on killcam.app.
+ *     is set on tko.cam.
  *
  * Thumbnails need no API key: https://i.ytimg.com/vi/<id>/hqdefault.jpg is public.
  */
@@ -24,7 +24,7 @@ const CLIENT_ID = import.meta.env.VITE_YT_CLIENT_ID as string | undefined
 const API_KEY = import.meta.env.VITE_YT_API_KEY as string | undefined
 const SCOPE = 'https://www.googleapis.com/auth/youtube.readonly'
 
-/** True when killcam.app has a Google OAuth Client ID wired up. */
+/** True when tko.cam has a Google OAuth Client ID wired up. */
 export function isYouTubeConnectConfigured(): boolean {
   return typeof CLIENT_ID === 'string' && CLIENT_ID.length > 0
 }
@@ -152,6 +152,111 @@ export async function fetchMyUploads(accessToken: string, max = 200): Promise<Li
   return out
 }
 
+// ---- Handle mode (no OAuth — works inside the mobile WebView) ---------------
+
+/** True when a YouTube Data API key is configured (enables handle → uploads). */
+export function isYouTubeApiConfigured(): boolean {
+  return typeof API_KEY === 'string' && API_KEY.length > 0
+}
+
+function cleanHandle(raw: string): string {
+  const s = raw.trim()
+  const m = s.match(/@([A-Za-z0-9._-]+)/)
+  if (m) return m[1]
+  return s.replace(/^@/, '').replace(/\/.*$/, '')
+}
+
+/**
+ * Pull a channel's public uploads from just a @handle — no OAuth, so it works in
+ * the installed mobile app (where Google blocks the OAuth popup). Needs a
+ * YouTube Data API key (VITE_YT_API_KEY). Resolves handle → uploads playlist →
+ * videos. Returns [] (and callers surface a hint) when no key is configured.
+ */
+export async function fetchUploadsByHandle(handle: string, max = 200): Promise<LibraryVideo[]> {
+  if (!isYouTubeApiConfigured()) return []
+  const h = cleanHandle(handle)
+  if (!h) return []
+  const ch = await ytFetch('channels', { part: 'contentDetails', forHandle: `@${h}` }, undefined)
+  const uploads: string | undefined = ch?.items?.[0]?.contentDetails?.relatedPlaylists?.uploads
+  if (!uploads) return []
+  const out: LibraryVideo[] = []
+  let pageToken = ''
+  while (out.length < max) {
+    const page = await ytFetch(
+      'playlistItems',
+      { part: 'snippet', playlistId: uploads, maxResults: '50', ...(pageToken ? { pageToken } : {}) },
+      undefined,
+    )
+    for (const it of (page.items ?? []) as PlaylistItem[]) {
+      const id = it.snippet?.resourceId?.videoId
+      if (!id) continue
+      out.push({
+        id,
+        title: it.snippet?.title ?? '',
+        description: it.snippet?.description ?? '',
+        publishedAt: it.snippet?.publishedAt ? Date.parse(it.snippet.publishedAt) : Date.now(),
+        channelTitle: it.snippet?.videoOwnerChannelTitle,
+      })
+      if (out.length >= max) break
+    }
+    if (!page.nextPageToken) break
+    pageToken = page.nextPageToken
+  }
+  return out
+}
+
+// ---- TKO's own channel (the produced-video showcase) -----------------------
+
+/**
+ * TKO's YouTube uploads playlist. Every auto-matched multi-angle video the
+ * pipeline assembles is posted to the TKO channel, so this playlist IS the
+ * catalogue of produced videos. Fetching it (public Data API, no OAuth) is how
+ * the in-app feed showcases the TKO channel — every play drives views there,
+ * and a user's own raw upload can never sneak in because it's not on this
+ * channel. Channel UCNyS_K597LOfc-dJwKjRgBg → uploads UUNyS_K597LOfc-dJwKjRgBg.
+ */
+export const TKO_UPLOADS_PLAYLIST = 'UUNyS_K597LOfc-dJwKjRgBg'
+
+export interface TkoUpload {
+  id: string
+  title: string
+  description: string
+  publishedAt: number
+}
+
+/** Recent uploads on the TKO channel, newest first. [] if no API key / on error. */
+export async function fetchTkoUploads(max = 24): Promise<TkoUpload[]> {
+  if (!isYouTubeApiConfigured()) return []
+  const out: TkoUpload[] = []
+  let pageToken = ''
+  while (out.length < max) {
+    let page: { items?: PlaylistItem[]; nextPageToken?: string }
+    try {
+      page = await ytFetch(
+        'playlistItems',
+        { part: 'snippet', playlistId: TKO_UPLOADS_PLAYLIST, maxResults: '50', ...(pageToken ? { pageToken } : {}) },
+        undefined,
+      )
+    } catch {
+      break // key/quota/network — caller falls back gracefully
+    }
+    for (const it of (page.items ?? []) as PlaylistItem[]) {
+      const id = it.snippet?.resourceId?.videoId
+      if (!id) continue
+      out.push({
+        id,
+        title: it.snippet?.title ?? '',
+        description: it.snippet?.description ?? '',
+        publishedAt: it.snippet?.publishedAt ? Date.parse(it.snippet.publishedAt) : Date.now(),
+      })
+      if (out.length >= max) break
+    }
+    if (!page.nextPageToken) break
+    pageToken = page.nextPageToken
+  }
+  return out
+}
+
 // ---- Manual mode (no OAuth needed) -----------------------------------------
 
 /**
@@ -193,6 +298,65 @@ export async function enrichVideos(videos: LibraryVideo[]): Promise<LibraryVideo
     }
   }
   return [...byId.values()]
+}
+
+// ---- Remembering the user's channel so they never re-paste ------------------
+
+const handleKey = (userId: string) => `kc_yt_handle_${userId}`
+
+/** Persist the user's YouTube @handle so Go Live can use it automatically. */
+export function saveHandle(userId: string, handle: string): void {
+  try {
+    const clean = (handle || '').trim().replace(/^@/, '').replace(/\/.*$/, '')
+    if (clean) localStorage.setItem(handleKey(userId), clean)
+  } catch { /* ignore */ }
+}
+
+/** The user's saved YouTube @handle (no leading @), or null. */
+export function loadHandle(userId: string): string | null {
+  try { return localStorage.getItem(handleKey(userId)) || null } catch { return null }
+}
+
+/** The canonical "go live" URL for a channel handle — its live tab. */
+export function youtubeLiveUrl(handle: string): string {
+  return `https://www.youtube.com/@${handle.replace(/^@/, '')}/live`
+}
+
+const channelKey = (userId: string) => `kc_yt_channel_${userId}`
+
+/** Persist the user's resolved YouTube channel id (UC…). */
+export function saveChannelId(userId: string, id: string): void {
+  try { if (id) localStorage.setItem(channelKey(userId), id) } catch { /* ignore */ }
+}
+
+/** The user's cached channel id, or null. */
+export function loadChannelId(userId: string): string | null {
+  try { return localStorage.getItem(channelKey(userId)) || null } catch { return null }
+}
+
+/** The channel's live URL — redirects to its current live broadcast when on air. */
+export function channelLiveUrl(channelId: string): string {
+  return `https://www.youtube.com/channel/${channelId}/live`
+}
+
+/**
+ * Resolve + cache the user's channel id from their already-cached library (we
+ * ask the Data API which channel the first library video belongs to). Lets Go
+ * Live use "your YouTube" automatically even for users who connected before we
+ * started saving the @handle. Cached, best-effort, never throws.
+ */
+export async function resolveChannelId(userId: string): Promise<string | null> {
+  const cached = loadChannelId(userId)
+  if (cached) return cached
+  if (!isYouTubeApiConfigured()) return null
+  const vid = loadLibrary(userId)[0]?.id
+  if (!vid) return null
+  try {
+    const page = await ytFetch('videos', { part: 'snippet', id: vid }, undefined)
+    const ch: string | undefined = page?.items?.[0]?.snippet?.channelId
+    if (ch) { saveChannelId(userId, ch); return ch }
+  } catch { /* best-effort */ }
+  return null
 }
 
 // ---- Local cache so a connect survives reloads ------------------------------

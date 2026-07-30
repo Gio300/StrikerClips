@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { AdSlot } from '@/components/AdSlot'
 import { BRAND } from '@/lib/brand'
+import { IS_MOBILE_STORE_BUILD } from '@/lib/storeBuild'
 
 const DEFAULT_SECONDS = 30
 
@@ -60,7 +62,13 @@ export function CreationSponsorGate({ isPremium, onUnlocked }: Props) {
       </div>
       <p className="text-xs text-gray-500">
         Free accounts help keep {BRAND.name} running. You can’t submit your reel until this
-        finishes — or upgrade to skip.
+        finishes
+        {!IS_MOBILE_STORE_BUILD && (
+          <>
+            {' '}— or <Link to="/upgrade" className="text-accent hover:underline">upgrade to skip the wait</Link>
+          </>
+        )}
+        .
       </p>
       <div className="min-h-[260px]">
         <AdSlot slotId="create-gate" shape="square" className="w-full" />

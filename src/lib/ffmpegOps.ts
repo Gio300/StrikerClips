@@ -40,7 +40,7 @@ async function writeInputs(ffmpeg: FFmpeg, files: File[]): Promise<string[]> {
 
 async function readAndCleanup(ffmpeg: FFmpeg, output: string, inputs: string[], extras: string[] = []): Promise<Blob> {
   const data = await ffmpeg.readFile(output)
-  const blob = new Blob([data], { type: 'video/mp4' })
+  const blob = new Blob([data as BlobPart], { type: 'video/mp4' })
   for (const n of inputs) {
     try { await ffmpeg.deleteFile(n) } catch { /* ignore */ }
   }

@@ -1,5 +1,5 @@
 /**
- * Director Mode engine — the DVR clock behind a KillCam watch party.
+ * Director Mode engine — the DVR clock behind a TKO watch party.
  *
  * The host runs a "program": a YouTube video playing on a timeline the host
  * controls. Viewers watch the SAME video, their player following the host's

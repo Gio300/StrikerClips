@@ -4,6 +4,8 @@ dist-site
 .env
 .env.local
 .env.*.local
+.env.production
+/public/mobile-version.json
 *.log
 .DS_Store
 .cursor/settings.json
@@ -19,5 +21,9 @@ src-tauri/WixTools
 
 # Local dev + on-device verification helpers (this session)
 _*
-/android
 /appicons
+
+# Android release signing — NEVER commit a keystore or its passwords.
+android/keystore.properties
+*.jks
+*.keystore

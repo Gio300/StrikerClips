@@ -73,7 +73,7 @@ export function AutoUploadButton({ reelId, ownerId }: { reelId: string; ownerId:
   if (pending && (pending.status === 'queued' || pending.status === 'processing')) {
     return (
       <div className="rounded-lg border border-chakra/40 bg-chakra/10 p-3 text-sm text-chakra">
-        Queued for KillCam YouTube upload — the worker will pick it up next pass.
+        Queued for TKO YouTube upload — the worker will pick it up next pass.
         {!youtubeAutoUploadEnabled && (
           <p className="text-xs text-gray-400 mt-1">
             Worker is not running on this deploy yet. See{' '}
@@ -90,7 +90,7 @@ export function AutoUploadButton({ reelId, ownerId }: { reelId: string; ownerId:
   if (pending && pending.status === 'uploaded' && pending.youtube_video_id) {
     return (
       <div className="rounded-lg border border-leaf/40 bg-leaf/10 p-3 text-sm text-leaf">
-        Uploaded to KillCam YouTube ·{' '}
+        Uploaded to TKO YouTube ·{' '}
         <a
           href={`https://www.youtube.com/watch?v=${pending.youtube_video_id}`}
           target="_blank"
@@ -111,7 +111,7 @@ export function AutoUploadButton({ reelId, ownerId }: { reelId: string; ownerId:
         onClick={queue}
         className="px-4 py-2 rounded-lg border border-accent/40 bg-accent/10 text-accent text-sm font-semibold hover:bg-accent/20 disabled:opacity-50"
       >
-        {busy ? 'Queuing…' : 'Upload to KillCam YouTube'}
+        {busy ? 'Queuing…' : 'Upload to TKO YouTube'}
       </button>
       {!youtubeAutoUploadEnabled && (
         <p className="text-[11px] text-gray-500">

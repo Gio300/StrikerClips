@@ -30,14 +30,14 @@ export function ProfileTrophies() {
       const { data: profile } = await supabase
         .from('profiles')
         .select('username')
-        .eq('id', userId)
+        .eq('id', userId!)
         .single()
       setUsername(profile?.username ?? null)
 
       const { data } = await supabase
         .from('trophies')
         .select('id, profile_id, trophy_type, metadata, earned_at')
-        .eq('profile_id', userId)
+        .eq('profile_id', userId!)
         .order('earned_at', { ascending: false })
       setTrophies(data ?? [])
       setLoading(false)
@@ -47,7 +47,7 @@ export function ProfileTrophies() {
 
   if (loading) {
     return (
-      <div className="p-8 max-w-4xl mx-auto">
+      <div className="p-4 sm:p-6 lg:p-8 max-w-4xl mx-auto">
         <div className="animate-pulse text-gray-400">Loading trophies...</div>
       </div>
     )

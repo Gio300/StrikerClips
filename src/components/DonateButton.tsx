@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/hooks/useAuth'
 import { donationsEnabled } from '@/lib/featureFlags'
+import { IS_MOBILE_STORE_BUILD } from '@/lib/storeBuild'
 
 /**
  * DonateButton — opens a tip modal and kicks the donor over to Stripe
@@ -24,6 +25,8 @@ export function DonateButton({
   const [message, setMessage] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+
+  if (IS_MOBILE_STORE_BUILD) return null
 
   if (creatorId === user?.id) {
     // Don't let creators tip themselves.

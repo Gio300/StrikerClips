@@ -2,6 +2,9 @@ import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
 import { AdSlot } from '@/components/AdSlot'
+import { Avatar } from '@/components/ui'
+import { ProfileTagBadge } from '@/components/TagBadge'
+import type { ArtifactRarity } from '@/types/database'
 
 type MatchType = 'survival' | 'quick_match' | 'red_white' | 'ninja_world_league' | 'tournament'
 
@@ -12,6 +15,8 @@ type RankedProfile = {
   power_level: number
   rating?: number
   count?: number
+  equipped_tag_text?: string | null
+  equipped_tag_rarity?: ArtifactRarity | null
 }
 
 type HallOfFameCategory = 'tournament_wins' | 'power_level' | 'trophies'
@@ -44,7 +49,7 @@ export function Rankings() {
         }
         const { data: profiles } = await supabase
           .from('profiles')
-          .select('id, username, avatar_url, power_level')
+          .select('id, username, avatar_url, power_level, equipped_tag_text, equipped_tag_rarity')
           .in('id', ids)
         const profileMap = new Map((profiles ?? []).map((p) => [p.id, p]))
         const ordered = (ratings ?? [])
@@ -52,7 +57,7 @@ export function Rankings() {
             const p = profileMap.get(r.profile_id)
             return p ? { ...p, rating: r.rating, power_level: p.power_level ?? 0 } : null
           })
-          .filter((x): x is RankedProfile => x != null)
+          .filter((x): x is NonNullable<typeof x> => x != null)
         setRanked(ordered)
       } catch {
         setRanked([])
@@ -84,19 +89,19 @@ export function Rankings() {
           }
           const { data: profiles } = await supabase
             .from('profiles')
-            .select('id, username, avatar_url, power_level')
+            .select('id, username, avatar_url, power_level, equipped_tag_text, equipped_tag_rarity')
             .in('id', ids)
           const profileMap = new Map((profiles ?? []).map((p) => [p.id, p]))
           setHofData(
             sorted.map(([id, count]) => {
               const p = profileMap.get(id)
               return p ? { ...p, count, power_level: p.power_level ?? 0 } : null
-            }).filter((x): x is RankedProfile => x != null)
+            }).filter((x): x is NonNullable<typeof x> => x != null)
           )
         } else if (hofCategory === 'power_level') {
           const { data: profiles } = await supabase
             .from('profiles')
-            .select('id, username, avatar_url, power_level')
+            .select('id, username, avatar_url, power_level, equipped_tag_text, equipped_tag_rarity')
             .not('power_level', 'is', null)
             .order('power_level', { ascending: false })
             .limit(10)
@@ -123,14 +128,14 @@ export function Rankings() {
           }
           const { data: profiles } = await supabase
             .from('profiles')
-            .select('id, username, avatar_url, power_level')
+            .select('id, username, avatar_url, power_level, equipped_tag_text, equipped_tag_rarity')
             .in('id', ids)
           const profileMap = new Map((profiles ?? []).map((p) => [p.id, p]))
           setHofData(
             sorted.map(([id, count]) => {
               const p = profileMap.get(id)
               return p ? { ...p, count, power_level: p.power_level ?? 0 } : null
-            }).filter((x): x is RankedProfile => x != null)
+            }).filter((x): x is NonNullable<typeof x> => x != null)
           )
         }
       } catch {
@@ -156,7 +161,7 @@ export function Rankings() {
   }
 
   return (
-    <div className="p-8 max-w-4xl mx-auto">
+    <div className="p-4 sm:p-6 lg:p-8 max-w-4xl mx-auto">
       <h1 className="text-2xl font-bold mb-2">Rankings</h1>
       <p className="text-gray-400 mb-6">
         Top players by power rating and Hall of Fame. Submit match results to climb the ranks.
@@ -218,14 +223,11 @@ export function Rankings() {
                     className="flex items-center gap-4 rounded-lg border border-dark-border bg-dark-card p-4 hover:border-accent/50 transition-colors"
                   >
                     <span className="text-gray-500 w-8 font-mono">#{i + 1}</span>
-                    {p.avatar_url ? (
-                      <img src={p.avatar_url} alt="" className="w-10 h-10 rounded-full object-cover" />
-                    ) : (
-                      <div className="w-10 h-10 rounded-full bg-accent/20 flex items-center justify-center text-accent font-bold">
-                        {p.username[0]?.toUpperCase() ?? '?'}
-                      </div>
-                    )}
-                    <span className="font-medium flex-1">{p.username}</span>
+                    <Avatar src={p.avatar_url} name={p.username} seed={p.id} size={40} />
+                    <span className="font-medium flex-1 inline-flex items-center gap-1.5 min-w-0">
+                      <span className="truncate">{p.username}</span>
+                      <ProfileTagBadge user={p} />
+                    </span>
                     <span className="text-accent font-semibold">PL {p.power_level}</span>
                     {p.rating != null && (
                       <span className="text-gray-500 text-sm">Rating {p.rating}</span>
@@ -270,13 +272,7 @@ export function Rankings() {
                   className="flex items-center gap-4 rounded-lg border border-dark-border bg-dark-card p-4 hover:border-accent/50 transition-colors"
                 >
                   <span className="text-gray-500 w-8 font-mono">#{i + 1}</span>
-                  {p.avatar_url ? (
-                    <img src={p.avatar_url} alt="" className="w-10 h-10 rounded-full object-cover" />
-                  ) : (
-                    <div className="w-10 h-10 rounded-full bg-accent/20 flex items-center justify-center text-accent font-bold">
-                      {p.username[0]?.toUpperCase() ?? '?'}
-                    </div>
-                  )}
+                  <Avatar src={p.avatar_url} name={p.username} seed={p.id} size={40} />
                   <span className="font-medium flex-1">{p.username}</span>
                   {hofCategory === 'tournament_wins' && p.count != null && (
                     <span className="text-accent font-semibold">{p.count} wins</span>

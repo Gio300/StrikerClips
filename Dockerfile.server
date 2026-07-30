@@ -1,0 +1,31 @@
+# Full-stack image (real Postgres backend). Serves the product app at '/'
+# and its marketing/install route at '/marketing' from the same bundle.
+FROM node:20-slim AS build
+WORKDIR /app
+ENV VITE_BASE_PATH=/ VITE_REAL_BACKEND=1 VITE_CREATION_AD_SECONDS=0 NODE_ENV=production
+
+# PUBLIC client-side values only — anything VITE_* is compiled into the browser
+# bundle. Kept in sync with ./Dockerfile; see the comment there for why the
+# YouTube OAuth *client id* is safe to bake in (the secret is not used).
+ARG VITE_YT_CLIENT_ID=365406931355-hbda1fq93f2g297ml280ackb5icef72i.apps.googleusercontent.com
+ENV VITE_YT_CLIENT_ID=$VITE_YT_CLIENT_ID
+ARG VITE_YT_API_KEY=
+ENV VITE_YT_API_KEY=$VITE_YT_API_KEY
+ARG BUILD_ID=
+ENV BUILD_ID=$BUILD_ID
+
+COPY package.json package-lock.json ./
+RUN npm ci --include=dev
+COPY . .
+RUN npm run build
+
+FROM node:20-slim AS runtime
+WORKDIR /app
+ENV NODE_ENV=production PORT=8080
+COPY --from=build /app/node_modules ./node_modules
+COPY --from=build /app/dist ./dist
+COPY --from=build /app/server ./server
+COPY --from=build /app/package.json ./package.json
+COPY --from=build /app/tsconfig.json ./tsconfig.json
+EXPOSE 8080
+CMD ["node_modules/.bin/tsx", "server/index.ts"]

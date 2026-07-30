@@ -1,18 +1,45 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
+import {
+  ChevronDown,
+  ChevronUp,
+  ExternalLink,
+  LayoutGrid,
+  Mic2,
+  Plus,
+  Radio,
+  RadioTower,
+  ShieldCheck,
+  SlidersHorizontal,
+  Volume2,
+  VolumeX,
+  Users,
+} from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/hooks/useAuth'
 import { OBSPanel } from '@/components/OBSPanel'
 import { StatCheckQueue } from '@/components/StatCheckQueue'
 import { InviteMenu } from '@/components/InviteMenu'
 import { StreamChat } from '@/components/StreamChat'
+import { ShareButton } from '@/components/ShareButton'
+import { CroppedFrame, TkoWatermark } from '@/components/CroppedFrame'
+import { extractYouTubeId, CLEAN_EMBED_PARAMS } from '@/lib/youtubeApi'
 import type { LiveGroup } from '@/types/database'
 
 type LiveTab = 'streams' | 'broadcast' | 'stat-check'
 
-function extractYouTubeId(url: string): string | null {
-  const m = url.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/)([a-zA-Z0-9_-]{11})/)
-  return m ? m[1] : null
+const LIVE_TABS = [
+  { key: 'streams', label: 'Watch live', Icon: Radio },
+  { key: 'broadcast', label: 'Broadcast', Icon: RadioTower },
+  { key: 'stat-check', label: 'Stat checks', Icon: ShieldCheck },
+] as const
+
+// Build a YouTube embed src with an explicit mute state. Autoplay requires
+// mute=1 (browser policy); the single unmuted feed only gets sound after a
+// user gesture, which is exactly the click that toggles it — so callers change
+// the iframe `key` alongside the src to force a reload when mute flips.
+function ytEmbedSrc(videoId: string, unmuted: boolean): string {
+  return `https://www.youtube.com/embed/${videoId}?autoplay=1&mute=${unmuted ? 0 : 1}&${CLEAN_EMBED_PARAMS}`
 }
 
 type GroupWithMembers = LiveGroup & {
@@ -21,12 +48,17 @@ type GroupWithMembers = LiveGroup & {
 
 export function Live() {
   return (
-    <div className="p-8 max-w-4xl mx-auto">
-      <h1 className="text-2xl font-bold mb-4">Live</h1>
-      <p className="text-gray-400 mb-4">
-        Stream from your machine through OBS to YouTube / Twitch, watch other live runs as a squad,
-        and run tournament Stat Checks — all from one place.
-      </p>
+    <div className="page-shell">
+      <header className="mb-5 border-b border-dark-border pb-5">
+        <div className="flex items-center gap-2 text-kunai">
+          <Radio size={16} />
+          <span className="text-xs font-semibold uppercase">Live control room</span>
+        </div>
+        <h1 className="mt-2 text-2xl font-bold text-white sm:text-3xl">Watch, direct, and broadcast.</h1>
+        <p className="mt-2 max-w-2xl text-sm text-gray-400">
+          Bring in YouTube or Twitch feeds, run a squad multi-view, and send a clean program view to OBS.
+        </p>
+      </header>
       <LiveTabs />
     </div>
   )
@@ -50,19 +82,20 @@ function LiveTabs() {
 
   return (
     <>
-      <div className="flex flex-wrap gap-1 border-b border-dark-border mb-6">
-        {(['streams', 'broadcast', 'stat-check'] as const).map((t) => (
+      <div className="mb-6 flex gap-1 overflow-x-auto rounded-lg border border-dark-border bg-dark-card p-1">
+        {LIVE_TABS.map(({ key, label, Icon }) => (
           <button
-            key={t}
+            key={key}
             type="button"
-            onClick={() => switchTab(t)}
-            className={`px-4 py-2 text-sm rounded-t-lg transition-colors ${
-              tab === t
-                ? 'bg-accent/10 text-accent border-b-2 border-accent'
-                : 'text-gray-400 hover:text-white border-b-2 border-transparent'
+            onClick={() => switchTab(key)}
+            className={`inline-flex min-h-9 flex-1 items-center justify-center gap-2 whitespace-nowrap rounded-md px-3 text-sm font-medium transition-colors ${
+              tab === key
+                ? 'bg-white text-dark'
+                : 'text-gray-400 hover:bg-dark-elevated hover:text-white'
             }`}
           >
-            {t === 'streams' ? 'Streams' : t === 'broadcast' ? 'Broadcast (OBS)' : 'Stat Check'}
+            <Icon size={16} />
+            {label}
           </button>
         ))}
       </div>
@@ -80,7 +113,7 @@ function LiveTabs() {
 
 function StreamsTab() {
   const { user } = useAuth()
-  const [streams, setStreams] = useState<{ id: string; youtube_url: string; title: string | null }[]>([])
+  const [streams, setStreams] = useState<{ id: string; youtube_url: string; title: string | null; is_live?: boolean | null }[]>([])
   const [youtubeUrl, setYoutubeUrl] = useState('')
   const [title, setTitle] = useState('')
   const [loading, setLoading] = useState(true)
@@ -90,6 +123,12 @@ function StreamsTab() {
   const [focusedIndex, setFocusedIndex] = useState(0)
   const [directorNote, setDirectorNote] = useState('')
   const streamCountRef = useRef(0)
+  // Advanced host controls stay collapsed so casual viewers get a simple UI.
+  const [hostToolsOpen, setHostToolsOpen] = useState(false)
+  const [showAddLive, setShowAddLive] = useState(false)
+  // Which single feed carries audio (prevents echo across the multi-view grid).
+  //  undefined → default: the focused feed plays; null → mute all; id → that feed.
+  const [audioStreamId, setAudioStreamId] = useState<string | null | undefined>(undefined)
 
   // Voice / text director: the global VoiceButton dispatches `kc:director`.
   // "all screens" → 4-up, "single" → single, "focus screen N" → focus that cam.
@@ -119,15 +158,18 @@ function StreamsTab() {
   const [groupName, setGroupName] = useState('')
   const [pendingInvites, setPendingInvites] = useState<{ id: string; group_id: string; group?: { name: string } }[]>([])
   const [viewingGroupId, setViewingGroupId] = useState<string | null>(null)
-  const [myStreams, setMyStreams] = useState<{ id: string; title: string | null }[]>([])
+  const [myStreams, setMyStreams] = useState<{ id: string; title: string | null; is_live?: boolean | null }[]>([])
 
   useEffect(() => {
     async function fetch() {
       const { data } = await supabase
         .from('live_streams')
-        .select('id, youtube_url, title')
+        .select('id, youtube_url, title, is_live')
         .order('created_at', { ascending: false })
-      setStreams(data ?? [])
+      // Only feeds that are actually live. A stream ends by setting is_live
+      // false (see handleEndStream); rows created before the flag existed have
+      // is_live undefined and are treated as live, matching ProgramView.
+      setStreams((data ?? []).filter((r) => r.is_live !== false))
       setLoading(false)
     }
     fetch()
@@ -135,7 +177,11 @@ function StreamsTab() {
 
   useEffect(() => {
     if (!user) return
-    supabase.from('live_streams').select('id, title').eq('user_id', user.id).then(({ data }) => setMyStreams(data ?? []))
+    supabase
+      .from('live_streams')
+      .select('id, title, is_live')
+      .eq('user_id', user.id)
+      .then(({ data }) => setMyStreams((data ?? []).filter((r) => r.is_live !== false)))
   }, [user, streams])
 
   useEffect(() => {
@@ -209,6 +255,8 @@ function StreamsTab() {
       user_id: user.id,
       youtube_url: youtubeUrl.trim(),
       title: title.trim() || null,
+      is_live: true,
+      placement: 'profile',
     })
     setAdding(false)
     if (err) {
@@ -219,9 +267,27 @@ function StreamsTab() {
     setTitle('')
     const { data } = await supabase
       .from('live_streams')
-      .select('id, youtube_url, title')
+      .select('id, youtube_url, title, is_live')
       .order('created_at', { ascending: false })
-    setStreams(data ?? [])
+    setStreams((data ?? []).filter((r) => r.is_live !== false))
+  }
+
+  // End one of my own live feeds: flip is_live to false (owner-writable per
+  // TABLE_POLICY) so it drops off every viewer's Live page immediately. We keep
+  // the row (not a hard delete) so its clips/records and share links survive.
+  async function handleEndStream(streamId: string) {
+    if (!user) return
+    const { error: err } = await supabase
+      .from('live_streams')
+      .update({ is_live: false })
+      .eq('id', streamId)
+      .eq('user_id', user.id)
+    if (err) {
+      setError(err.message)
+      return
+    }
+    setMyStreams((prev) => prev.filter((s) => s.id !== streamId))
+    setStreams((prev) => prev.filter((s) => s.id !== streamId))
   }
 
   async function handleCreateGroup(e: React.FormEvent) {
@@ -284,6 +350,11 @@ function StreamsTab() {
   const displayStreams = viewingGroupId ? groupStreams : streams
   streamCountRef.current = displayStreams.length
 
+  // The one feed with sound: default to the focused feed, unless the host
+  // muted everything (null) or picked a specific feed's speaker (id).
+  const activeAudioId =
+    audioStreamId === undefined ? displayStreams[focusedIndex]?.id ?? null : audioStreamId
+
   if (loading) {
     return (
       <div className="flex items-center justify-center py-8">
@@ -295,39 +366,149 @@ function StreamsTab() {
   return (
     <>
       {user && (
-        <form onSubmit={handleAdd} className="rounded-xl border border-dark-border bg-dark-card p-6 mb-8">
-          <h2 className="font-semibold mb-4">Add stream</h2>
-          <div className="space-y-4">
-            <div>
-              <label className="block text-sm text-gray-400 mb-1">YouTube URL</label>
-              <input
-                type="url"
-                value={youtubeUrl}
-                onChange={(e) => setYoutubeUrl(e.target.value)}
-                className="w-full px-4 py-2 rounded-lg bg-dark border border-dark-border text-white"
-                placeholder="https://youtube.com/watch?v=..."
-              />
+        <div className="mb-6 overflow-hidden rounded-lg border border-dark-border bg-dark-card">
+          <button
+            type="button"
+            onClick={() => setHostToolsOpen((v) => !v)}
+            className="flex w-full items-center justify-between px-4 py-3 text-left transition-colors hover:bg-dark-elevated"
+          >
+            <span className="flex items-center gap-2 font-semibold">
+              <SlidersHorizontal size={17} className="text-accent" />
+              Host tools
+            </span>
+            {hostToolsOpen
+              ? <ChevronUp size={17} className="text-gray-500" />
+              : <ChevronDown size={17} className="text-gray-500" />}
+          </button>
+
+          {hostToolsOpen && (
+            <div className="space-y-6 border-t border-dark-border p-4 sm:p-5">
+              {/* Add a live — reveal an input, reuse the existing insert path. */}
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <h3 className="font-medium">Feeds</h3>
+                  <button
+                    type="button"
+                    onClick={() => setShowAddLive((v) => !v)}
+                    className="btn-ghost min-h-9 px-3 py-1.5 text-sm"
+                  >
+                    {showAddLive ? 'Close' : <><Plus size={15} /> Add feed</>}
+                  </button>
+                </div>
+                {showAddLive && (
+                  <form onSubmit={handleAdd} className="space-y-3">
+                    <div>
+                      <label className="block text-sm text-gray-400 mb-1">YouTube / stream link</label>
+                      <input
+                        type="url"
+                        value={youtubeUrl}
+                        onChange={(e) => setYoutubeUrl(e.target.value)}
+                        className="field"
+                        placeholder="https://youtube.com/watch?v=..."
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm text-gray-400 mb-1">Title (optional)</label>
+                      <input
+                        type="text"
+                        value={title}
+                        onChange={(e) => setTitle(e.target.value)}
+                        className="field"
+                        placeholder="My stream"
+                      />
+                    </div>
+                    {error && <p className="text-kunai text-sm">{error}</p>}
+                    <button
+                      type="submit"
+                      disabled={adding}
+                      className="btn-primary"
+                    >
+                      {adding ? 'Adding...' : <><Plus size={16} /> Add feed</>}
+                    </button>
+                    <p className="text-xs text-gray-500">Keep pasting links to stack more feeds into the grid.</p>
+                  </form>
+                )}
+
+                {/* My live feeds — lets a host take a feed offline so it stops
+                    showing on everyone's Live page. Without this a stream stays
+                    "live" forever. */}
+                {myStreams.length > 0 && (
+                  <div className="mt-4 space-y-2">
+                    <h4 className="text-sm font-medium text-gray-400">My live feeds</h4>
+                    {myStreams.map((s) => (
+                      <div key={s.id} className="flex items-center justify-between rounded-lg border border-dark-border bg-dark px-3 py-2">
+                        <span className="text-sm truncate mr-2">
+                          <span className="inline-block w-2 h-2 rounded-full bg-kunai mr-2 align-middle animate-pulse" />
+                          {s.title || 'Untitled feed'}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => handleEndStream(s.id)}
+                          className="shrink-0 rounded-md border border-kunai/60 px-3 py-1 text-xs font-semibold text-kunai hover:bg-kunai/10"
+                        >
+                          End live
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Layout & audio */}
+              <div>
+                <h3 className="mb-2 flex items-center gap-2 font-medium">
+                  <LayoutGrid size={16} className="text-gray-500" />
+                  Layout and audio
+                </h3>
+                <div className="flex flex-wrap gap-2">
+                  {displayStreams.length >= 2 && (
+                    <button
+                      type="button"
+                      onClick={() => setMultiView(!multiView)}
+                      className="btn-ghost text-sm"
+                    >
+                      {multiView ? 'Single view' : 'Multi-view (4-up)'}
+                    </button>
+                  )}
+                  {multiView && (
+                    <button
+                      type="button"
+                      onClick={() => setAudioStreamId(null)}
+                      className="btn-ghost text-sm"
+                    >
+                      <VolumeX size={16} />
+                      Mute all
+                    </button>
+                  )}
+                </div>
+                <p className="text-xs text-gray-500 mt-2">
+                  In multi-view, tap the speaker on a feed to hear only that one — the rest stay muted so there's no echo.
+                </p>
+              </div>
+
+              {/* Program view — clean broadcast output for capture / OBS. */}
+              <div>
+                <h3 className="mb-2 flex items-center gap-2 font-medium">
+                  <RadioTower size={16} className="text-gray-500" />
+                  Program view
+                </h3>
+                <a
+                  href="/program"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="btn-ghost text-sm"
+                >
+                  Open program view
+                  <ExternalLink size={15} />
+                </a>
+                <p className="text-xs text-gray-500 mt-2">
+                  A full-bleed, chrome-free composite of the live feeds — screen-record it or point OBS at it while you run
+                  this dashboard.
+                </p>
+              </div>
             </div>
-            <div>
-              <label className="block text-sm text-gray-400 mb-1">Title (optional)</label>
-              <input
-                type="text"
-                value={title}
-                onChange={(e) => setTitle(e.target.value)}
-                className="w-full px-4 py-2 rounded-lg bg-dark border border-dark-border text-white"
-                placeholder="My stream"
-              />
-            </div>
-            {error && <p className="text-kunai text-sm">{error}</p>}
-            <button
-              type="submit"
-              disabled={adding}
-              className="px-4 py-2 rounded-lg bg-accent text-dark font-semibold disabled:opacity-50"
-            >
-              {adding ? 'Adding...' : 'Add stream'}
-            </button>
-          </div>
-        </form>
+          )}
+        </div>
       )}
 
       {!user && (
@@ -337,9 +518,12 @@ function StreamsTab() {
       )}
 
       {user && (
-        <div className="rounded-xl border border-dark-border bg-dark-card p-6 mb-8">
-          <h2 className="font-semibold mb-4">Live Groups</h2>
-          <p className="text-gray-400 text-sm mb-4">
+        <section className="mb-6 border-y border-dark-border py-5">
+          <h2 className="mb-2 flex items-center gap-2 font-semibold">
+            <Users size={17} className="text-accent" />
+            Live groups
+          </h2>
+          <p className="mb-4 text-sm text-gray-400">
             Create a group, invite others. When all are live, watch together in multi-view.
           </p>
           <form onSubmit={handleCreateGroup} className="flex gap-2 mb-4">
@@ -347,10 +531,10 @@ function StreamsTab() {
               type="text"
               value={groupName}
               onChange={(e) => setGroupName(e.target.value)}
-              className="flex-1 px-4 py-2 rounded-lg bg-dark border border-dark-border text-white"
+              className="field flex-1"
               placeholder="Group name"
             />
-            <button type="submit" className="px-4 py-2 rounded-lg bg-accent text-dark font-semibold">
+            <button type="submit" className="btn-primary">
               Create group
             </button>
           </form>
@@ -471,52 +655,100 @@ function StreamsTab() {
               ))}
             </div>
           )}
-        </div>
+        </section>
       )}
 
       {directorNote && (
-        <div className="mb-3 rounded-lg border border-accent/40 bg-accent/10 px-4 py-2 text-sm text-accent">🎙 {directorNote}</div>
+        <div className="mb-3 flex items-center gap-2 rounded-lg border border-accent/40 bg-accent/10 px-4 py-2 text-sm text-accent">
+          <Mic2 size={15} />
+          {directorNote}
+        </div>
       )}
 
       <div className="flex items-center justify-between mb-4">
-        <h2 className="font-semibold">{viewingGroupId ? 'Group streams' : 'Live now'}</h2>
-        {displayStreams.length >= 2 && (
+        <h2 className="section-heading">{viewingGroupId ? 'Group streams' : 'Live now'}</h2>
+        {displayStreams.length >= 2 && !multiView && (
           <button
             type="button"
-            onClick={() => setMultiView(!multiView)}
-            className="px-4 py-2 rounded-lg border border-dark-border text-gray-400 hover:text-accent hover:border-accent/50 text-sm"
+            onClick={() => { setHostToolsOpen(true); setMultiView(true) }}
+            className="btn-ghost text-sm"
           >
-            {multiView ? 'Single view' : 'Multi-view (4-up)'}
+            <LayoutGrid size={16} />
+            Multi-view (4-up)
+          </button>
+        )}
+        {multiView && (
+          <button
+            type="button"
+            onClick={() => setMultiView(false)}
+            className="btn-ghost text-sm"
+          >
+            Single view
           </button>
         )}
       </div>
 
       {displayStreams.length === 0 ? (
-        <div className="rounded-xl border border-dark-border bg-dark-card p-8 text-center text-gray-400">
-          {viewingGroupId ? 'No streams linked in this group yet.' : 'No streams yet.'}
+        <div className="flex min-h-52 flex-col items-center justify-center rounded-lg border border-dashed border-dark-border bg-dark-card/60 p-6 text-center">
+          <Radio size={30} className="mb-3 text-gray-600" />
+          <p className="text-sm text-gray-400">
+            {viewingGroupId ? 'No streams are linked to this group yet.' : 'Nobody is live right now.'}
+          </p>
+          {user && !viewingGroupId && (
+            <button
+              type="button"
+              onClick={() => {
+                setHostToolsOpen(true)
+                setShowAddLive(true)
+              }}
+              className="btn-primary mt-4"
+            >
+              <Plus size={16} />
+              Add a live feed
+            </button>
+          )}
         </div>
       ) : multiView && displayStreams.length >= 2 ? (
         <div className="space-y-4">
           <div className="grid lg:grid-cols-[minmax(0,1fr)_320px] gap-4">
-            <div className="rounded-xl border-2 border-accent overflow-hidden">
+            <div className="overflow-hidden rounded-lg border border-accent">
               {(() => {
                 const focused = displayStreams[focusedIndex]
                 const videoId = focused && extractYouTubeId(focused.youtube_url)
+                const focusedUnmuted = !!focused && activeAudioId === focused.id
                 return (
                   <>
-                    <div className="aspect-video">
+                    <div className="relative aspect-video">
                       {videoId && (
-                        <iframe
-                          src={`https://www.youtube.com/embed/${videoId}`}
-                          title={focused?.title ?? 'Stream'}
-                          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-                          allowFullScreen
-                          className="w-full h-full"
-                        />
+                        <CroppedFrame>
+                          <iframe
+                            key={`focus-${focused.id}-${focusedUnmuted ? 'on' : 'off'}`}
+                            src={ytEmbedSrc(videoId, focusedUnmuted)}
+                            title={focused?.title ?? 'Stream'}
+                            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                            allowFullScreen
+                            className="w-full h-full"
+                          />
+                        </CroppedFrame>
                       )}
+                      <TkoWatermark />
                     </div>
-                    <div className="p-2 bg-dark-card">
+                    <div className="p-2 bg-dark-card flex items-center justify-between gap-2">
                       <h3 className="font-medium truncate">{focused?.title ?? 'Stream'}</h3>
+                      {focused && (
+                        <button
+                          type="button"
+                          onClick={() => setAudioStreamId(focusedUnmuted ? null : focused.id)}
+                          title={focusedUnmuted ? 'Mute this feed' : 'Unmute this feed (mutes the others)'}
+                          className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border ${
+                            focusedUnmuted
+                              ? 'border-accent text-accent'
+                              : 'border-dark-border text-gray-400 hover:text-accent hover:border-accent/50'
+                          }`}
+                        >
+                          {focusedUnmuted ? <Volume2 size={15} /> : <VolumeX size={15} />}
+                        </button>
+                      )}
                     </div>
                   </>
                 )
@@ -533,28 +765,48 @@ function StreamsTab() {
             {displayStreams.slice(0, 4).map((stream, i) => {
               const videoId = extractYouTubeId(stream.youtube_url)
               const isFocused = i === focusedIndex
+              // The focused feed's audio is carried by the big focus iframe, so
+              // its thumbnail must ALWAYS be muted — otherwise both play the same
+              // audio and cause echo/feedback.
+              const unmuted = !isFocused && activeAudioId === stream.id
               return (
-                <button
+                <div
                   key={stream.id}
-                  type="button"
+                  role="button"
+                  tabIndex={0}
                   onClick={() => setFocusedIndex(i)}
-                  className={`rounded-lg border overflow-hidden text-left transition-all ${
+                  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') setFocusedIndex(i) }}
+                  className={`rounded-lg border overflow-hidden text-left transition-all cursor-pointer ${
                     isFocused ? 'border-accent ring-2 ring-accent' : 'border-dark-border hover:border-accent/50'
                   }`}
                 >
-                  <div className="aspect-video">
+                  <div className="aspect-video relative">
                     {videoId && (
-                      <iframe
-                        src={`https://www.youtube.com/embed/${videoId}`}
-                        title={stream.title ?? 'Stream'}
-                        className="w-full h-full pointer-events-none"
-                      />
+                      <CroppedFrame>
+                        <iframe
+                          key={`thumb-${stream.id}-${unmuted ? 'on' : 'off'}`}
+                          src={ytEmbedSrc(videoId, unmuted)}
+                          title={stream.title ?? 'Stream'}
+                          allow="autoplay; encrypted-media; picture-in-picture"
+                          className="w-full h-full"
+                        />
+                      </CroppedFrame>
                     )}
+                    <button
+                      type="button"
+                      onClick={(e) => { e.stopPropagation(); setAudioStreamId(unmuted ? null : stream.id) }}
+                      title={unmuted ? 'Mute this feed' : 'Unmute this feed (mutes the others)'}
+                      className={`absolute bottom-1 right-1 flex h-7 w-7 items-center justify-center rounded bg-black/70 ${
+                        unmuted ? 'text-accent' : 'text-white'
+                      }`}
+                    >
+                      {unmuted ? <Volume2 size={14} /> : <VolumeX size={14} />}
+                    </button>
                   </div>
                   <div className="p-1 bg-dark-card">
                     <span className="text-xs truncate block">{stream.title ?? 'Stream'}</span>
                   </div>
-                </button>
+                </div>
               )
             })}
           </div>
@@ -566,7 +818,7 @@ function StreamsTab() {
             return (
               <div
                 key={stream.id}
-                className="rounded-xl border border-dark-border bg-dark-card overflow-hidden"
+                className="overflow-hidden rounded-lg border border-dark-border bg-dark-card"
               >
                 <div className="grid lg:grid-cols-[minmax(0,1fr)_320px]">
                   <div>
@@ -581,8 +833,13 @@ function StreamsTab() {
                         />
                       )}
                     </div>
-                    <div className="p-4">
-                      <h3 className="font-medium">{stream.title ?? 'Stream'}</h3>
+                    <div className="p-4 flex items-center justify-between gap-2">
+                      <h3 className="font-medium truncate">{stream.title ?? 'Stream'}</h3>
+                      <ShareButton
+                        url={`https://tko.cam/watch/${stream.id}?u=${encodeURIComponent(stream.youtube_url)}${stream.title ? `&t=${encodeURIComponent(stream.title)}` : ''}`}
+                        title={stream.title ?? 'Live on TKO'}
+                        text="Watch this live on TKO"
+                      />
                     </div>
                   </div>
                   <div className="border-t lg:border-t-0 lg:border-l border-dark-border">

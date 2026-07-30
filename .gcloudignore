@@ -14,4 +14,11 @@ _*
 *.log
 *.mp4
 *.mp4.tmp
+# …but DO ship the mobile-friendly web encodes + posters (served by the site
+# build at /videos/…). We ship ONLY the light *-web.mp4 files + .jpg posters;
+# the full-res originals are excluded to keep the deploy upload small — the
+# player lists <slug>-web.mp4 first, so the site is unaffected.
+!public/videos/
+!public/videos/*-web.mp4
+!public/videos/*.jpg
 /local-downloads/

@@ -159,7 +159,7 @@ export function SubmitResult() {
 
   return (
     <AuthGuard>
-      <div className="p-8 max-w-2xl mx-auto">
+      <div className="p-4 sm:p-6 lg:p-8 max-w-2xl mx-auto">
         <h1 className="text-2xl font-bold mb-2">Submit Match Result</h1>
         <p className="text-gray-400 mb-6">Upload a screenshot and tag winner/losers to update power ratings.</p>
 

@@ -1,11 +1,10 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
-import { useAuth } from '@/hooks/useAuth'
+import { nameQualityError, isValidName } from '@/lib/nameQuality'
 import type { Reel } from '@/types/database'
 
 export function CreateMatch() {
-  const { user } = useAuth()
   const navigate = useNavigate()
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
@@ -14,6 +13,8 @@ export function CreateMatch() {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
+
+  const nameOk = isValidName(name, { label: 'match name' })
 
   useEffect(() => {
     async function fetch() {
@@ -33,8 +34,9 @@ export function CreateMatch() {
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     setError('')
-    if (!name.trim()) {
-      setError('Enter a name')
+    const nameErr = nameQualityError(name, { label: 'match name' })
+    if (nameErr) {
+      setError(nameErr)
       return
     }
     setSaving(true)
@@ -52,7 +54,7 @@ export function CreateMatch() {
   }
 
   return (
-    <div className="p-8 max-w-2xl mx-auto">
+    <div className="p-4 sm:p-6 lg:p-8 max-w-2xl mx-auto">
       <h1 className="text-2xl font-bold mb-6">Create Match</h1>
       <form onSubmit={handleSubmit} className="space-y-6">
         <div>
@@ -64,6 +66,9 @@ export function CreateMatch() {
             className="w-full px-4 py-2 rounded-lg bg-dark border border-dark-border text-white focus:outline-none focus:border-accent"
             placeholder="Weekend Finals"
           />
+          <p className="mt-1 text-xs text-gray-500">
+            At least 2 letters or numbers — emoji or symbols alone won't do.
+          </p>
         </div>
         <div>
           <label className="block text-sm text-gray-400 mb-1">Description</label>
@@ -98,7 +103,7 @@ export function CreateMatch() {
         {error && <p className="text-red-400 text-sm">{error}</p>}
         <button
           type="submit"
-          disabled={saving}
+          disabled={saving || !nameOk}
           className="w-full py-3 rounded-lg bg-accent text-dark font-semibold hover:shadow-glow disabled:opacity-50"
         >
           {saving ? 'Creating...' : 'Create Match'}

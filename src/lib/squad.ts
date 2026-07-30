@@ -1,14 +1,16 @@
 /**
- * Squad shelf — the "use my friends' clips" model.
+ * Squad shelf — the "use clips from people you follow" model.
  *
- * The whole point (and the elegant part): every clip a KillCam user makes is
- * published to KillCam's own YouTube channel and catalogued with its owner,
- * category and timestamp. So "use a friend's clip" is not a cross-account
- * YouTube login — it's just filtering our shared catalog to that friend. This
- * model is that catalog view: members you're squadded with, and their clips,
- * grouped so you can scroll a friend and drop their K.O.s straight into a reel.
+ * TKO uses a FOLLOW graph (one-directional) plus clan membership — not
+ * mutual friends. The whole point (and the elegant part): every clip a TKO
+ * user makes is published to TKO's own YouTube channel and catalogued with
+ * its owner, category and timestamp. So "use someone's clip" is not a
+ * cross-account YouTube login — it's just filtering our shared catalog to that
+ * person. This model is that catalog view: members in your circle (people you
+ * follow or share a clan with), and their clips, grouped so you can scroll a
+ * squadmate and drop their K.O.s straight into a reel.
  *
- * Visibility is a KillCam-side permission (the videos are unlisted on YouTube),
+ * Visibility is a TKO-side permission (the videos are unlisted on YouTube),
  * so a clip is shareable to your squad without being exposed to the internet.
  *
  * Pure/testable; the backend just supplies real members + clips instead of the
@@ -17,7 +19,7 @@
 
 import type { ClipCategory } from './clipSearch'
 
-export type Visibility = 'public' | 'friends' | 'private'
+export type Visibility = 'public' | 'followers' | 'private'
 
 export type SquadMember = {
   id: string
@@ -27,7 +29,7 @@ export type SquadMember = {
 }
 
 export type SquadClip = {
-  id: string // youtube video id (on KillCam's channel)
+  id: string // youtube video id (on TKO's channel)
   ownerId: string
   ownerName: string
   category: ClipCategory
@@ -36,12 +38,16 @@ export type SquadClip = {
   visibility: Visibility
 }
 
-/** Can the viewer use this clip? Owner always can; friends see friends+public. */
-export function canUseClip(clip: SquadClip, viewerId: string, isFriend: boolean): boolean {
+/**
+ * Can the viewer use this clip? Owner always can; a 'followers' clip is usable
+ * when the viewer is in the owner's circle — i.e. `inCircle` is true because you
+ * follow them or you share a clan/squad.
+ */
+export function canUseClip(clip: SquadClip, viewerId: string, inCircle: boolean): boolean {
   if (clip.ownerId === viewerId) return true
   if (clip.visibility === 'private') return false
   if (clip.visibility === 'public') return true
-  return isFriend // 'friends'
+  return inCircle // 'followers'
 }
 
 /** A member's usable clips, newest first. */
@@ -77,7 +83,7 @@ export function ytUrl(clip: SquadClip): string {
   return `https://www.youtube.com/watch?v=${clip.id}`
 }
 
-// ---- Demo squad (replaced by the real friend graph once the backend is in) --
+// ---- Demo squad (replaced by the real follow/clan graph once the backend is in) --
 
 const DAY = 86_400_000
 
@@ -89,7 +95,7 @@ export function demoSquad(now: number = Date.now()): { members: SquadMember[]; c
   ]
   const mk = (
     ownerId: string, ownerName: string, id: string, category: ClipCategory, title: string, ageDays: number,
-  ): SquadClip => ({ id, ownerId, ownerName, category, title, publishedAt: now - ageDays * DAY, visibility: 'friends' })
+  ): SquadClip => ({ id, ownerId, ownerName, category, title, publishedAt: now - ageDays * DAY, visibility: 'followers' })
 
   const clips: SquadClip[] = [
     mk('u_rekt', 'Rekt', 'dPCS6ACHeQ0', 'kill', 'Triple K.O. — ranked', 1),

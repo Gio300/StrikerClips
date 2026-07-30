@@ -106,7 +106,7 @@ export function useInviteContext(): InviteContext {
           id: s.id,
           name: s.name,
         })),
-        myPendingStatChecks: ((sc.data ?? []) as StatCheckRow[])
+        myPendingStatChecks: ((sc.data ?? []) as unknown as StatCheckRow[])
           .filter((r): r is StatCheckRow & { tournament_id: string } => Boolean(r.tournament_id))
           .map((r) => {
             const t = Array.isArray(r.tournaments) ? r.tournaments[0] : r.tournaments
