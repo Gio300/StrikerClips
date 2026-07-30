@@ -8,7 +8,8 @@
 // and a player's "My Clips" produced section read.
 import { describe, it, expect } from 'vitest'
 import request from 'supertest'
-import { makeApp } from './testHarness'
+import { makeApp, makeDb } from './testHarness'
+import { createApp } from './app'
 
 const ADULT_DOB = '1995-06-15'
 
@@ -97,6 +98,80 @@ describe('live_sessions — the unified "who is live right now" indicator', () =
     })
     expect(live.status).toBe(200)
     expect(live.body.data.length).toBe(0)
+  })
+})
+
+describe('live_sessions — stale sessions stop counting as live', () => {
+  const pool = makeDb()
+  const app = createApp(pool)
+  let host: Who
+
+  it('sets up a host', async () => {
+    host = await signUp(app, 'stale@live.gg', 'stale_host')
+  })
+
+  it('a live session older than the TTL is filtered out of the public "who is live" read', async () => {
+    const created = await db(app, host, {
+      table: 'live_sessions', action: 'insert', single: true,
+      values: { kind: 'host', title: 'goes stale', status: 'live', watch_url: 'https://youtu.be/stale1' },
+    })
+    expect(created.status).toBe(200)
+    const id = created.body.data.id
+
+    // Fresh: it shows up.
+    const fresh = await db(app, null, {
+      table: 'live_sessions', action: 'select', columns: '*',
+      filters: [{ col: 'status', op: 'eq', val: 'live' }],
+    })
+    expect(fresh.body.data.some((s: any) => s.id === id)).toBe(true)
+
+    // Backdate started_at well past the TTL — simulate a session that never
+    // refreshed (host closed the tab / lost network).
+    await pool.query(
+      "update live_sessions set started_at = now() - interval '2 hours' where id=$1",
+      [id],
+    )
+
+    // The public read now excludes it and the cleanup has ended it.
+    const live = await db(app, null, {
+      table: 'live_sessions', action: 'select', columns: '*',
+      filters: [{ col: 'status', op: 'eq', val: 'live' }],
+    })
+    expect(live.body.data.some((s: any) => s.id === id)).toBe(false)
+    const row = await pool.query('select status from live_sessions where id=$1', [id])
+    expect(row.rows[0].status).toBe('ended')
+  })
+})
+
+describe('live_sessions — a live session requires a YouTube link', () => {
+  const pool = makeDb()
+  const app = createApp(pool)
+  let host: Who
+
+  it('sets up a host', async () => {
+    host = await signUp(app, 'yt@live.gg', 'yt_host')
+  })
+
+  it('refuses to go live with a non-YouTube watch_url when no handle is linked', async () => {
+    const r = await db(app, host, {
+      table: 'live_sessions', action: 'insert', single: true,
+      values: { kind: 'host', title: 'not youtube', status: 'live', watch_url: 'https://twitch.tv/someone' },
+    })
+    expect(r.status).toBe(400)
+    expect(r.body.error).toMatch(/youtube/i)
+  })
+
+  it('resolves the watch_url from the host\'s linked YouTube handle when none is given', async () => {
+    await pool.query(
+      'insert into user_youtube_links (user_id, url) values ($1,$2)',
+      [host.id, 'https://www.youtube.com/@yt_host'],
+    )
+    const r = await db(app, host, {
+      table: 'live_sessions', action: 'insert', single: true,
+      values: { kind: 'host', title: 'auto-resolved', status: 'live' },
+    })
+    expect(r.status).toBe(200)
+    expect(r.body.data.watch_url).toBe('https://www.youtube.com/@yt_host')
   })
 })
 

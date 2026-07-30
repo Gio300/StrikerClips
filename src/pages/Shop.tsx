@@ -202,6 +202,12 @@ export function Shop() {
           </p>
         </div>
         <div className="flex flex-wrap items-center justify-end gap-3">
+          <Link
+            to="/forge/physical"
+            className="rounded-lg border border-kunai/40 bg-kunai/10 px-3 py-2 text-xs font-semibold text-kunai"
+          >
+            Shop physical shirts
+          </Link>
           <div>
             <div className="flex items-center gap-2 text-lg font-bold text-accent">
               <Coins size={18} />

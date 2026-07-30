@@ -10,10 +10,12 @@ import { invalidateInviteContext } from '@/hooks/useInviteContext'
 import { notify, notifyMany } from '@/lib/notifications'
 import { useEntitlements } from '@/hooks/useEntitlements'
 import { predictionQuota, predictionUpgradeNudge } from '@/lib/tiers'
+import { IS_MOBILE_STORE_BUILD } from '@/lib/storeBuild'
 import { oracleBadgeForCorrect, BADGES } from '@/lib/badges'
 import { BadgeChip } from '@/components/BadgeChip'
 import { Avatar } from '@/components/ui'
 import { TournamentPrizePoolPanel } from '@/components/TournamentPrizePoolPanel'
+import { TournamentBracket } from '@/components/TournamentBracket'
 import { effectiveDisplayName } from '@/lib/founder'
 import { isTkoHost } from '@/lib/tkoKing'
 import {
@@ -62,7 +64,7 @@ type SubmissionRow = StatCheckSubmission & { submitter_username?: string }
 // Top-level page
 // ─────────────────────────────────────────────────────────────────────────
 
-type Section = 'overview' | 'entrants' | 'stat-check' | 'admins' | 'results' | 'chat'
+type Section = 'overview' | 'entrants' | 'bracket' | 'stat-check' | 'admins' | 'results' | 'chat'
 
 export function TournamentDetail() {
   const { id } = useParams()
@@ -80,7 +82,7 @@ export function TournamentDetail() {
   const initialSection: Section = (() => {
     if (searchParams.get('chat') === '1') return 'chat'
     const s = searchParams.get('section')
-    const valid: Section[] = ['overview', 'entrants', 'stat-check', 'admins', 'results', 'chat']
+    const valid: Section[] = ['overview', 'entrants', 'bracket', 'stat-check', 'admins', 'results', 'chat']
     return valid.includes(s as Section) ? (s as Section) : 'overview'
   })()
   const [section, setSection] = useState<Section>(initialSection)
@@ -204,7 +206,7 @@ export function TournamentDetail() {
     )
   }
 
-  const sections: Section[] = ['overview', 'entrants', 'stat-check', 'admins', 'results', 'chat']
+  const sections: Section[] = ['overview', 'entrants', 'bracket', 'stat-check', 'admins', 'results', 'chat']
 
   // Absolute link back to this tournament's chatroom for sharing/inviting.
   const shareOrigin =
@@ -310,6 +312,14 @@ export function TournamentDetail() {
         />
       )}
 
+      {section === 'bracket' && (
+        <TournamentBracket
+          tournamentId={tournament.id}
+          entrants={entrants.filter((entrant) => entrant.status === 'accepted')}
+          canManage={Boolean(isAdmin || isOwner)}
+        />
+      )}
+
       {section === 'stat-check' && (
         <StatCheckSection
           tournamentId={tournament.id}
@@ -376,6 +386,8 @@ function labelFor(s: Section): string {
       return 'Overview'
     case 'entrants':
       return 'Entrants'
+    case 'bracket':
+      return 'Bracket'
     case 'stat-check':
       return 'Stat Check'
     case 'admins':
@@ -2022,7 +2034,9 @@ function OraclePredictionCard({
       setFreeText('')
       bump()
     } else if (res.reason === 'quota') {
-      setError(predictionUpgradeNudge(tier))
+      setError(IS_MOBILE_STORE_BUILD
+        ? 'Prediction limit reached. Additional prediction capacity is not available in the mobile app.'
+        : predictionUpgradeNudge(tier))
     } else if (res.reason === 'exists') {
       setError('You already have an open prediction on this tournament.')
     } else {
@@ -2134,10 +2148,16 @@ function OraclePredictionCard({
       ) : atCap ? (
         // At their tier cap and no prediction here yet — nudge to upgrade.
         <div className="rounded-lg border border-chakra/40 bg-chakra/10 p-4">
-          <p className="text-sm text-chakra">{predictionUpgradeNudge(tier)}</p>
-          <Link to="/upgrade" className="mt-2 inline-block text-xs text-accent hover:underline">
-            See tiers →
-          </Link>
+          <p className="text-sm text-chakra">
+            {IS_MOBILE_STORE_BUILD
+              ? 'Prediction limit reached. Additional prediction capacity is not available in the mobile app.'
+              : predictionUpgradeNudge(tier)}
+          </p>
+          {!IS_MOBILE_STORE_BUILD && (
+            <Link to="/upgrade" className="mt-2 inline-block text-xs text-accent hover:underline">
+              See tiers →
+            </Link>
+          )}
         </div>
       ) : (
         // Make a new prediction.

@@ -1,6 +1,7 @@
 import { Pause, Play, Zap } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { useAutoMerge } from '@/hooks/useAutoMerge'
+import { IS_MOBILE_STORE_BUILD } from '@/lib/storeBuild'
 
 /**
  * AUTO-MERGE status and future-use consent for the signed-in player.
@@ -67,7 +68,7 @@ export function AutoMergeStatus({ className }: { className?: string }) {
 
   const needs: { label: string; to: string }[] = []
   if (!youtubeConnected) needs.push({ label: 'Connect YouTube', to: '/connect' })
-  if (!hasPaid) needs.push({ label: 'Go Pro', to: '/upgrade' })
+  if (!hasPaid && !IS_MOBILE_STORE_BUILD) needs.push({ label: 'Go Pro', to: '/upgrade' })
 
   return (
     <div
@@ -75,7 +76,9 @@ export function AutoMergeStatus({ className }: { className?: string }) {
     >
       <div className="font-semibold text-white">Auto-merge: locked.</div>
       <p className="mt-1 text-xs text-gray-400">
-        Connect YouTube and subscribe to synchronize recorded games across players.
+        {IS_MOBILE_STORE_BUILD && !hasPaid
+          ? 'Auto-merge is not available in the mobile app.'
+          : 'Connect YouTube and subscribe to synchronize recorded games across players.'}
       </p>
       <div className="mt-2 flex flex-wrap gap-2">
         {needs.map((need) => (

@@ -25,10 +25,7 @@ import { Live } from '@/pages/Live'
 import { LiveHub } from '@/pages/LiveHub'
 import { Director } from '@/pages/Director'
 import { Host } from '@/pages/Host'
-import { LiveDashboard } from '@/pages/LiveDashboard'
-import { Broadcast } from '@/pages/Broadcast'
 import { ProgramView } from '@/pages/ProgramView'
-import { GoLive } from '@/pages/GoLive'
 import { LiveWatch } from '@/pages/LiveWatch'
 import { LiveStage } from '@/pages/LiveStage'
 import { MyClips } from '@/pages/MyClips'
@@ -41,12 +38,15 @@ import { DataDeletion } from '@/pages/DataDeletion'
 import { Legal } from '@/pages/Legal'
 import { Help } from '@/pages/Help'
 import { Marketing } from '@/pages/Marketing'
+import { CreateHub } from '@/pages/CreateHub'
 import { Rankings } from '@/pages/Rankings'
 import { StatCheck } from '@/pages/StatCheck'
 import { StatCheckRoom } from '@/pages/StatCheckRoom'
 import { SubmitResult } from '@/pages/SubmitResult'
 import { NotificationsPage } from '@/pages/Notifications'
+import { LiveInvites } from '@/pages/LiveInvites'
 import { Dashboard } from '@/pages/Dashboard'
+import { CreatorDashboard } from '@/pages/CreatorDashboard'
 import { AILabel } from '@/pages/AILabel'
 import { Redeem } from '@/pages/Redeem'
 import { Rewards } from '@/pages/Rewards'
@@ -55,6 +55,7 @@ import { ConquestMap } from '@/pages/ConquestMap'
 import { Browser } from '@/pages/Browser'
 import { Store } from '@/pages/Store'
 import { Shop } from '@/pages/Shop'
+import { PhysicalMerch } from '@/pages/PhysicalMerch'
 import { Oracle } from '@/pages/Oracle'
 import { Upgrade } from '@/pages/Upgrade'
 import { StoreUnavailable } from '@/pages/StoreUnavailable'
@@ -76,11 +77,18 @@ export default function App() {
   return (
     <Routes>
       {/* Full-bleed marketing pages (no app sidebar). */}
-      <Route path="/marketing" element={<Marketing />} />
-      <Route path="/download" element={<Marketing />} />
+      <Route
+        path="/marketing"
+        element={IS_MOBILE_STORE_BUILD ? <Navigate to="/" replace /> : <Marketing />}
+      />
+      <Route
+        path="/download"
+        element={<Navigate to={IS_MOBILE_STORE_BUILD ? '/' : '/marketing'} replace />}
+      />
 
       <Route path="/" element={<Layout />}>
         <Route index element={<Home />} />
+        <Route path="create" element={<CreateHub />} />
         {/* Sidebar mirrors of the launcher — open HomeMenu straight to a section. */}
         <Route path="video" element={<HomeMenu initialSection="video" />} />
         <Route path="clans" element={<HomeMenu initialSection="clans" />} />
@@ -120,11 +128,15 @@ export default function App() {
         <Route path="live-streams" element={<Live />} />
         <Route path="director" element={<Director />} />
         <Route path="host" element={<AuthGuard><Host /></AuthGuard>} />
-        <Route path="live-dashboard" element={<LiveDashboard />} />
-        <Route path="broadcast" element={<Broadcast />} />
+        {/* ONE DOOR: the old standalone live entries (Broadcast Studio dashboard,
+            broadcast view, and the raw Go Live page) are retired as separate
+            doors — every live entry now funnels through the single LiveHub menu
+            at /live, which routes to the matching focused config screen. */}
+        <Route path="live-dashboard" element={<Navigate to="/live?do=multi" replace />} />
+        <Route path="broadcast" element={<Navigate to="/live" replace />} />
         <Route path="program" element={<ProgramView />} />
         <Route path="program/:groupId" element={<ProgramView />} />
-        <Route path="go-live" element={<AuthGuard><GoLive /></AuthGuard>} />
+        <Route path="go-live" element={<Navigate to="/live?do=golive" replace />} />
         <Route path="my-clips" element={<AuthGuard><MyClips /></AuthGuard>} />
         <Route path="ai" element={<AI />} />
         <Route path="discover" element={<Discover />} />
@@ -134,7 +146,9 @@ export default function App() {
         <Route path="stat-check-room" element={<StatCheckRoom />} />
         <Route path="submit-result" element={<SubmitResult />} />
         <Route path="notifications" element={<AuthGuard><NotificationsPage /></AuthGuard>} />
+        <Route path="live-invites" element={<AuthGuard><LiveInvites /></AuthGuard>} />
         <Route path="dashboard" element={<AuthGuard><Dashboard /></AuthGuard>} />
+        <Route path="creator" element={<AuthGuard><CreatorDashboard /></AuthGuard>} />
         <Route path="redeem" element={<AuthGuard><Redeem /></AuthGuard>} />
         <Route path="rewards" element={<AuthGuard><Rewards /></AuthGuard>} />
         <Route path="forge" element={<AuthGuard><Forge /></AuthGuard>} />
@@ -144,6 +158,8 @@ export default function App() {
           path="shop"
           element={IS_MOBILE_STORE_BUILD ? <StoreUnavailable /> : <AuthGuard><Shop /></AuthGuard>}
         />
+        <Route path="forge/physical" element={<AuthGuard><PhysicalMerch /></AuthGuard>} />
+        <Route path="physical" element={<AuthGuard><PhysicalMerch /></AuthGuard>} />
         <Route path="oracle" element={<Oracle />} />
         <Route path="upgrade" element={IS_MOBILE_STORE_BUILD ? <StoreUnavailable /> : <Upgrade />} />
         <Route path="browser" element={<Browser />} />

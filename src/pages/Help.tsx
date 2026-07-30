@@ -2,6 +2,7 @@ import { Link } from 'react-router-dom'
 import { BRAND, SUPPORT } from '@/lib/brand'
 import { NinjaIcon } from '@/components/ui'
 import { useAskTko } from '@/components/AskTkoContext'
+import { IS_MOBILE_STORE_BUILD } from '@/lib/storeBuild'
 
 /**
  * Get help — the customer-service entry point.
@@ -77,7 +78,9 @@ export function Help() {
             </button>
           </li>
           <li>
-            <Link to="/upgrade" className="text-accent hover:underline">Membership, billing and what each tier unlocks</Link>
+            {IS_MOBILE_STORE_BUILD
+              ? <span className="text-gray-500">Membership and billing are not available in the mobile app.</span>
+              : <Link to="/upgrade" className="text-accent hover:underline">Membership, billing and what each tier unlocks</Link>}
           </li>
           <li>
             <Link to="/redeem" className="text-accent hover:underline">Redeem a code</Link>

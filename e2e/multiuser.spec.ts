@@ -25,10 +25,10 @@ async function signUpThroughUI(ctx: BrowserContext, u: { username: string; email
   await page.goto(`${BASE}/signup`, { waitUntil: 'domcontentloaded' })
   await page.getByPlaceholder('striker_fan').fill(u.username)
   await page.getByPlaceholder('you@example.com').fill(u.email)
-  await page.locator('#signup-dob').fill('1998-04-12') // comfortably 18+
   await page.getByPlaceholder('••••••••').first().fill('password123')
-  // The Terms checkbox gates the submit button.
-  await page.getByRole('checkbox').check()
+  // The 13+ and Terms checkboxes gate the submit button.
+  await page.getByRole('checkbox').nth(0).check()
+  await page.getByRole('checkbox').nth(1).check()
   // Username availability check is async; wait for the submit button to enable.
   const submit = page.getByRole('button', { name: /create account/i })
   await expect(submit).toBeEnabled({ timeout: 15_000 })
@@ -81,13 +81,13 @@ test.describe('front end — concurrent multi-device clients', () => {
     const page = await ctx.newPage()
     await page.goto(`${BASE}/signup`, { waitUntil: 'domcontentloaded' })
     // Underage DOB + no terms — the submit button must stay disabled and we must
-    // never leave the page. This is the "guardrail keeps a confused user on
+    // No age attestation (even with Terms accepted) keeps the submit disabled.
+    // This is the "guardrail keeps a confused user on
     // track instead of erroring" behavior.
     await page.getByPlaceholder('striker_fan').fill(`kid_${Date.now()}`)
     await page.getByPlaceholder('you@example.com').fill(`kid_${Date.now()}@kc.gg`)
-    await page.locator('#signup-dob').fill('2019-01-01') // ~7 years old
     await page.getByPlaceholder('••••••••').first().fill('password123')
-    await page.getByRole('checkbox').check()
+    await page.getByRole('checkbox').nth(1).check()
     const submit = page.getByRole('button', { name: /create account/i })
     await expect(submit).toBeDisabled()
     await expect(page).toHaveURL(/\/signup$/)

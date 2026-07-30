@@ -14,6 +14,7 @@ import {
   isLastStep,
   type Guide,
 } from '@/lib/guides'
+import { IS_MOBILE_STORE_BUILD } from '@/lib/storeBuild'
 
 /**
  * CommandBar — the "Ask TKO" GUIDED ASSISTANT.
@@ -38,14 +39,19 @@ import {
 //  Free-text knowledge base (unchanged behaviour — now lives inside the panel)
 // ─────────────────────────────────────────────────────────────────────────
 
-type QA = { test: RegExp; answer: (ctx: { power: number }) => string }
+type QA = {
+  test: RegExp
+  answer: (ctx: { power: number; signedIn: boolean }) => string
+}
 type ReplySource = 'gemini' | 'offline' | null
 
 const KB: QA[] = [
   {
     test: /\b(what can you do|what do you do|who are you|what are you|help)\b/,
     answer: () =>
-      'I answer questions about TKO — your power level, tournaments, stat checks, clips, going live, and the membership tiers. Or pick a step-by-step guide above and I\'ll walk you through it.',
+      IS_MOBILE_STORE_BUILD
+        ? 'I answer questions about TKO — your power level, tournaments, stat checks, clips, going live, clans, and Physical Forge. Or pick a step-by-step guide above and I’ll walk you through it.'
+        : 'I answer questions about TKO — your power level, tournaments, stat checks, clips, going live, and the membership tiers. Or pick a step-by-step guide above and I\'ll walk you through it.',
   },
   {
     test: /\b(power ?level|my rank|how strong|my score)\b/,
@@ -55,12 +61,16 @@ const KB: QA[] = [
   {
     test: /\b(tier|tiers|pricing|price|cost|membership|subscription|plan|perk|perks|pay)\b/,
     answer: () =>
-      'Tiers: Free ($0) = watch, clip, and chat. Ad-Free ($1.99/mo) removes ads. Pro ($4.99/mo) adds profile livestreaming and full clip tools. Elite ($9.99/mo) adds clan streams, tournament hosting, and the control room. Legend ($29.99/mo) adds front-page placement, advanced AI, and creator support subscriptions.',
+      IS_MOBILE_STORE_BUILD
+        ? 'This mobile build does not offer digital memberships or other digital purchases. Features already available on your signed-in account remain available.'
+        : 'Tiers: Free ($0) = watch, clip, and chat. Ad-Free ($1.99/mo) removes ads. Pro ($4.99/mo) adds profile livestreaming and full clip tools. Elite ($9.99/mo) adds clan streams, tournament hosting, and the control room. Legend ($29.99/mo) adds front-page placement, advanced AI, and creator support subscriptions.',
   },
   {
     test: /\b(tournaments?|brackets?|compete)\b/,
-    answer: () =>
-      'Tournaments are brackets you join to compete. You submit your result and pass a stat check to rank. Browse them under Tournaments.',
+    answer: ({ signedIn }) =>
+      signedIn
+        ? 'Tournaments are brackets you join to compete. To make one, open Tournaments and tap Create. You submit results and use stat checks to keep competition verified.'
+        : 'You need to sign in before you can create a tournament. The Create button is hidden while you are logged out. Tap Sign in, then return to Tournaments and the Create button will appear.',
   },
   {
     test: /\bstat ?checks?\b/,
@@ -75,7 +85,9 @@ const KB: QA[] = [
   {
     test: /\b(go live|live ?stream|streaming|broadcast)\b/,
     answer: () =>
-      'Going live is a paid perk. You choose where it lands — your profile, your clan page, or the front page — with higher placements on higher tiers. Find it under Live → Go Live, or open the "Go live" guide above.',
+      IS_MOBILE_STORE_BUILD
+        ? 'If live access is already enabled for your account, choose Live → Go Live to start from your profile, clan page, or an eligible event.'
+        : 'Going live is a paid perk. You choose where it lands — your profile, your clan page, or the front page — with higher placements on higher tiers. Find it under Live → Go Live, or open the "Go live" guide above.',
   },
   {
     test: /\b(clan|chat|board)\b/,
@@ -100,7 +112,9 @@ const KB: QA[] = [
   {
     test: /\b(forge|make an artifact|upload.*art|my art|create an artifact)\b/,
     answer: () =>
-      'Forge is where you turn your OWN art into an artifact: open Forge (⚒️ in the menu), upload your image, we render it into a framed, shining artifact, then you name it, pick a rarity, attach a power, and set a price. Selling needs a connected Stripe account so you get paid.',
+      IS_MOBILE_STORE_BUILD
+        ? 'Forge lets you turn your own art into a collectible or use Physical Forge to create a made-to-order shirt. Digital marketplace selling and digital prices are unavailable in this mobile build.'
+        : 'Forge is where you turn your OWN art into an artifact: open Forge (⚒️ in the menu), upload your image, we render it into a framed, shining artifact, then you name it, pick a rarity, attach a power, and set a price. Selling needs a connected Stripe account so you get paid.',
   },
   {
     test: /\b(gift|starter pass|gift a sub|share.*code)\b/,
@@ -119,11 +133,13 @@ const KB: QA[] = [
   },
 ]
 
-function answerFor(text: string, power: number): string {
+export function answerFor(text: string, power: number, signedIn: boolean): string {
   const t = text.toLowerCase().trim()
   const hit = KB.find((q) => q.test.test(t))
-  if (hit) return hit.answer({ power })
-  return 'I can tell you about your power level, tournaments, stat checks, making clips, artifacts and forging, going live, clans, and the membership tiers — or pick a step-by-step guide above. What would you like to do?'
+  if (hit) return hit.answer({ power, signedIn })
+  return IS_MOBILE_STORE_BUILD
+    ? 'I can tell you about your power level, tournaments, stat checks, making clips, artifacts, Physical Forge, going live, and clans — or you can pick a step-by-step guide above. What would you like to do?'
+    : 'I can tell you about your power level, tournaments, stat checks, making clips, artifacts and forging, going live, clans, and the membership tiers — or pick a step-by-step guide above. What would you like to do?'
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -131,12 +147,13 @@ function answerFor(text: string, power: number): string {
 // ─────────────────────────────────────────────────────────────────────────
 
 export function CommandBar() {
-  const { profile } = useAuth()
+  const { user, profile } = useAuth()
   const { mode, guideId, open, minimize, close, setGuide } = useAskTko()
   const location = useLocation()
   const navigate = useNavigate()
 
   const power = (profile?.power_level ?? 0) as number
+  const signedIn = Boolean(user)
   const activeGuide = useMemo(() => getGuide(guideId), [guideId])
   const suggested = useMemo(() => suggestGuide(location.pathname), [location.pathname])
 
@@ -162,7 +179,15 @@ export function CommandBar() {
     try {
       // Real answer from the AI backend; the built-in guide answer is the
       // instant fallback if the model errors or the user is offline.
-      const { data } = await supabase.functions.invoke('ask', { body: { question: q } })
+      const { data } = await supabase.functions.invoke('ask', {
+        body: {
+          question: q,
+          clientContext: {
+            signedIn,
+            path: location.pathname,
+          },
+        },
+      })
       const response = data as {
         ok?: boolean
         answer?: string
@@ -176,16 +201,16 @@ export function CommandBar() {
         setReply(ans)
         setReplySource('gemini')
       } else {
-        setReply(answerFor(q, power))
+        setReply(answerFor(q, power, signedIn))
         setReplySource('offline')
       }
     } catch {
-      setReply(answerFor(q, power))
+      setReply(answerFor(q, power, signedIn))
       setReplySource('offline')
     } finally {
       setThinking(false)
     }
-  }, [power])
+  }, [location.pathname, power, signedIn])
 
   // Lock body scroll + move focus into the panel while it's expanded.
   useEffect(() => {

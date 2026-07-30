@@ -278,15 +278,15 @@ describe('economy — the wallet is read-only on the client', () => {
   it('reads balances from the server and reflects server-returned snapshots', async () => {
     tables.wallets.push({ user_id: ALICE, tokens: 320, sweeps: 40 })
     const w = await loadWallet(ALICE)
-    expect(w).toEqual({ tokens: 320, sweeps: 40, paid_sweeps_cents: 0 })
-    expect(readWallet(ALICE)).toEqual({ tokens: 320, sweeps: 40, paid_sweeps_cents: 0 })
+    expect(w).toEqual({ tokens: 320, sweeps: 40, paid_sweeps_cents: 0, oracle_tickets: 0 })
+    expect(readWallet(ALICE)).toEqual({ tokens: 320, sweeps: 40, paid_sweeps_cents: 0, oracle_tickets: 0 })
 
     // A handler's response (e.g. after a purchase) replaces the cached balance.
     applyWalletSnapshot(ALICE, { tokens: 70, sweeps: 40 })
     expect(readWallet(ALICE).tokens).toBe(70)
 
     // A different user's balance is not this user's.
-    expect(readWallet(BOB)).toEqual({ tokens: 0, sweeps: 0, paid_sweeps_cents: 0 })
+    expect(readWallet(BOB)).toEqual({ tokens: 0, sweeps: 0, paid_sweeps_cents: 0, oracle_tickets: 0 })
   })
 
   it('a local-store wallet never leaks into the server-backed cache', () => {
@@ -297,7 +297,7 @@ describe('economy — the wallet is read-only on the client', () => {
     }
     // LOCAL MODE: this is a test/offline store, not the user's real balance.
     const local = readWallet(ALICE, store)
-    expect(local).toEqual({ tokens: 0, sweeps: 0, paid_sweeps_cents: 0 })
-    expect(readWallet(ALICE)).toEqual({ tokens: 0, sweeps: 0, paid_sweeps_cents: 0 })
+    expect(local).toEqual({ tokens: 0, sweeps: 0, paid_sweeps_cents: 0, oracle_tickets: 0 })
+    expect(readWallet(ALICE)).toEqual({ tokens: 0, sweeps: 0, paid_sweeps_cents: 0, oracle_tickets: 0 })
   })
 })

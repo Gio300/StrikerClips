@@ -2,6 +2,8 @@ import { BrandLogo } from '@/components/BrandLogo'
 import { BRAND } from '@/lib/brand'
 import { VideoShowcase } from '@/components/VideoShowcase'
 import { InstallAppButton } from '@/components/InstallAppButton'
+import { MarketingFeatureShowcase } from '@/components/MarketingFeatureShowcase'
+import { PublicAskTko } from '@/components/PublicAskTko'
 
 /**
  * TKO.cam marketing landing page.
@@ -18,71 +20,11 @@ import { InstallAppButton } from '@/components/InstallAppButton'
  * (e.g. https://tko.cam) it deep-links there; otherwise it falls back to the
  * same-origin '/app' base, which is where the app is mounted on the web host.
  */
-const APP_ORIGIN = (import.meta.env.VITE_APP_URL || '/app').replace(/\/+$/, '')
+const APP_ORIGIN = (import.meta.env.VITE_APP_URL || '').replace(/\/+$/, '')
 
 function appHref(path = '/'): string {
   if (!path || path === '/') return APP_ORIGIN || '/'
   return `${APP_ORIGIN}${path.startsWith('/') ? path : `/${path}`}`
-}
-
-type Feature = { icon: string; title: string; body: string; accent: 'kunai' | 'chakra' | 'trust' | 'leaf' }
-
-const FEATURES: Feature[] = [
-  {
-    icon: '◆',
-    accent: 'kunai',
-    title: 'Multi-angle AI director',
-    body: 'Feed in every squad member’s clip and TKO’s director cuts between them automatically — single, side-by-side, picture-in-picture, or a synchronized 2×2 squad view that lands on the action.',
-  },
-  {
-    icon: '⬡',
-    accent: 'trust',
-    title: 'Synchronized squad view',
-    body: 'Line up to eight perspectives of the same knockout on one timeline. Every angle of the moment, one cam — nobody re-watches five separate VODs again.',
-  },
-  {
-    icon: '🏆',
-    accent: 'chakra',
-    title: 'Tournaments that run themselves',
-    body: 'Open brackets, power-level seeding, submit-result flows, and squad boards — built for the people who actually run community tournaments, not just the pros.',
-  },
-  {
-    icon: '✦',
-    accent: 'trust',
-    title: 'The Oracle — predict & earn prestige',
-    body: 'Guess tournament and match outcomes to climb the Oracle. No wagering, no cash — correct calls earn cosmetic digital assets and prestige badges only. Pure bragging rights.',
-  },
-  {
-    icon: '⚔',
-    accent: 'leaf',
-    title: 'Clans that earn',
-    body: 'Form a clan, run your board, and win together. TKO is the tournament platform that gives back — clans and creators share in the platform, not just the leaderboard.',
-  },
-  {
-    icon: '📊',
-    accent: 'kunai',
-    title: 'Stat checks & rankings',
-    body: 'Verified stat-check rooms and power ratings keep the ladder honest, so seeding and rankings reflect who actually shows up and wins.',
-  },
-  {
-    icon: '🎙',
-    accent: 'chakra',
-    title: 'Ask TKO — the in-app AI',
-    body: 'A built-in assistant that answers tournament questions, explains the bracket, finds a clip from a description, and helps you build a reel — right inside the app.',
-  },
-  {
-    icon: '📡',
-    accent: 'trust',
-    title: 'Influencer live, one director',
-    body: 'Go live with a single AI director orchestrating every incoming angle into one clean program feed — watch parties and casts without a full production crew.',
-  },
-]
-
-const ACCENT: Record<Feature['accent'], { text: string; ring: string }> = {
-  kunai: { text: 'text-kunai', ring: 'hover:border-kunai/40' },
-  chakra: { text: 'text-chakra', ring: 'hover:border-chakra/40' },
-  trust: { text: 'text-trust', ring: 'hover:border-trust/40' },
-  leaf: { text: 'text-leaf', ring: 'hover:border-leaf/40' },
 }
 
 export function Marketing() {
@@ -157,31 +99,7 @@ export function Marketing() {
       </section>
 
       {/* FEATURES */}
-      <section id="features" className="border-t border-dark-border">
-        <div className="max-w-6xl mx-auto px-6 py-16">
-          <div className="text-center mb-10">
-            <h2 className="text-3xl md:text-4xl font-bold tracking-tight mb-3">One platform, the whole event</h2>
-            <p className="text-gray-400 max-w-2xl mx-auto">
-              Capture, cut, compete, and predict — TKO is built for squads and the community organizers who
-              run the scene.
-            </p>
-          </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-            {FEATURES.map((f) => (
-              <div
-                key={f.title}
-                className={`rounded-xl border border-dark-border bg-dark-card p-5 transition-colors ${ACCENT[f.accent].ring}`}
-              >
-                <div className={`text-2xl mb-3 ${ACCENT[f.accent].text}`} aria-hidden>
-                  {f.icon}
-                </div>
-                <h3 className="font-semibold text-base mb-1.5">{f.title}</h3>
-                <p className="text-sm text-gray-400 leading-relaxed">{f.body}</p>
-              </div>
-            ))}
-          </div>
-        </div>
-      </section>
+      <MarketingFeatureShowcase appHref={appHref} />
 
       {/* VIDEO SHOWCASE */}
       <VideoShowcase />
@@ -255,6 +173,8 @@ export function Marketing() {
           © {new Date().getFullYear()} {BRAND.name} · {BRAND.domain}
         </div>
       </footer>
+
+      <PublicAskTko appHref={appHref} />
     </div>
   )
 }

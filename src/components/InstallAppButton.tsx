@@ -5,6 +5,7 @@ import {
   detectStandalone,
   type InstallState,
 } from '@/lib/installPrompt'
+import { IS_MOBILE_STORE_BUILD } from '@/lib/storeBuild'
 
 /** Chromium-only event; not yet included in lib.dom. */
 interface BeforeInstallPromptEvent extends Event {
@@ -140,7 +141,7 @@ export function InstallAppButton({
   className = '',
   label = 'Install TKO',
   mode = 'install',
-  appHref = '/app/',
+  appHref = '/',
 }: InstallAppButtonProps) {
   const { state, promptInstall } = useInstallAvailability()
   const [android, setAndroid] = useState(false)
@@ -148,6 +149,8 @@ export function InstallAppButton({
   useEffect(() => {
     setAndroid(/android/i.test(navigator.userAgent))
   }, [])
+
+  if (IS_MOBILE_STORE_BUILD) return null
 
   if (state === 'installed') {
     if (mode === 'install') return null

@@ -4,6 +4,8 @@ dist-site
 .env
 .env.local
 .env.*.local
+.env.production
+/public/mobile-version.json
 *.log
 .DS_Store
 .cursor/settings.json

@@ -4,23 +4,16 @@ import { BRAND } from '@/lib/brand'
 /**
  * Privacy Policy for {BRAND.name} ({BRAND.domain}).
  *
- * This is a comprehensive draft template. It is NOT legal advice and must be
- * reviewed and finalized by qualified legal counsel before launch.
+ * Public privacy policy for the current TKO service and mobile applications.
  */
 export function Privacy() {
   const SUPPORT_EMAIL = 'awakengiovanni3000@gmail.com'
-  const LAST_UPDATED = '2026-07-21'
+  const LAST_UPDATED = '2026-07-30'
 
   return (
     <div className="max-w-3xl mx-auto p-6 sm:p-8 text-gray-300 space-y-4">
       <h1 className="text-2xl font-bold text-white">Privacy Policy</h1>
       <p className="text-sm text-gray-500">Last updated: {LAST_UPDATED}</p>
-
-      <div className="rounded-lg border border-kunai/40 bg-kunai/10 p-4 text-sm text-gray-200">
-        <strong className="text-white">Draft template — pending review by legal counsel.</strong> This
-        document describes how {BRAND.name} handles data. It is not legal advice and is not a finalized
-        policy. It must be reviewed and finalized by a licensed attorney before it is relied upon.
-      </div>
 
       <p>
         {BRAND.name} ({BRAND.domain}, "we," "us," or "our") respects your privacy. This Privacy Policy
@@ -35,6 +28,7 @@ export function Privacy() {
         <li><strong className="text-white">Content you create</strong> — clips, reels, livestreams, chat messages, board and clan posts, tournament and prediction activity, and other User Content.</li>
         <li><strong className="text-white">Usage &amp; device data</strong> — pages viewed, features used, interactions, approximate location derived from IP, device and browser type, identifiers, and log data.</li>
         <li><strong className="text-white">Payment &amp; identity data</strong> — when you buy, subscribe, or receive a creator payout, payment and identity-verification data is collected and processed by Stripe and Stripe Identity. <span className="text-white">We do not store full card numbers or copies of your identity documents.</span> We receive limited confirmation details (such as verification status and the last digits of a card).</li>
+        <li><strong className="text-white">Physical-order information</strong> — when you order made-to-order merchandise, we collect the recipient name, email, shipping address, selected product and variant, order status, tracking information, and support history needed to manufacture, ship, and support the order.</li>
         <li><strong className="text-white">Communications</strong> — messages you send us, such as support requests.</li>
       </ul>
 
@@ -42,7 +36,7 @@ export function Privacy() {
       <ul className="list-disc list-inside space-y-1.5 text-sm leading-relaxed">
         <li>Operate, maintain, and improve the Service and its features (reels, live, clans, tournaments, and the Oracle prediction system).</li>
         <li>Create and secure your account, authenticate you, and prevent fraud, cheating, and abuse.</li>
-        <li>Process subscriptions, Token purchases, and creator payouts, and verify age and identity where required.</li>
+        <li>Process subscriptions, Token purchases, physical merchandise orders, and creator payouts, and verify age and identity where required.</li>
         <li>Power rankings, power levels, badges, and cosmetic awards.</li>
         <li>Communicate with you about updates, security, and support.</li>
         <li>Show advertising to free-tier users and measure its performance; paid tiers see fewer or no ads.</li>
@@ -56,6 +50,7 @@ export function Privacy() {
       </p>
       <ul className="list-disc list-inside space-y-1.5 text-sm leading-relaxed">
         <li><strong className="text-white">Payments &amp; identity</strong> — Stripe and Stripe Identity.</li>
+        <li><strong className="text-white">Made-to-order fulfillment</strong> — Shopify and the selected manufacturer or print-fulfillment provider receive only the product, recipient, shipping, and order details needed to record, manufacture, ship, track, and support a physical order.</li>
         <li><strong className="text-white">Hosting &amp; backend</strong> — our cloud hosting and database/auth provider (e.g., Supabase).</li>
         <li><strong className="text-white">Ads &amp; analytics</strong> — advertising and analytics partners (e.g., Google AdSense / AdMob), which may set cookies or identifiers under their own policies.</li>
         <li><strong className="text-white">Video distribution</strong> — platforms such as YouTube where content is embedded or published.</li>
@@ -119,8 +114,8 @@ export function Privacy() {
       <p>
         The Service is operated from, and your information may be processed in, the United States and other
         countries where we or our processors operate. Data-protection laws in these countries may differ from
-        those in your jurisdiction. By using the Service, you consent to this transfer and processing.
-        [PLACEHOLDER — counsel to add any required transfer mechanisms for EU/UK users.]
+        those in your jurisdiction. Where required, we use legally recognized safeguards for international
+        transfers and honor applicable data-protection rights.
       </p>
 
       <h2 className="text-lg font-semibold text-white">11. Changes to This Policy</h2>
@@ -133,11 +128,6 @@ export function Privacy() {
       <p>
         Questions or privacy requests? Contact us at{' '}
         <a href={`mailto:${SUPPORT_EMAIL}`} className="text-kunai hover:underline">{SUPPORT_EMAIL}</a>.
-      </p>
-
-      <p className="text-xs text-gray-500">
-        This is a draft template and not legal advice. It must be reviewed and finalized by qualified legal
-        counsel before launch.
       </p>
 
       <div className="flex flex-wrap gap-4 pt-2 text-sm">

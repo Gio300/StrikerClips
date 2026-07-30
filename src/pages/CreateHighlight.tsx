@@ -1,5 +1,15 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
+import {
+  ArrowDown,
+  ArrowUp,
+  Clapperboard,
+  GripVertical,
+  Link2,
+  SlidersHorizontal,
+  Trash2,
+  Upload,
+} from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/hooks/useAuth'
 import { useFFmpeg, layoutLimits, type ReelLayout } from '@/hooks/useFFmpeg'
@@ -25,11 +35,10 @@ import {
 } from '@/lib/reelParticipants'
 import { prettyClip } from '@/lib/clipLabel'
 import { encodeLayoutMarker } from '@/lib/reelLayout'
+import { moveListItem } from '@/lib/reelEditor'
 import { recordActivity } from '@/lib/activity'
-import { BRAND } from '@/lib/brand'
 import { CreationSponsorGate } from '@/components/CreationSponsorGate'
 import { ClipFinder } from '@/components/ClipFinder'
-import { useAskTko } from '@/components/AskTkoContext'
 import { ActionCard } from '@/components/ui/ActionCard'
 import { ChipInput } from '@/components/ui/ChipInput'
 import type { NinjaIconName } from '@/components/ui/NinjaIcon'
@@ -71,7 +80,6 @@ export function CreateHighlight() {
   // Cross-user auto-merge unlock (YouTube connected + a paid tier). Only clips
   // from an entitled user enter the auto-match pipeline; own posts still land.
   const { enabled: autoMergeOn } = useAutoMerge()
-  const { open: openAskTko } = useAskTko()
   const navigate = useNavigate()
   const { runLayout, loading: ffmpegLoading, progress, stage } = useFFmpeg()
 
@@ -79,14 +87,15 @@ export function CreateHighlight() {
   const [title, setTitle] = useState('')
   const [clips, setClips] = useState<ClipInput[]>([])
   const [youtubeUrl, setYoutubeUrl] = useState('')
-  const [youtubeStart, setYoutubeStart] = useState('')
-  const [youtubeEnd, setYoutubeEnd] = useState('')
   const [savedLinks, setSavedLinks] = useState<UserYoutubeLink[]>([])
   const [error, setError] = useState('')
   const [saving, setSaving] = useState(false)
   const [showAdvanced, setShowAdvanced] = useState(false)
+  const [showClipFinder, setShowClipFinder] = useState(false)
+  const [draggedClipIndex, setDraggedClipIndex] = useState<number | null>(null)
   const [draftRestored, setDraftRestored] = useState(false)
   const hydratedRef = useRef(false)
+  const fileInputRef = useRef<HTMLInputElement>(null)
 
   // Inline validity of the manual "paste a YouTube link" box.
   const manualLinkErr = youtubeLinkError(youtubeUrl)
@@ -297,12 +306,8 @@ export function CreateHighlight() {
       setError(`This layout fits ${limits.max} clips max.`)
       return
     }
-    const start = parseInt(youtubeStart, 10) || 0
-    const end = parseInt(youtubeEnd, 10) || 0
-    if (end > 0 && end <= start) {
-      setError('End time must be after start time')
-      return
-    }
+    const start = 0
+    const end = 0
     const fullUrl = url.startsWith('http') ? url : `https://www.youtube.com/watch?v=${videoId}`
     // Auto-categorize + persist a normalized clip record so this clip can be
     // grouped into a match bunch later. Best-effort — never blocks the add.
@@ -321,8 +326,6 @@ export function CreateHighlight() {
     }
     setClips((c) => [...c, { type: 'youtube', url: fullUrl, startSec: start, endSec: end || 0 }])
     setYoutubeUrl('')
-    setYoutubeStart('')
-    setYoutubeEnd('')
     setError('')
   }
 
@@ -361,6 +364,34 @@ export function CreateHighlight() {
       })
       return next
     })
+  }
+
+  function moveClip(from: number, to: number) {
+    if (from === to || from < 0 || to < 0 || from >= clips.length || to >= clips.length) return
+    setClips((current) => moveListItem(current, from, to))
+    setSuggestionsByIdx((current) => {
+      const ordered = Array.from({ length: clips.length }, (_, index) => current[index])
+      const moved = moveListItem(ordered, from, to)
+      return moved.reduce<Record<number, HighlightMoment[]>>((next, moments, index) => {
+        if (moments) next[index] = moments
+        return next
+      }, {})
+    })
+  }
+
+  function updateYoutubeTrim(index: number, field: 'startSec' | 'endSec', value: number) {
+    setClips((current) =>
+      current.map((clip, clipIndex) =>
+        clipIndex === index && clip.type === 'youtube'
+          ? { ...clip, [field]: Math.max(0, value || 0) }
+          : clip,
+      ),
+    )
+  }
+
+  function handleClipDrop(event: React.DragEvent<HTMLDivElement>) {
+    event.preventDefault()
+    addFileClip(event.dataTransfer.files)
   }
 
   async function analyzeClip(i: number) {
@@ -430,6 +461,13 @@ export function CreateHighlight() {
 
     if (!allYoutube && !allUpload) {
       setError('Mix detected. Use either all YouTube links OR all uploaded files for one reel.')
+      return
+    }
+    const invalidYoutubeTrim = youtubeClips.find(
+      (clip) => clip.endSec > 0 && clip.endSec <= clip.startSec,
+    )
+    if (invalidYoutubeTrim) {
+      setError('Each YouTube clip end time must be later than its start time.')
       return
     }
 
@@ -603,24 +641,15 @@ export function CreateHighlight() {
 
   return (
     <div className="p-4 sm:p-6 lg:p-8 max-w-3xl mx-auto">
-      <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3 mb-6">
+      <div className="mb-6">
         <div>
-          <h1 className="text-2xl font-bold">Build a reel</h1>
-          <p className="text-sm text-gray-500 mt-1">{BRAND.tagline}</p>
+          <div className="mb-2 flex items-center gap-2 text-kunai">
+            <Clapperboard size={16} />
+            <span className="text-xs font-semibold uppercase">Reel builder</span>
+          </div>
+          <h1 className="text-2xl font-bold">Create a reel</h1>
+          <p className="mt-1 text-sm text-gray-400">Add footage first. Arrange and edit it next.</p>
         </div>
-        <button
-          type="button"
-          onClick={() => {
-            setShowAdvanced((v) => {
-              const next = !v
-              if (next === false) setInviteFriends(false)
-              return next
-            })
-          }}
-          className="shrink-0 px-3 py-1.5 rounded-lg border border-dark-border text-sm text-gray-300 hover:border-accent/40"
-        >
-          {showAdvanced ? 'Simple' : 'Advanced options'}
-        </button>
       </div>
 
       <form onSubmit={handleSubmit} className="space-y-6">
@@ -641,26 +670,282 @@ export function CreateHighlight() {
           </div>
         )}
 
-        <ChipInput
-          fieldKey="reel_title"
-          label="Title (optional)"
-          value={title}
-          onChange={setTitle}
-          placeholder="4-stack clutch, all angles"
-        />
+        <section
+          onDragOver={(event) => event.preventDefault()}
+          onDrop={handleClipDrop}
+          className="rounded-lg border border-dashed border-kunai/50 bg-kunai/5 p-4 sm:p-5"
+        >
+          <div className="flex items-start gap-3">
+            <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-kunai/15 text-kunai">
+              <Upload size={22} />
+            </span>
+            <div className="min-w-0">
+              <h2 className="font-semibold text-white">Add your footage</h2>
+              <p className="mt-1 text-sm text-gray-400">
+                Drop video here, choose files, or pull clips from a connected account.
+              </p>
+            </div>
+          </div>
 
-        <ActionCard
-          icon="bolt"
-          label="Get clips"
-          sublabel="Pull up PlayStation, YouTube, Twitch — grab a clip, send it here"
-          to="/browser"
-        />
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="video/*"
+            multiple
+            onChange={(event) => addFileClip(event.target.files)}
+            className="hidden"
+          />
 
-        <ClipFinder
-          onAdd={addYoutubeClip}
-          onRemove={removeYoutubeClip}
-          username={(user?.user_metadata as { username?: string } | undefined)?.username}
-        />
+          <div className="mt-4 grid gap-2 sm:grid-cols-2">
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg bg-kunai px-4 text-sm font-semibold text-dark transition-colors hover:bg-kunai/90"
+            >
+              <Upload size={17} />
+              Choose video
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowClipFinder((current) => !current)}
+              className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg border border-dark-border bg-dark-card px-4 text-sm font-semibold text-white transition-colors hover:border-kunai/60"
+            >
+              <Link2 size={17} />
+              {showClipFinder ? 'Hide connected clips' : 'Find connected clips'}
+            </button>
+          </div>
+
+          <div className="mt-3 flex gap-2">
+            <label className="relative min-w-0 flex-1">
+              <span className="sr-only">Paste a YouTube link</span>
+              <Link2
+                size={16}
+                className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-gray-500"
+              />
+              <input
+                type="text"
+                value={youtubeUrl}
+                onChange={(event) => setYoutubeUrl(event.target.value)}
+                placeholder="Paste a YouTube link"
+                aria-invalid={!!manualLinkErr}
+                className={`h-11 w-full rounded-lg border bg-dark pl-9 pr-3 text-sm text-white outline-none placeholder:text-gray-600 ${
+                  manualLinkErr ? 'border-red-500/70' : 'border-dark-border focus:border-kunai'
+                }`}
+              />
+            </label>
+            <button
+              type="button"
+              onClick={() => addYoutubeClip(youtubeUrl)}
+              disabled={!canAddManualLink}
+              className="h-11 rounded-lg border border-kunai px-4 text-sm font-semibold text-kunai disabled:opacity-40"
+            >
+              Add
+            </button>
+          </div>
+          {manualLinkErr && <p className="mt-1 text-xs text-red-400">{manualLinkErr}</p>}
+        </section>
+
+        {showClipFinder && (
+          <section className="rounded-lg border border-dark-border bg-dark-card p-4">
+            <ClipFinder
+              onAdd={addYoutubeClip}
+              onRemove={removeYoutubeClip}
+              username={(user?.user_metadata as { username?: string } | undefined)?.username}
+            />
+          </section>
+        )}
+
+        {clips.length > 0 && (
+          <section>
+            <div className="mb-2 flex items-end justify-between gap-3">
+              <div>
+                <h2 className="font-semibold text-white">Arrange and trim</h2>
+                <p className="text-xs text-gray-500">Drag clips, or use the arrow buttons on a phone.</p>
+              </div>
+              <span className="text-xs text-gray-500">{clips.length} added</span>
+            </div>
+            {hasMix && (
+              <p className="mb-2 text-xs text-yellow-400">
+                Use all YouTube links or all uploaded files in one reel.
+              </p>
+            )}
+            <ol className="space-y-2">
+              {clips.map((clip, index) => {
+                const youtubeId = clip.type === 'youtube' ? extractYouTubeId(clip.url) : null
+                return (
+                  <li
+                    key={clip.type === 'youtube' ? `${clip.url}-${index}` : `${clip.file.name}-${index}`}
+                    draggable
+                    onDragStart={() => setDraggedClipIndex(index)}
+                    onDragEnd={() => setDraggedClipIndex(null)}
+                    onDragOver={(event) => event.preventDefault()}
+                    onDrop={(event) => {
+                      event.preventDefault()
+                      if (draggedClipIndex != null) moveClip(draggedClipIndex, index)
+                      setDraggedClipIndex(null)
+                    }}
+                    className={`rounded-lg border bg-dark-card p-3 transition-colors ${
+                      draggedClipIndex === index ? 'border-kunai' : 'border-dark-border'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2">
+                      <GripVertical size={18} className="hidden shrink-0 cursor-grab text-gray-600 sm:block" />
+                      {youtubeId ? (
+                        <img
+                          src={thumbUrl(youtubeId, 'mq')}
+                          alt=""
+                          className="h-10 w-16 shrink-0 rounded object-cover"
+                        />
+                      ) : (
+                        <span className="flex h-10 w-12 shrink-0 items-center justify-center rounded bg-dark-elevated text-kunai">
+                          <Clapperboard size={18} />
+                        </span>
+                      )}
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-sm font-medium text-white">
+                          {clip.type === 'youtube' ? prettyClip(clip.url, clip.title) : clip.file.name}
+                        </p>
+                        <p className="mt-0.5 text-xs text-gray-500">Angle {index + 1}</p>
+                      </div>
+                      <div className="flex shrink-0 items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={() => moveClip(index, index - 1)}
+                          disabled={index === 0}
+                          aria-label="Move clip up"
+                          title="Move up"
+                          className="flex h-9 w-9 items-center justify-center rounded-lg text-gray-400 hover:bg-dark-elevated hover:text-white disabled:opacity-25"
+                        >
+                          <ArrowUp size={17} />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => moveClip(index, index + 1)}
+                          disabled={index === clips.length - 1}
+                          aria-label="Move clip down"
+                          title="Move down"
+                          className="flex h-9 w-9 items-center justify-center rounded-lg text-gray-400 hover:bg-dark-elevated hover:text-white disabled:opacity-25"
+                        >
+                          <ArrowDown size={17} />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => removeClip(index)}
+                          aria-label="Remove clip"
+                          title="Remove"
+                          className="flex h-9 w-9 items-center justify-center rounded-lg text-red-400 hover:bg-red-500/10"
+                        >
+                          <Trash2 size={17} />
+                        </button>
+                      </div>
+                    </div>
+
+                    {clip.type === 'youtube' && (
+                      <div className="mt-3 border-t border-dark-border pt-3">
+                        <div className="grid grid-cols-2 gap-2">
+                          <label className="text-xs text-gray-500">
+                            Start
+                            <input
+                              type="number"
+                              min={0}
+                              value={clip.startSec}
+                              onChange={(event) => updateYoutubeTrim(index, 'startSec', Number(event.target.value))}
+                              className="mt-1 h-9 w-full rounded-lg border border-dark-border bg-dark px-3 text-sm text-white outline-none focus:border-kunai"
+                            />
+                          </label>
+                          <label className="text-xs text-gray-500">
+                            End
+                            <input
+                              type="number"
+                              min={0}
+                              value={clip.endSec || ''}
+                              placeholder="Full clip"
+                              onChange={(event) => updateYoutubeTrim(index, 'endSec', Number(event.target.value))}
+                              className="mt-1 h-9 w-full rounded-lg border border-dark-border bg-dark px-3 text-sm text-white outline-none focus:border-kunai"
+                            />
+                          </label>
+                        </div>
+                        {youtubeId && (
+                          <label
+                            className="mt-2 inline-flex min-h-9 cursor-pointer items-center rounded-lg border border-chakra/40 px-3 text-xs font-semibold text-chakra hover:bg-chakra/10"
+                            title="Attach the match result screen to improve same-match grouping"
+                          >
+                            {ocrBusyId === youtubeId
+                              ? 'Reading result'
+                              : resultByVideoId[youtubeId]
+                                ? 'Result attached'
+                                : 'Attach result screen'}
+                            <input
+                              type="file"
+                              accept="image/*"
+                              className="hidden"
+                              onChange={(event) => handleTagResult(youtubeId, event.target.files)}
+                            />
+                          </label>
+                        )}
+                      </div>
+                    )}
+
+                    {clip.type === 'upload' && (
+                      <div className="mt-3 border-t border-dark-border pt-3">
+                        <button
+                          type="button"
+                          onClick={() => analyzeClip(index)}
+                          disabled={aiAnalyzing === index}
+                          className="inline-flex min-h-9 items-center rounded-lg border border-kunai/40 px-3 text-xs font-semibold text-kunai disabled:opacity-50"
+                        >
+                          {aiAnalyzing === index
+                            ? scanProgress?.idx === index
+                              ? `Scanning ${scanProgress.pct}%`
+                              : 'Analyzing'
+                            : `Find ${activeCat.label}`}
+                        </button>
+                        {suggestionsByIdx[index]?.length > 0 && (
+                          <div className="mt-2 flex flex-wrap gap-1.5">
+                            {suggestionsByIdx[index].map((moment, momentIndex) => (
+                              <span
+                                key={momentIndex}
+                                className="rounded border border-kunai/20 bg-kunai/10 px-2 py-0.5 text-xs text-kunai"
+                              >
+                                {formatTimestamp(moment.startSec)} - {formatTimestamp(moment.endSec)}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </li>
+                )
+              })}
+            </ol>
+          </section>
+        )}
+
+        {clips.length > 0 && (
+          <div className="space-y-3">
+            <ChipInput
+              fieldKey="reel_title"
+              label="Reel title (optional)"
+              value={title}
+              onChange={setTitle}
+              placeholder="4-stack clutch, all angles"
+            />
+            <button
+              type="button"
+              onClick={() => {
+                setShowAdvanced((current) => {
+                  const next = !current
+                  if (!next) setInviteFriends(false)
+                  return next
+                })
+              }}
+              className="inline-flex min-h-10 items-center gap-2 rounded-lg border border-dark-border px-3 text-sm text-gray-300 hover:border-kunai/50"
+            >
+              <SlidersHorizontal size={16} />
+              {showAdvanced ? 'Hide editing options' : 'More editing options'}
+            </button>
+          </div>
+        )}
 
         {/* Same-match bunch: the other angles of a clip already in the reel. */}
         {bunchSuggestions.length > 0 && (
@@ -837,88 +1122,6 @@ export function CreateHighlight() {
           </div>
         )}
 
-        <div>
-          <div className="flex items-center justify-between gap-2 mb-2">
-            <label className="block text-sm text-gray-400">
-              {showAdvanced ? 'Add YouTube clip (URL)' : 'Or paste a link manually'}
-            </label>
-            {/* Blocking-point helper — opens the Ask TKO guided panel straight
-                to the "Make your first clip" walkthrough. */}
-            <button
-              type="button"
-              onClick={() => openAskTko('make-clip')}
-              className="text-[11px] text-accent hover:underline shrink-0"
-            >
-              Need help? Ask TKO
-            </button>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <input
-              type="text"
-              value={youtubeUrl}
-              onChange={(e) => setYoutubeUrl(e.target.value)}
-              placeholder="https://youtube.com/watch?v=..."
-              aria-invalid={!!manualLinkErr}
-              className={`flex-1 min-w-[200px] px-4 py-2 rounded-lg bg-dark border text-white focus:outline-none ${
-                manualLinkErr ? 'border-red-500/70 focus:border-red-500' : 'border-dark-border focus:border-accent'
-              }`}
-            />
-            {showAdvanced && (
-              <>
-                <input
-                  type="number"
-                  value={youtubeStart}
-                  onChange={(e) => setYoutubeStart(e.target.value)}
-                  placeholder="Start s"
-                  className="w-20 px-3 py-2 rounded-lg bg-dark border border-dark-border text-white focus:outline-none focus:border-accent"
-                />
-                <input
-                  type="number"
-                  value={youtubeEnd}
-                  onChange={(e) => setYoutubeEnd(e.target.value)}
-                  placeholder="End s"
-                  className="w-20 px-3 py-2 rounded-lg bg-dark border border-dark-border text-white focus:outline-none focus:border-accent"
-                />
-              </>
-            )}
-            <button
-              type="button"
-              onClick={() => addYoutubeClip(youtubeUrl)}
-              disabled={!canAddManualLink}
-              title={canAddManualLink ? 'Add this clip' : 'Paste a valid YouTube link first'}
-              className="px-4 py-2 rounded-lg border border-accent text-accent hover:bg-accent/10 disabled:opacity-40 disabled:hover:bg-transparent"
-            >
-              Add
-            </button>
-          </div>
-          {manualLinkErr ? (
-            <p className="text-red-400 text-xs mt-1">{manualLinkErr}</p>
-          ) : showAdvanced ? (
-            <p className="text-xs text-gray-500 mt-1">Start/End in seconds. Trims per clip on every layout.</p>
-          ) : (
-            <p className="text-xs text-gray-500 mt-1">Full video per link. Trims: open Advanced options.</p>
-          )}
-        </div>
-
-        {showAdvanced && (
-          <div>
-            <label className="block text-sm text-gray-400 mb-2">
-              Or upload files ({uploadCount} added — {isFixedArity ? `exactly ${limits.min}` : `${limits.min}–${limits.max}`} in upload mode)
-            </label>
-            <input
-              type="file"
-              accept="video/*"
-              multiple
-              onChange={(e) => addFileClip(e.target.files)}
-              className="block w-full text-sm text-gray-400 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:bg-accent file:text-dark file:font-semibold"
-            />
-            <p className="text-xs text-gray-500 mt-1">
-              Browser only — 200 MB total. MP4 H.264 is best. Big files: upload to your YouTube, then link here. Connect
-              your channel when we add OAuth to pull <em>only</em> your uploads (coming soon in desktop).
-            </p>
-          </div>
-        )}
-
         {uploadCount > 0 && (
           <div>
             <label className="block text-sm text-gray-400 mb-2">What to pull</label>
@@ -947,144 +1150,23 @@ export function CreateHighlight() {
           </div>
         )}
 
-        {clips.length > 0 && (
-          <div>
-            <label className="block text-sm text-gray-400 mb-2">Clips ({clips.length})</label>
-            {hasMix && (
-              <p className="text-xs text-yellow-400 mb-2">
-                Mix detected. A reel must be either all YouTube links or all uploaded files. Remove one type before saving.
-              </p>
-            )}
-            <ul className="space-y-2">
-              {clips.map((c, i) => (
-                <li
-                  key={i}
-                  className="rounded-lg bg-dark-card border border-dark-border p-3"
-                >
-                  <div className="flex items-center justify-between gap-2">
-                    {c.type === 'youtube' && (() => {
-                      const yid = extractYouTubeId(c.url)
-                      return yid ? (
-                        <img
-                          src={thumbUrl(yid, 'mq')}
-                          alt=""
-                          loading="lazy"
-                          className="w-16 h-9 rounded object-cover shrink-0 border border-dark-border"
-                          onError={(e) => { (e.currentTarget as HTMLImageElement).style.opacity = '0.2' }}
-                        />
-                      ) : null
-                    })()}
-                    <span className="truncate text-sm flex-1 min-w-0">
-                      {i === 0 && layout === 'pip' && <span className="text-accent text-xs mr-2">MAIN</span>}
-                      {layout === 'action' && <span className="text-accent text-xs mr-2">A{i + 1}</span>}
-                      {layout === 'ultra' && <span className="text-accent text-xs mr-2">A{i + 1}</span>}
-                      {c.type === 'youtube' ? (
-                        <>
-                          <span className="text-accent text-xs mr-1">▶</span>
-                          {prettyClip(c.url, c.title)}
-                          {c.endSec > 0 && (
-                            <span className="text-xs text-gray-500 ml-2">
-                              {c.startSec}s–{c.endSec}s
-                            </span>
-                          )}
-                        </>
-                      ) : (
-                        <>
-                          <span className="text-xs text-gray-500 mr-1">FILE</span>
-                          {c.file.name}
-                          <span className="text-xs text-gray-500 ml-2">
-                            {(c.file.size / 1024 / 1024).toFixed(1)} MB
-                          </span>
-                        </>
-                      )}
-                    </span>
-                    <div className="flex items-center gap-2">
-                      {c.type === 'upload' && (
-                        <button
-                          type="button"
-                          onClick={() => analyzeClip(i)}
-                          disabled={aiAnalyzing === i}
-                          className="text-xs px-2 py-1 rounded border border-accent/40 text-accent hover:bg-accent/10 disabled:opacity-50"
-                          title={category === 'all' ? 'Detect big moments via audio (clutch spikes)' : `Scan on-screen text for ${activeCat.label}`}
-                        >
-                          {aiAnalyzing === i
-                            ? scanProgress?.idx === i
-                              ? `Scanning ${scanProgress.pct}%`
-                              : 'Analyzing…'
-                            : `Find ${activeCat.label}`}
-                        </button>
-                      )}
-                      {c.type === 'youtube' && (() => {
-                        const yid = extractYouTubeId(c.url)
-                        if (!yid) return null
-                        const tagged = !!resultByVideoId[yid]
-                        return (
-                          <label
-                            className="text-xs px-2 py-1 rounded border border-chakra/40 text-chakra hover:bg-chakra/10 cursor-pointer"
-                            title="Attach the match result screen — we read outcome + K/D to bunch same-match angles"
-                          >
-                            {ocrBusyId === yid ? 'Reading…' : tagged ? 'Result ✓' : 'Tag result'}
-                            <input
-                              type="file"
-                              accept="image/*"
-                              className="hidden"
-                              onChange={(e) => handleTagResult(yid, e.target.files)}
-                            />
-                          </label>
-                        )
-                      })()}
-                      <button
-                        type="button"
-                        onClick={() => removeClip(i)}
-                        className="text-red-400 hover:text-red-300 text-sm"
-                      >
-                        Remove
-                      </button>
-                    </div>
-                  </div>
-                  {c.type === 'upload' && suggestionsByIdx[i]?.length > 0 && (
-                    <div className="mt-2 pl-1">
-                      <div className="text-xs text-gray-400 mb-1">
-                        {suggestionsByIdx[i].length} action moments detected:
-                      </div>
-                      <div className="flex flex-wrap gap-1.5">
-                        {suggestionsByIdx[i].map((m, mi) => (
-                          <span
-                            key={mi}
-                            className="text-xs px-2 py-0.5 rounded bg-accent/10 text-accent border border-accent/20"
-                            title={`Intensity ${m.intensity.toFixed(1)}σ above baseline`}
-                          >
-                            {formatTimestamp(m.startSec)} – {formatTimestamp(m.endSec)}
-                          </span>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                  {c.type === 'upload' && suggestionsByIdx[i] && suggestionsByIdx[i].length === 0 && (
-                    <div className="mt-2 text-xs text-gray-500">
-                      No clear action spikes detected — try a clip with louder hits or longer than 3 seconds.
-                    </div>
-                  )}
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
-
         {error && <p className="text-red-400 text-sm">{error}</p>}
         {ffmpegLoading && (
           <p className="text-accent text-sm">{stage}… {progress}%</p>
         )}
 
-        <CreationSponsorGate isPremium={isPremium} onUnlocked={onSponsorUnlocked} />
-
-        <button
-          type="submit"
-          disabled={saving || ffmpegLoading || clips.length === 0 || hasMix || (needsSponsorAd && !sponsorUnlocked)}
-          className="w-full py-3 rounded-lg bg-accent text-dark font-semibold hover:shadow-glow disabled:opacity-50"
-        >
-          {saving ? 'Saving…' : ffmpegLoading ? 'Rendering…' : 'Create reel'}
-        </button>
+        {clips.length > 0 && (
+          <>
+            <CreationSponsorGate isPremium={isPremium} onUnlocked={onSponsorUnlocked} />
+            <button
+              type="submit"
+              disabled={saving || ffmpegLoading || hasMix || (needsSponsorAd && !sponsorUnlocked)}
+              className="w-full rounded-lg bg-accent py-3 font-semibold text-dark hover:shadow-glow disabled:opacity-50"
+            >
+              {saving ? 'Saving…' : ffmpegLoading ? 'Rendering…' : 'Create reel'}
+            </button>
+          </>
+        )}
       </form>
     </div>
   )

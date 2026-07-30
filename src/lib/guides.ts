@@ -12,6 +12,7 @@
  * instruction and an OPTIONAL deep-link CTA (e.g. "Open Connect →" to /connect)
  * that takes a confused user straight to the right screen.
  */
+import { IS_MOBILE_STORE_BUILD } from '@/lib/storeBuild'
 
 export type GuideCta = {
   /** Button label, e.g. "Open Connect". */
@@ -180,11 +181,16 @@ const joinClan: Guide = {
       title: 'Pick a clan',
       body: 'Each card shows the spots left and the join fee (or "Free to join"). Tap the one you like to join it.',
     },
-    {
-      title: 'Have Tokens ready for paid clans',
-      body: 'Some clans charge a Token fee, split with the clan treasury. If you are short, grab more from the Store, then join.',
-      cta: { label: 'Get Tokens', to: '/store' },
-    },
+    IS_MOBILE_STORE_BUILD
+      ? {
+          title: 'Choose a free-to-join clan',
+          body: 'Paid clan joins are unavailable in the mobile app. Pick a clan marked “Free to join” to continue.',
+        }
+      : {
+          title: 'Have Tokens ready for paid clans',
+          body: 'Some clans charge a Token fee, split with the clan treasury. If you are short, grab more from the Store, then join.',
+          cta: { label: 'Get Tokens', to: '/store' },
+        },
     {
       title: 'You\'re in',
       body: 'Once joined, the card flips to "Joined" and the clan\'s boards and channels open up. Head to Clans & Chat to say hi.',

@@ -22,7 +22,7 @@ import { useAppUpdate } from '@/hooks/useAppUpdate'
  * (z-70) and the Ask-TKO panel (z-75), which are modal.
  */
 export function UpdateBanner() {
-  const { updateReady, applyUpdate, dismiss } = useAppUpdate()
+  const { updateReady, nativeUpdate, applyUpdate, dismiss } = useAppUpdate()
   if (!updateReady) return null
 
   return (
@@ -39,7 +39,9 @@ export function UpdateBanner() {
         <div className="min-w-0 flex-1">
           <div className="text-sm font-semibold leading-tight text-white">New version available</div>
           <div className="text-xs text-gray-400 leading-tight mt-0.5">
-            Update to get the latest build. You&rsquo;ll stay signed in.
+            {nativeUpdate
+              ? 'Install the latest Android build. Your account stays intact.'
+              : 'Update to get the latest build. You\u2019ll stay signed in.'}
           </div>
         </div>
         <button
@@ -47,7 +49,7 @@ export function UpdateBanner() {
           onClick={applyUpdate}
           className="btn-primary shrink-0 px-3.5 py-1.5 text-sm"
         >
-          Update
+          {nativeUpdate ? 'Install update' : 'Update'}
         </button>
         <button
           type="button"

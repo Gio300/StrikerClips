@@ -37,6 +37,8 @@ export type Wallet = {
   sweeps: number
   /** purchased marketplace credit, stored in integer USD cents */
   paid_sweeps_cents: number
+  /** ORACLE-USE-ONLY tickets (the repurposed daily grant). Bettable, but $0. */
+  oracle_tickets: number
 }
 
 const KEY_PREFIX = 'kc_wallet:'
@@ -53,7 +55,7 @@ function keyFor(userId: string): string {
 }
 
 function empty(): Wallet {
-  return { tokens: 0, sweeps: 0, paid_sweeps_cents: 0 }
+  return { tokens: 0, sweeps: 0, paid_sweeps_cents: 0, oracle_tickets: 0 }
 }
 
 function broadcast(): void {
@@ -76,6 +78,9 @@ export function applyWalletSnapshot(userId: string, w: Partial<Wallet> | null | 
     sweeps: Number.isFinite(w?.sweeps) ? Math.max(0, Number(w!.sweeps)) : 0,
     paid_sweeps_cents: Number.isFinite(w?.paid_sweeps_cents)
       ? Math.max(0, Math.round(Number(w!.paid_sweeps_cents)))
+      : 0,
+    oracle_tickets: Number.isFinite(w?.oracle_tickets)
+      ? Math.max(0, Math.round(Number(w!.oracle_tickets)))
       : 0,
   }
   cache.set(userId || 'anon', next)
@@ -100,6 +105,9 @@ function readLocal(userId: string, storage: WalletStorage | null): Wallet {
       sweeps: Number.isFinite(parsed?.sweeps) ? Number(parsed!.sweeps) : 0,
       paid_sweeps_cents: Number.isFinite(parsed?.paid_sweeps_cents)
         ? Math.max(0, Math.round(Number(parsed!.paid_sweeps_cents)))
+        : 0,
+      oracle_tickets: Number.isFinite(parsed?.oracle_tickets)
+        ? Math.max(0, Math.round(Number(parsed!.oracle_tickets)))
         : 0,
     }
   } catch {
@@ -182,6 +190,7 @@ export function addToWallet(
       0,
       cur.paid_sweeps_cents + Math.round(delta.paid_sweeps_cents ?? 0),
     ),
+    oracle_tickets: Math.max(0, cur.oracle_tickets + Math.round(delta.oracle_tickets ?? 0)),
   }
   writeLocal(userId, next, storage)
   return next

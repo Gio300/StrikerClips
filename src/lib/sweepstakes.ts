@@ -96,6 +96,15 @@ export function guaranteedPrize(entryPoints: number, targetEntrants: number): nu
 export const DAILY_BONUS_SWEEPS = 25
 
 /**
+ * Free ORACLE-USE-ONLY tickets granted per day (Oracle Rule 1). The daily grant
+ * was REPURPOSED from free Sweeps to these tickets — they can be BET in the
+ * Oracle economy but are tracked separately and are NEVER part of the money ($)
+ * flow. Keep in sync with ORACLE_DAILY_TICKETS in server/app.ts (the server's
+ * value is the one actually credited).
+ */
+export const DAILY_ORACLE_TICKETS = 3
+
+/**
  * Claim today's free Sweeps Points.
  *
  * The once-a-day guard used to be a `kc_daily_sweeps:<user>:<date>` localStorage

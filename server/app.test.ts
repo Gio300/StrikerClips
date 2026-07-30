@@ -5,8 +5,9 @@ import { randomUUID, createHmac } from 'node:crypto'
 import {
   ageFromDob, isAllowedOrigin, MIN_AGE_YEARS,
   SERVER_TOKEN_PACKS, serverPackById, tierForPrice, SUBSCRIPTION_TIERS,
+  createApp,
 } from './app'
-import { makeApp } from './testHarness'
+import { makeApp, makeDb } from './testHarness'
 import { TOKEN_PACKS } from '../src/lib/tokenPacks'
 
 /** A date of birth comfortably over the 13+ gate — signup now requires one. */
@@ -1420,10 +1421,23 @@ describe('TKO API — 13+ age gate at signup', () => {
     expect(ageFromDob('1700-01-01', now)).toBeNull() // implausible
   })
 
-  it('requires a date of birth', async () => {
-    const r = await request(app).post('/api/auth/signup').send({ email: 'nodob@kc.gg', password: 'password123' })
-    expect(r.status).toBe(400)
-    expect(r.body.error).toMatch(/date of birth/i)
+  it('does NOT require a date of birth — a 13+ consent is enough', async () => {
+    // The product is all-ages: signup is a 13+ CONSENT, not a hard DOB gate. A
+    // signup with no DOB but the consent attestation succeeds and stores it.
+    // Use a dedicated pool so the stored attestation can be read back directly
+    // (toUser surfaces only a whitelist of metadata to /api/auth/me).
+    const pool = makeDb()
+    const consentApp = createApp(pool)
+    const r = await request(consentApp).post('/api/auth/signup')
+      .send({ email: 'nodob@kc.gg', password: 'password123', username: 'nodob', age_consent_13_plus: true })
+    expect(r.status).toBe(200)
+    expect(r.body.token).toBeTruthy()
+    // The consent attestation is persisted; no DOB was supplied so none is stored.
+    const stored = await pool.query('select user_metadata from users where id=$1', [r.body.user.id])
+    const meta = stored.rows[0].user_metadata
+    const parsed = typeof meta === 'string' ? JSON.parse(meta) : meta
+    expect(parsed.age_consent_13_plus).toBe(true)
+    expect(parsed.date_of_birth).toBeUndefined()
   })
 
   it('rejects a malformed date of birth', async () => {
@@ -1636,6 +1650,113 @@ function fn(app: any, who: Who | null, name: string, body: any = {}) {
   return who ? r.set('Authorization', `Bearer ${who.token}`) : r
 }
 
+describe('tournament brackets advance trusted winners and player art slots', () => {
+  const app = makeApp()
+
+  it('seeds six entrants, protects host controls, and advances a champion', async () => {
+    const host = await signUp(app, 'bracket-host@kc.gg', 'brackethost')
+    const players = await Promise.all(
+      Array.from({ length: 6 }, (_, index) =>
+        signUp(app, `bracket-player-${index}@kc.gg`, `bracketplayer${index}`),
+      ),
+    )
+    const tournament = await db(app, host, {
+      table: 'tournaments',
+      action: 'insert',
+      single: true,
+      values: { name: 'TKO Bracket Test', created_by: host.id },
+    })
+    expect(tournament.status).toBe(200)
+    const tournamentId = tournament.body.data.id
+
+    for (const player of players) {
+      const entrant = await db(app, host, {
+        table: 'tournament_entrants',
+        action: 'insert',
+        single: true,
+        values: {
+          tournament_id: tournamentId,
+          user_id: player.id,
+          status: 'accepted',
+        },
+      })
+      expect(entrant.status).toBe(200)
+    }
+
+    const denied = await fn(app, players[0], 'tournament-bracket-seed', {
+      tournamentId,
+      seedMode: 'registration',
+    })
+    expect(denied.status).toBe(403)
+
+    const seeded = await fn(app, host, 'tournament-bracket-seed', {
+      tournamentId,
+      seedMode: 'registration',
+    })
+    expect(seeded.status).toBe(200)
+    expect(seeded.body.ok).toBe(true)
+    expect(seeded.body.totalRounds).toBe(3)
+    const opening = (seeded.body.battles as any[]).filter((battle) => battle.round === 1)
+    expect(opening).toHaveLength(4)
+    expect(opening.map((battle) => battle.bracket_slot)).toEqual([0, 1, 2, 3])
+    expect(opening.filter((battle) => battle.status === 'complete')).toHaveLength(2)
+
+    const contested = opening.filter((battle) => battle.player_b)
+    expect(contested).toHaveLength(2)
+    const firstWinner = contested[0].player_a
+    const firstResult = await fn(app, host, 'tournament-bracket-winner', {
+      battleId: contested[0].id,
+      winnerId: firstWinner,
+    })
+    expect(firstResult.status).toBe(200)
+    expect(firstResult.body.ok).toBe(true)
+
+    const secondWinner = contested[1].player_b
+    const secondResult = await fn(app, host, 'tournament-bracket-winner', {
+      battleId: contested[1].id,
+      winnerId: secondWinner,
+    })
+    expect(secondResult.status).toBe(200)
+    const semifinals = (secondResult.body.battles as any[]).filter((battle) => battle.round === 2)
+    expect(semifinals).toHaveLength(2)
+    expect(semifinals.every((battle) => battle.player_a && battle.player_b)).toBe(true)
+
+    const semifinalWinners: string[] = []
+    let latest = secondResult
+    for (const semifinal of semifinals) {
+      const winnerId = semifinal.player_a
+      semifinalWinners.push(winnerId)
+      latest = await fn(app, host, 'tournament-bracket-winner', {
+        battleId: semifinal.id,
+        winnerId,
+      })
+      expect(latest.status).toBe(200)
+      expect(latest.body.ok).toBe(true)
+    }
+
+    const final = (latest.body.battles as any[]).find((battle) => battle.round === 3)
+    expect(final).toBeTruthy()
+    expect(new Set([final.player_a, final.player_b])).toEqual(new Set(semifinalWinners))
+
+    const championId = final.player_b
+    const decided = await fn(app, host, 'tournament-bracket-winner', {
+      battleId: final.id,
+      winnerId: championId,
+    })
+    expect(decided.status).toBe(200)
+    expect(decided.body.champion).toBe(championId)
+
+    const results = await db(app, null, {
+      table: 'tournament_results',
+      action: 'select',
+      filters: [{ col: 'tournament_id', op: 'eq', val: tournamentId }],
+    })
+    expect(results.status).toBe(200)
+    expect(results.body.data).toHaveLength(1)
+    expect(results.body.data[0].winner_profile_id).toBe(championId)
+  })
+})
+
 describe('economy — a client cannot mint value', () => {
   const app = makeApp()
   let alice: Who
@@ -1650,7 +1771,7 @@ describe('economy — a client cannot mint value', () => {
     // The wallet row exists (reading it creates it) and starts empty.
     const w = await fn(app, alice, 'wallet')
     expect(w.status).toBe(200)
-    expect(w.body.wallet).toEqual({ tokens: 0, sweeps: 0, paid_sweeps_cents: 0 })
+    expect(w.body.wallet).toEqual({ tokens: 0, sweeps: 0, paid_sweeps_cents: 0, oracle_tickets: 0 })
 
     // Direct insert: the table is insert-'deny'.
     const ins = await db(app, alice, {
@@ -1677,21 +1798,25 @@ describe('economy — a client cannot mint value', () => {
 
     // Balance unchanged.
     const after = await fn(app, alice, 'wallet')
-    expect(after.body.wallet).toEqual({ tokens: 0, sweeps: 0, paid_sweeps_cents: 0 })
+    expect(after.body.wallet).toEqual({ tokens: 0, sweeps: 0, paid_sweeps_cents: 0, oracle_tickets: 0 })
   })
 
-  it('the free daily Sweeps grant is server-guarded — one per day, not one per click', async () => {
+  it('the free daily grant now credits ORACLE-USE-ONLY tickets — one per day, not one per click', async () => {
     const first = await fn(app, bob, 'sweeps-daily')
     expect(first.status).toBe(200)
     expect(first.body.ok).toBe(true)
-    expect(first.body.granted).toBe(25)
-    expect(first.body.wallet.sweeps).toBe(25)
+    // Repurposed (Oracle Rule 1): the daily grant is now 3 Oracle tickets, NOT
+    // $-flow sweeps. Tickets are tracked separately and never part of the $ flow.
+    expect(first.body.granted).toBe(3)
+    expect(first.body.grantedKind).toBe('oracle_tickets')
+    expect(first.body.wallet.oracle_tickets).toBe(3)
+    expect(first.body.wallet.sweeps).toBe(0)
 
     // The old localStorage guard could be deleted from devtools. This one can't.
     const second = await fn(app, bob, 'sweeps-daily')
     expect(second.body.ok).toBe(false)
     expect(second.body.reason).toBe('already-claimed')
-    expect(second.body.wallet.sweeps).toBe(25)
+    expect(second.body.wallet.oracle_tickets).toBe(3)
   })
 
   it('a user cannot grant themselves an artifact', async () => {

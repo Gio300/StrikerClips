@@ -37,13 +37,32 @@ function formatMessageTime(value: string): string {
 async function profileMap(ids: readonly string[]): Promise<Map<string, SocialProfile>> {
   const uniqueIds = [...new Set(ids.filter(Boolean))]
   if (uniqueIds.length === 0) return new Map()
-  const { data, error } = await supabase
+  // Resolve members resiliently: try the enriched select first, and if it errors
+  // (e.g. the equipped-tag columns aren't available on this backend) fall back to
+  // a plain id/username/avatar select so members never blank out.
+  const enriched = await supabase
     .from('profiles')
     .select('id, username, avatar_url, power_level, equipped_tag_text, equipped_tag_rarity')
     .in('id', uniqueIds)
-  if (error) throw new Error(error.message || 'Could not load conversation members.')
+  if (!enriched.error) {
+    return new Map(
+      ((enriched.data ?? []) as SocialProfile[]).map((player) => [player.id, player]),
+    )
+  }
+  const plain = await supabase
+    .from('profiles')
+    .select('id, username, avatar_url')
+    .in('id', uniqueIds)
+  if (plain.error) throw new Error(plain.error.message || 'Could not load conversation members.')
   return new Map(
-    ((data ?? []) as SocialProfile[]).map((player) => [player.id, player]),
+    ((plain.data ?? []) as Array<Pick<SocialProfile, 'id' | 'username' | 'avatar_url'>>).map((player) => {
+      const member: SocialProfile = {
+        id: player.id,
+        username: player.username,
+        avatar_url: player.avatar_url ?? null,
+      }
+      return [player.id, member]
+    }),
   )
 }
 
@@ -234,13 +253,20 @@ export function DirectMessages({
     if (!username || searching) return
     setSearching(true)
     setError(null)
-    const { data: target, error: targetError } = await supabase
+    // Partial, case-insensitive match so "Mr" finds "MrBeast". Fetch a small set
+    // and prefer an exact (case-insensitive) hit, otherwise take the first.
+    const { data: matches, error: targetError } = await supabase
       .from('profiles')
       .select('id, username')
-      .ilike('username', username)
-      .maybeSingle()
+      .ilike('username', `%${username}%`)
+      .limit(10)
+    const lowered = username.toLowerCase()
+    const target =
+      (matches ?? []).find((m) => (m.username ?? '').toLowerCase() === lowered) ??
+      (matches ?? [])[0] ??
+      null
     if (targetError || !target) {
-      setError(targetError?.message || `No player named "${username}" was found.`)
+      setError(targetError?.message || `No player matching "${username}" was found.`)
       setSearching(false)
       return
     }

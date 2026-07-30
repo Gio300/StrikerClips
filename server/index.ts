@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url'
 import express from 'express'
 import { Pool } from 'pg'
 import { createApp } from './app'
+import { PHYSICAL_MERCH_DDL } from './physicalMerchSchema'
 
 // Production entry: talks to your real Postgres (Cloud SQL / RDS / self-hosted).
 //   Standard TCP form:  DATABASE_URL=postgres://user:pass@host:5432/killcam
@@ -19,12 +20,9 @@ const connectionString =
     : undefined)
 const pool = new Pool({ connectionString })
 
-// createApp gives us the API (everything under /api, plus /health). Here we add
-// the built static bundles with SPA fallbacks, matching the hosted web layout:
-//   /            → marketing site (dist-site/, Vite base '/')
-//   /app, /app/* → the product app (dist/, built with VITE_BASE_PATH=/app/)
-// Any unmatched /api/* still returns a JSON 404. If dist-site/ is absent, the
-// app is served at '/' too so the origin never hard-404s a whole surface.
+// createApp gives us the API (everything under /api, plus /health). The product
+// SPA owns the root origin. Marketing is a route inside that SPA at /marketing,
+// so the web app and the installed Capacitor app use the same route tree.
 const app = createApp(pool)
 
 // One-time, idempotent repair on every boot: make sure every user has a profile
@@ -154,6 +152,18 @@ async function bootstrapTables() {
        id uuid primary key default gen_random_uuid(),
        giver_id uuid not null, recipient_id uuid not null, artifact_id uuid,
        created_at timestamptz not null default now(), unique (giver_id, recipient_id))`,
+    // ── Creator/streamer GOALS (paid-tier feature). Public read so viewers and
+    //    the live banner can show a creator's live progress; all writes go
+    //    through /api/fn/goal-set + /api/fn/goal-remove (TABLE_POLICY deny-write).
+    `create table if not exists public.creator_goals (
+       id uuid primary key default gen_random_uuid(),
+       user_id uuid not null,
+       kind text not null default 'custom',
+       label text not null default '',
+       target integer not null default 0,
+       active boolean not null default true,
+       created_at timestamptz not null default now())`,
+    `create index if not exists creator_goals_user_idx on public.creator_goals(user_id, active)`,
     `create table if not exists public.match_versions (
        id uuid primary key default gen_random_uuid(),
        match_key text not null, version integer not null default 1, youtube_id text,
@@ -255,6 +265,54 @@ async function bootstrapTables() {
     `alter table public.clip_records add column if not exists participants text[] default '{}'`,
     `alter table public.clip_records add column if not exists composite_youtube_id text`,
     `create index if not exists idx_clip_records_composite on public.clip_records(composite_youtube_id)`,
+    // Live streams heartbeat + host-curated angles. `updated_at` powers the
+    // stale-live TTL (a dead stream stops blocking go-live and drops off the LIVE
+    // NOW reads); live_stream_angles stores the extra players a host adds to their
+    // multi-angle show. Both are additive & idempotent.
+    `alter table public.live_streams add column if not exists updated_at timestamptz default now()`,
+    // The game a live stream is playing. Powers the APPROVED_GAMES gate: only
+    // approved-game streams are featured on the public "who's live" read. Defaults
+    // to the one supported title so existing rows stay featured. Additive + idempotent.
+    `alter table public.live_streams add column if not exists game text default 'Shinobi Striker'`,
+    // Go Live setup config (grouped dropdowns on the client). All additive +
+    // idempotent, all with safe defaults so existing rows keep working. Money
+    // safety: price_cents is STORED only — no payment is collected here (Phase 2).
+    `alter table public.live_streams add column if not exists chat_enabled boolean not null default true`,
+    `alter table public.live_streams add column if not exists is_paid boolean not null default false`,
+    `alter table public.live_streams add column if not exists price_cents integer`,
+    `alter table public.live_streams add column if not exists tournament_id uuid`,
+    `alter table public.live_streams add column if not exists host_share text not null default 'both'`,
+    `alter table public.live_streams add column if not exists background_url text`,
+    `alter table public.live_streams add column if not exists team_a text`,
+    `alter table public.live_streams add column if not exists team_b text`,
+    `alter table public.live_streams add column if not exists layout text not null default 'auto'`,
+    `alter table public.live_streams add column if not exists show_bracket boolean not null default false`,
+    `alter table public.tournament_battles add column if not exists round integer`,
+    `alter table public.tournament_battles add column if not exists bracket_slot integer`,
+    `create unique index if not exists uq_tournament_battle_bracket_slot
+       on public.tournament_battles(tournament_id, round, bracket_slot)
+       where round is not null and bracket_slot is not null`,
+    `create table if not exists public.live_stream_angles (
+       id uuid primary key default gen_random_uuid(),
+       live_stream_id uuid not null, user_id uuid,
+       label text, youtube_url text, created_at timestamptz not null default now())`,
+    `create index if not exists idx_live_stream_angles_stream
+       on public.live_stream_angles(live_stream_id, created_at)`,
+    // Co-stream INVITES: a host (or accepted co-host) invites a player to add
+    // their OWN stream as an angle. `role` snapshots the invitee's streaming tier
+    // at invite time (the ceiling is enforced server-side in the live-invite fn).
+    // One invite per (stream, invitee). Additive & idempotent.
+    `create table if not exists public.live_stream_invites (
+       id uuid primary key default gen_random_uuid(),
+       live_stream_id uuid not null,
+       inviter_id uuid not null, invitee_id uuid not null,
+       role text, status text not null default 'pending',
+       created_at timestamptz not null default now(),
+       unique (live_stream_id, invitee_id))`,
+    `create index if not exists idx_live_stream_invites_invitee
+       on public.live_stream_invites(invitee_id, status)`,
+    `create index if not exists idx_live_stream_invites_stream
+       on public.live_stream_invites(live_stream_id)`,
     `alter table public.profiles add column if not exists auto_merge_opt_out boolean not null default false`,
     `alter table public.match_versions add column if not exists participant_ids uuid[] not null default '{}'`,
     `alter table public.match_versions add column if not exists clip_ids uuid[] not null default '{}'`,
@@ -448,6 +506,28 @@ async function bootstrapTables() {
       console.warn('[boot] table bootstrap stmt skipped:', (e as Error).message)
     }
   }
+  try {
+    await pool.query(PHYSICAL_MERCH_DDL)
+    // These tables contain order, address, provider-cost, and payout records.
+    // They are intentionally server-only: the Express API applies per-user
+    // authorization and the service-role database connection bypasses RLS.
+    // Run this on every boot so even databases first created by the runtime
+    // bootstrap cannot expose physical-commerce rows through a direct client.
+    for (const table of [
+      'physical_merch_products',
+      'physical_merch_variants',
+      'physical_merch_orders',
+      'physical_merch_order_items',
+      'physical_merch_events',
+      'physical_merch_earnings',
+    ]) {
+      await pool.query(`alter table public.${table} enable row level security`)
+    }
+  } catch (e) {
+    // Physical commerce fails closed if its schema cannot be ensured.
+    // eslint-disable-next-line no-console
+    console.warn('[boot] physical merchandise tables skipped:', (e as Error).message)
+  }
   // Seed a SMALL starting board (5×4) once — Conquest starts tiny and grows as
   // it fills (see conquest.targetBoardSize). Territories are unclaimed at first;
   // clans take them by winning battles.
@@ -501,9 +581,7 @@ async function bootstrapTables() {
 void bootstrapTables()
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
-const appDir = path.resolve(__dirname, '..', 'dist') // product app → '/app'
-const siteDir = path.resolve(__dirname, '..', 'dist-site') // marketing → '/'
-const hasSite = existsSync(path.join(siteDir, 'index.html'))
+const appDir = path.resolve(__dirname, '..', 'dist')
 
 // ---- PWA update plumbing --------------------------------------------------
 // Three things must never be served stale, or a tester gets pinned to an old
@@ -513,7 +591,7 @@ const hasSite = existsSync(path.join(siteDir, 'index.html'))
 //  • version.json — the build stamp emitted by `vite build` (vite.buildId.ts)
 //    into dist/. The running app polls it and compares against its own
 //    VITE_BUILD_ID; a difference raises the in-app "Update" prompt. Exposed at
-//    BOTH /version.json and /app/version.json so either origin path works.
+//    BOTH /version.json and legacy /app/version.json so old installs can update.
 //  • sw.js — the service worker script. Browsers cap SW script caching at 24h
 //    anyway, but an explicit no-cache makes a deploy visible immediately.
 //  • the HTML shells — they name the hashed asset filenames, so a cached shell
@@ -527,6 +605,13 @@ app.get(['/version.json', '/app/version.json'], (_req, res) => {
   res.json({ buildId: 'unknown' })
 })
 
+const mobileVersionFile = path.join(appDir, 'mobile-version.json')
+app.get(['/mobile-version.json', '/app/mobile-version.json'], (_req, res) => {
+  res.setHeader('Cache-Control', 'no-store, must-revalidate')
+  if (existsSync(mobileVersionFile)) return res.sendFile(mobileVersionFile)
+  res.status(404).json({ error: 'mobile release not published' })
+})
+
 // Accepts both express.Response and the raw ServerResponse that
 // express.static's setHeaders hook hands back.
 const noStore = (res: { setHeader(name: string, value: string): void }) => {
@@ -535,7 +620,7 @@ const noStore = (res: { setHeader(name: string, value: string): void }) => {
 app.get(['/sw.js', '/app/sw.js'], (req, res) => {
   noStore(res)
   res.setHeader('Service-Worker-Allowed', req.path.startsWith('/app/') ? '/app/' : '/')
-  const file = path.join(req.path.startsWith('/app/') ? appDir : hasSite ? siteDir : appDir, 'sw.js')
+  const file = path.join(appDir, 'sw.js')
   if (!existsSync(file)) return res.status(404).type('text/plain').send('not found')
   res.type('application/javascript')
   res.sendFile(file)
@@ -548,25 +633,31 @@ const staticOpts: Parameters<typeof express.static>[1] = {
   },
 }
 
-// ---- Product app under /app (assets are referenced as /app/assets/…) ----
-app.use('/app', express.static(appDir, staticOpts))
-app.get(['/app', '/app/*'], (_req, res) => {
+// Preserve old shared links after moving the product from /app to the root.
+// originalUrl keeps the query string, so /app/live?do=watch becomes
+// /live?do=watch instead of dropping the user's intended flow.
+app.get(['/app', '/app/*'], (req, res) => {
+  const target = req.originalUrl.slice('/app'.length) || '/'
+  res.redirect(308, target)
+})
+
+// ---- Product app at the root; /marketing is handled by React Router. ----
+// public/marketing contains image assets, so express.static would otherwise
+// redirect the exact /marketing route to /marketing/. Serve the SPA shell
+// first to keep the canonical route stable.
+app.get(['/marketing', '/download'], (_req, res) => {
   noStore(res)
   res.sendFile(path.join(appDir, 'index.html'))
 })
 
-// ---- Marketing site at the root (falls back to the app when not built) ----
-const rootDir = hasSite ? siteDir : appDir
-app.use(express.static(rootDir, staticOpts))
+app.use(express.static(appDir, staticOpts))
 app.get('*', (req, res) => {
   if (req.path.startsWith('/api')) return res.status(404).json({ error: 'not found' })
   noStore(res)
-  res.sendFile(path.join(rootDir, 'index.html'))
+  res.sendFile(path.join(appDir, 'index.html'))
 })
 
 const port = Number(process.env.PORT || 8787)
 app.listen(port, () =>
-  console.log(
-    `TKO server listening on :${port} — app '${appDir}' at /app, root '${rootDir}'${hasSite ? ' (marketing)' : ' (app fallback)'}`,
-  ),
+  console.log(`TKO server listening on :${port} - app '${appDir}' at /, marketing at /marketing`),
 )

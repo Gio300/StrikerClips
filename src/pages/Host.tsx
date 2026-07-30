@@ -7,6 +7,7 @@ import { canHost } from '@/lib/tkoKing'
 import { createHostCommentary, hostSourceLabel, type HostSource } from '@/lib/hostCommentary'
 import { OBSPanel } from '@/components/OBSPanel'
 import { CollapsibleSection } from '@/components/CollapsibleSection'
+import { IS_MOBILE_STORE_BUILD } from '@/lib/storeBuild'
 import type { Match } from '@/types/database'
 
 /**
@@ -54,8 +55,10 @@ export function Host() {
     return (
       <Gate
         title="Host access required"
-        body="Watching is open to everyone — but hosting the mic is gated. Unlock the live-commentary lane by going Legend (our top membership), or by redeeming a founder HOST code."
-        cta={{ to: '/upgrade', label: 'Go Legend or redeem a code' }}
+        body={IS_MOBILE_STORE_BUILD
+          ? 'Host access is not available in the mobile app.'
+          : 'Watching is open to everyone — but hosting the mic is gated. Unlock the live-commentary lane by going Legend (our top membership), or by redeeming a founder HOST code.'}
+        cta={IS_MOBILE_STORE_BUILD ? undefined : { to: '/upgrade', label: 'Go Legend or redeem a code' }}
       />
     )
   }
@@ -373,15 +376,17 @@ function Gate({
 }: {
   title: string
   body: string
-  cta: { to: string; label: string }
+  cta?: { to: string; label: string }
 }) {
   return (
     <div className="p-8 flex flex-col items-center justify-center gap-4 py-20 text-center max-w-md mx-auto">
       <h1 className="text-xl font-bold">{title}</h1>
       <p className="text-gray-400">{body}</p>
-      <Link to={cta.to} className="px-4 py-2 rounded-lg bg-accent text-dark font-semibold hover:shadow-glow transition-all">
-        {cta.label}
-      </Link>
+      {cta && (
+        <Link to={cta.to} className="px-4 py-2 rounded-lg bg-accent text-dark font-semibold hover:shadow-glow transition-all">
+          {cta.label}
+        </Link>
+      )}
     </div>
   )
 }

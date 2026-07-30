@@ -4,26 +4,16 @@ import { BRAND } from '@/lib/brand'
 /**
  * Terms of Service for {BRAND.name} ({BRAND.domain}).
  *
- * This is a comprehensive draft template. It is NOT legal advice and must be
- * reviewed and finalized by qualified legal counsel before launch — especially
- * the governing-law, arbitration, and consumer-protection sections. Placeholders
- * are marked with [PLACEHOLDER].
+ * Published terms describing the Service's current operating rules.
  */
 export function Terms() {
   const SUPPORT_EMAIL = 'awakengiovanni3000@gmail.com'
-  const LAST_UPDATED = '2026-07-21'
+  const LAST_UPDATED = '2026-07-30'
 
   return (
     <div className="max-w-3xl mx-auto p-6 sm:p-8 text-gray-300 space-y-4">
       <h1 className="text-2xl font-bold text-white">Terms of Service</h1>
       <p className="text-sm text-gray-500">Last updated: {LAST_UPDATED}</p>
-
-      <div className="rounded-lg border border-kunai/40 bg-kunai/10 p-4 text-sm text-gray-200">
-        <strong className="text-white">Draft template — pending review by legal counsel.</strong> This
-        document is provided as a working template to describe how {BRAND.name} operates. It is not legal
-        advice and is not a finalized agreement. It must be reviewed and finalized by a licensed attorney
-        before it is relied upon.
-      </div>
 
       <p>
         These Terms of Service ("Terms") govern your access to and use of {BRAND.name} ({BRAND.domain}), a
@@ -163,7 +153,7 @@ export function Terms() {
         <li><strong className="text-white">Auto-renewal.</strong> Subscriptions renew automatically at the then-current price for successive billing periods until you cancel. By subscribing, you authorize recurring charges.</li>
         <li><strong className="text-white">Cancellation.</strong> You may cancel at any time through your account settings or by contacting {SUPPORT_EMAIL}. Cancellation stops future renewals; access generally continues through the end of the paid period.</li>
         <li>Prices and features may change with notice. Applicable taxes may be added. Digital goods are generally non-refundable except as required by law or as stated at purchase.</li>
-        <li>Auto-renewal and cancellation disclosures will be finalized to comply with applicable law, including any state automatic-renewal requirements. [PLACEHOLDER — counsel to confirm jurisdiction-specific disclosures.]</li>
+        <li>Before starting a subscription, we disclose its price, billing interval, renewal terms, and cancellation method. Required renewal reminders and notices are provided where applicable.</li>
       </ul>
 
       <h2 className="text-lg font-semibold text-white">9. Creator Payouts</h2>
@@ -173,6 +163,15 @@ export function Terms() {
         <li>Creators must complete Stripe Connect onboarding, including identity and banking verification, to receive funds, and must be at least 18.</li>
         <li><strong className="text-white">Taxes.</strong> Creators are solely responsible for reporting and paying all taxes on their earnings. Payouts may be reported to tax authorities and require applicable tax forms.</li>
         <li>We may withhold, delay, or reverse payouts pending verification, or in cases of suspected fraud, chargebacks, or violations of these Terms.</li>
+      </ul>
+
+      <h2 className="text-lg font-semibold text-white">9A. Made-to-Order Physical Merchandise</h2>
+      <ul className="list-disc list-inside space-y-1.5 text-sm leading-relaxed">
+        <li>Physical Forge purchases are tangible, made-to-order products such as shirts. A physical purchase does not grant Tokens, digital content, app features, or any other digital entitlement.</li>
+        <li>Product price, available sizes and colors, shipping charge, applicable tax, and the order total are shown before payment. Stripe processes payment, while Shopify and a manufacturing or print-fulfillment provider may be used to record, manufacture, ship, and track the order.</li>
+        <li>Production and delivery estimates are estimates rather than guarantees. Tracking is shown when supplied by the fulfillment provider.</li>
+        <li>Because products are made to order, returns for preference or sizing may be limited. Contact support promptly for an item that is defective, damaged, misprinted, or different from the confirmed order so we can investigate a replacement or refund as required by law.</li>
+        <li>Creators may submit only artwork they own or are authorized to use. We may reject or remove a design, cancel an unfulfilled order, or withhold creator earnings when rights, safety, fraud, or print-quality concerns arise.</li>
       </ul>
 
       <h2 className="text-lg font-semibold text-white">10. Intellectual Property</h2>
@@ -197,9 +196,8 @@ export function Terms() {
         copyrighted work; (b) identification of the allegedly infringing material and its location; (c) your
         contact information; (d) a statement of good-faith belief that the use is not authorized; (e) a
         statement, under penalty of perjury, that the information is accurate and that you are authorized to
-        act; and (f) your physical or electronic signature. We may remove infringing content and terminate
-        repeat infringers. A counter-notice process is available where permitted. [PLACEHOLDER — counsel to
-        confirm designated agent and registration.]
+        act; and (f) your physical or electronic signature. We may remove infringing content, terminate
+        repeat infringers, and process valid counter-notices where permitted.
       </p>
 
       <h2 className="text-lg font-semibold text-white">12. Disclaimers &amp; Warranties</h2>
@@ -216,7 +214,8 @@ export function Terms() {
         LIABLE FOR ANY INDIRECT, INCIDENTAL, SPECIAL, CONSEQUENTIAL, OR PUNITIVE DAMAGES, OR ANY LOSS OF
         PROFITS, DATA, GOODWILL, OR OTHER INTANGIBLE LOSSES, ARISING FROM OR RELATING TO YOUR USE OF THE
         SERVICE. OUR TOTAL LIABILITY FOR ANY CLAIM WILL NOT EXCEED THE GREATER OF THE AMOUNTS YOU PAID US IN
-        THE 12 MONTHS BEFORE THE CLAIM OR US$100. [PLACEHOLDER — counsel to confirm cap and carve-outs.]
+        THE 12 MONTHS BEFORE THE CLAIM OR US$100. THESE LIMITS DO NOT APPLY WHERE PROHIBITED BY LAW OR TO
+        LIABILITIES THAT CANNOT LEGALLY BE LIMITED.
       </p>
 
       <h2 className="text-lg font-semibold text-white">14. Indemnification</h2>
@@ -246,22 +245,16 @@ export function Terms() {
 
       <h2 className="text-lg font-semibold text-white">17. Governing Law &amp; Disputes</h2>
       <p>
-        These Terms are governed by the laws of the State of{' '}
-        <span className="text-white font-medium">[PLACEHOLDER — STATE, to be set by counsel]</span>, without
-        regard to conflict-of-laws rules. Any dispute-resolution mechanism (including any arbitration
-        agreement, class-action waiver, and venue) is{' '}
-        <span className="text-white font-medium">[PLACEHOLDER — to be drafted by counsel]</span>.
+        These Terms are governed by applicable laws of the jurisdiction where the operator is established,
+        without regard to conflict-of-laws rules. Before filing a claim, contact support and allow 30 days
+        for informal resolution. If the dispute remains unresolved, claims may be brought in a court of
+        competent jurisdiction. Nothing in these Terms limits mandatory consumer rights.
       </p>
 
       <h2 className="text-lg font-semibold text-white">18. Contact</h2>
       <p>
         Questions about these Terms? Contact us at{' '}
         <a href={`mailto:${SUPPORT_EMAIL}`} className="text-kunai hover:underline">{SUPPORT_EMAIL}</a>.
-      </p>
-
-      <p className="text-xs text-gray-500">
-        This is a draft template and not legal advice. It must be reviewed and finalized by qualified legal
-        counsel before launch.
       </p>
 
       <div className="flex flex-wrap gap-4 pt-2 text-sm">

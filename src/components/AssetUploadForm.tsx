@@ -199,7 +199,7 @@ export function AssetUploadForm({
         <div className="mt-3 rounded-lg border border-accent/40 bg-accent/10 px-3 py-2 text-sm text-accent flex flex-wrap items-center gap-x-2 gap-y-1">
           <span>
             {IS_MOBILE_STORE_BUILD
-              ? 'Marketplace selling is not available for this account in the mobile app.'
+              ? 'Digital marketplace selling is unavailable in the mobile app. Physical merchandise remains available through the Forge.'
               : 'Marketplace selling starts with Pro. Buying and collecting remain available.'}
           </span>
           {!IS_MOBILE_STORE_BUILD && (

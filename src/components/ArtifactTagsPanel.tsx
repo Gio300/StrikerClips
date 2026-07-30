@@ -18,6 +18,7 @@ import { supabase } from '@/lib/supabase'
 import { TagBadge } from '@/components/TagBadge'
 import { CollapsibleSection } from '@/components/CollapsibleSection'
 import { formatTag } from '@/lib/identity'
+import { IS_MOBILE_STORE_BUILD } from '@/lib/storeBuild'
 import {
   RARITY_ORDER,
   rarityLabel,
@@ -107,13 +108,17 @@ export function ArtifactTagsPanel() {
   if (!user) return null
 
   const clanName = (clanId: string | null) => clans.find((c) => c.id === clanId)?.name ?? 'Clan'
+  const visibleTags = IS_MOBILE_STORE_BUILD
+    ? tags.filter((tag) => owned.has(tag.id))
+    : tags
 
   return (
     <div className="mt-8">
-      <CollapsibleSection id="artifact-tags" label="Artifact tags" count={tags.length}>
+      <CollapsibleSection id="artifact-tags" label="Artifact tags" count={visibleTags.length}>
         <p className="text-xs text-gray-500 mb-4">
-          The pill you show off next to your name — in chat, on your profile, in search and on the
-          leaderboards. Buy one from your clan and equip it. Rarer tags stand out more.
+          {IS_MOBILE_STORE_BUILD
+            ? 'Equip an artifact tag you already own to show it next to your name in chat, profiles, search, and leaderboards.'
+            : 'The pill you show off next to your name — in chat, on your profile, in search and on the leaderboards. Buy one from your clan and equip it. Rarer tags stand out more.'}
         </p>
 
         {/* Currently equipped */}
@@ -142,30 +147,36 @@ export function ArtifactTagsPanel() {
         )}
 
         {/* Leader create forms */}
-        {clans.filter((c) => c.isLeader).map((c) => (
+        {!IS_MOBILE_STORE_BUILD && clans.filter((c) => c.isLeader).map((c) => (
           <CreateTagForm key={c.id} clan={c} onCreated={(t) => setTags((prev) => [t, ...prev])} onError={flash} />
         ))}
 
         {/* Available / owned tags */}
         <div className="mt-4">
           <div className="flex items-center justify-between mb-2">
-            <h3 className="text-sm font-semibold text-white">Available tags</h3>
-            <span className="inline-flex items-center gap-1 text-xs text-gray-500">
-              <CoinIcon />
-              <span className="font-semibold text-accent">{tokens.toLocaleString()}</span> Tokens
-            </span>
+            <h3 className="text-sm font-semibold text-white">
+              {IS_MOBILE_STORE_BUILD ? 'Owned tags' : 'Available tags'}
+            </h3>
+            {!IS_MOBILE_STORE_BUILD && (
+              <span className="inline-flex items-center gap-1 text-xs text-gray-500">
+                <CoinIcon />
+                <span className="font-semibold text-accent">{tokens.toLocaleString()}</span> Tokens
+              </span>
+            )}
           </div>
           {!loaded ? (
             <p className="text-sm text-gray-500">Loading…</p>
-          ) : tags.length === 0 ? (
+          ) : visibleTags.length === 0 ? (
             <p className="text-sm text-gray-500">
-              {clans.length === 0
-                ? 'Join a clan to buy its artifact tags.'
-                : 'No artifact tags yet. A clan leader can create one above.'}
+              {IS_MOBILE_STORE_BUILD
+                ? 'You do not own any artifact tags yet.'
+                : clans.length === 0
+                  ? 'Join a clan to buy its artifact tags.'
+                  : 'No artifact tags yet. A clan leader can create one above.'}
             </p>
           ) : (
             <div className="space-y-2">
-              {tags.map((t) => (
+              {visibleTags.map((t) => (
                 <TagRow
                   key={t.id}
                   tag={t}
@@ -173,6 +184,7 @@ export function ArtifactTagsPanel() {
                   owned={owned.has(t.id)}
                   equipped={equippedId === t.id}
                   tokens={tokens}
+                  purchasesEnabled={!IS_MOBILE_STORE_BUILD}
                   onBought={() => {
                     setOwned((prev) => new Set(prev).add(t.id))
                     refreshWallet()
@@ -324,6 +336,7 @@ function TagRow({
   owned,
   equipped,
   tokens,
+  purchasesEnabled,
   onBought,
   onEquipped,
   onError,
@@ -333,6 +346,7 @@ function TagRow({
   owned: boolean
   equipped: boolean
   tokens: number
+  purchasesEnabled: boolean
   onBought: () => void
   onEquipped: () => void
   onError: (msg: string) => void
@@ -340,7 +354,7 @@ function TagRow({
   const [busy, setBusy] = useState(false)
 
   async function buy() {
-    if (busy) return
+    if (busy || !purchasesEnabled) return
     if (tokens < tag.price) {
       onError(`Not enough Tokens — ${tag.tag_text} costs ${tag.price.toLocaleString()}.`)
       return
@@ -380,7 +394,7 @@ function TagRow({
         </p>
       </div>
       <div className="ml-auto flex items-center gap-2 shrink-0">
-        {!owned && (
+        {!owned && purchasesEnabled && (
           <span className="inline-flex items-center gap-1 text-xs text-gray-400">
             <CoinIcon />
             {tag.price.toLocaleString()}
@@ -399,7 +413,7 @@ function TagRow({
               {busy ? '…' : 'Equip'}
             </button>
           )
-        ) : (
+        ) : purchasesEnabled ? (
           <button
             type="button"
             onClick={buy}
@@ -408,6 +422,8 @@ function TagRow({
           >
             {busy ? '…' : 'Buy'}
           </button>
+        ) : (
+          <span className="text-xs text-gray-500">Unavailable in this version</span>
         )}
       </div>
     </div>

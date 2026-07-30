@@ -8,6 +8,7 @@ import {
   startConnectOnboarding,
   type CreatorPlatformFee,
 } from '@/lib/creatorCommerceApi'
+import { IS_MOBILE_STORE_BUILD } from '@/lib/storeBuild'
 
 type ConnectStatus = NonNullable<Awaited<ReturnType<typeof fetchConnectStatus>>['data']>
 
@@ -33,6 +34,10 @@ export function CreatorPayoutsCard({
   const [fees, setFees] = useState<CreatorPlatformFee[]>([])
 
   const load = useCallback(async () => {
+    if (IS_MOBILE_STORE_BUILD) {
+      setLoading(false)
+      return
+    }
     setLoading(true)
     const [result, feeResult] = await Promise.all([
       fetchConnectStatus(),
@@ -94,6 +99,8 @@ export function CreatorPayoutsCard({
   const outstandingFees = fees
     .filter((fee) => fee.status === 'pending' || fee.status === 'failed')
     .reduce((sum, fee) => sum + Number(fee.seller_fee_cents || 0), 0)
+
+  if (IS_MOBILE_STORE_BUILD) return null
 
   return (
     <section className="rounded-lg border border-accent/30 bg-dark-card p-5">

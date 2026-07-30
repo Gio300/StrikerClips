@@ -1,0 +1,88 @@
+# Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
+
+client_id = "baf538d71f45db8cffb9eeaab2c9ea2b"
+application_url = "https://example.com"
+embedded = true
+name = "tko-forge-fulfillment"
+
+[access_scopes]
+# Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
+scopes = "read_products,write_products,read_orders,write_orders,read_fulfillments"
+
+[product.metafields.app.tko_asset_id]
+type = "single_line_text_field"
+name = "TKO Asset ID"
+description = "The source forged artifact in TKO"
+
+  [product.metafields.app.tko_asset_id.access]
+  admin = "merchant_read_write"
+
+[product.metafields.app.tko_creator_id]
+type = "single_line_text_field"
+name = "TKO Creator ID"
+description = "The TKO creator or clan receiving the merchandise share"
+
+  [product.metafields.app.tko_creator_id.access]
+  admin = "merchant_read_write"
+
+[product.metafields.app.tko_creator_handle]
+type = "single_line_text_field"
+name = "TKO Creator Handle"
+description = "Display handle of the TKO creator or clan"
+
+  [product.metafields.app.tko_creator_handle.access]
+  admin = "merchant_read_write"
+
+[product.metafields.app.tko_artwork_url]
+type = "url"
+name = "TKO Artwork URL"
+description = "Approved source artwork used by the print provider"
+
+  [product.metafields.app.tko_artwork_url.access]
+  admin = "merchant_read_write"
+
+[product.metafields.app.tko_product_type]
+type = "single_line_text_field"
+name = "TKO Product Type"
+description = "Physical product template selected in TKO"
+
+  [product.metafields.app.tko_product_type.access]
+  admin = "merchant_read_write"
+
+[product.metafields.app.tko_fulfillment_provider]
+type = "single_line_text_field"
+name = "TKO Fulfillment Provider"
+description = "Print-on-demand provider mapping this product"
+
+  [product.metafields.app.tko_fulfillment_provider.access]
+  admin = "merchant_read_write"
+
+[product.metafields.app.tko_status]
+type = "single_line_text_field"
+name = "TKO Approval Status"
+description = "TKO moderation and synchronization state"
+
+  [product.metafields.app.tko_status.access]
+  admin = "merchant_read_write"
+
+[webhooks]
+api_version = "2026-10"
+
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/app/uninstalled"
+  topics = [ "app/uninstalled" ]
+
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/app/scopes_update"
+  topics = [ "app/scopes_update" ]
+
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/tko-orders"
+  topics = [ "orders/create", "orders/paid", "orders/cancelled", "refunds/create", "fulfillments/create" ]
+
+[auth]
+redirect_urls = [ "https://example.com/api/auth" ]
+
+[build]
+include_config_on_deploy = true
+automatically_update_urls_on_dev = true

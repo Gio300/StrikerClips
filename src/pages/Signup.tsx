@@ -2,10 +2,8 @@ import { useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
 import { BrandLogo } from '@/components/BrandLogo'
-import { BRAND } from '@/lib/brand'
 import { AvailabilityHint } from '@/components/ui'
 import { useIdentityAvailability } from '@/hooks/useIdentityAvailability'
-import { MIN_AGE_YEARS, maxEligibleDob, validateDateOfBirth } from '@/lib/age'
 import { PRIVACY_VERSION, TERMS_VERSION } from '@/lib/legalVersions'
 
 export function Signup() {
@@ -13,10 +11,10 @@ export function Signup() {
   const [password, setPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
   const [username, setUsername] = useState('')
-  // 13+ age gate. A date of birth rather than a checkbox: it is a specific,
-  // auditable claim, and the server re-checks the same value (see
-  // server/app.ts /auth/signup) so a patched client cannot walk past it.
-  const [dob, setDob] = useState('')
+  // 13+ age gate. A single self-attested consent checkbox: the server no longer
+  // requires a date of birth (see server/app.ts /auth/signup) and instead accepts
+  // the `age_consent_13_plus` flag sent below.
+  const [ageConsent, setAgeConsent] = useState(false)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
   const [sent, setSent] = useState(false)
@@ -38,12 +36,6 @@ export function Signup() {
   // once you've typed something that's malformed or already claimed.
   const usernameCheck = useIdentityAvailability('username', username, { required: false })
 
-  // Only surface the age error once they've typed something — an empty field on
-  // first paint shouldn't shout at anybody.
-  const ageCheck = validateDateOfBirth(dob)
-  const ageError = dob && !ageCheck.ok ? ageCheck.message : ''
-  const maxDob = maxEligibleDob()
-
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     setError('')
@@ -51,8 +43,8 @@ export function Signup() {
       setError(usernameCheck.message || 'Pick an available username.')
       return
     }
-    if (!ageCheck.ok) {
-      setError(ageCheck.message)
+    if (!ageConsent) {
+      setError('Please confirm you are 13 or older to create an account.')
       return
     }
     if (!termsAccepted) {
@@ -75,9 +67,9 @@ export function Signup() {
           terms_accepted_at: new Date().toISOString(),
           privacy_accepted: true,
           privacy_version: PRIVACY_VERSION,
-          // Age attestation, stored with the account (see src/lib/age.ts).
-          date_of_birth: dob,
-          age_at_signup: ageCheck.age,
+          // 13+ self-attestation. The server accepts this consent flag in place
+          // of a date of birth (see server/app.ts /auth/signup).
+          age_consent_13_plus: true,
           age_verified_13_plus: true,
           age_attested_at: new Date().toISOString(),
         },
@@ -148,24 +140,6 @@ export function Signup() {
               <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} className={inputCls} placeholder="you@example.com" required />
             </div>
             <div>
-              <label className="block text-sm text-gray-400 mb-1.5" htmlFor="signup-dob">Date of birth</label>
-              <input
-                id="signup-dob"
-                type="date"
-                value={dob}
-                onChange={(e) => setDob(e.target.value)}
-                className={inputCls}
-                max={maxDob}
-                required
-                aria-required="true"
-                aria-invalid={!!ageError}
-                aria-describedby="signup-dob-hint"
-              />
-              <p id="signup-dob-hint" className={`text-xs mt-1 ${ageError ? 'text-kunai' : 'text-gray-500'}`}>
-                {ageError || `You must be ${MIN_AGE_YEARS} or older to use ${BRAND.name}. We use this only to check your age.`}
-              </p>
-            </div>
-            <div>
               <label className="block text-sm text-gray-400 mb-1.5">Password</label>
               <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} className={inputCls} placeholder="••••••••" required minLength={6} />
             </div>
@@ -177,6 +151,17 @@ export function Signup() {
               )}
             </div>
             {error && <p className="text-kunai text-sm">{error}</p>}
+            <label className="flex items-start gap-2 cursor-pointer text-sm text-gray-400">
+              <input
+                type="checkbox"
+                checked={ageConsent}
+                onChange={(e) => setAgeConsent(e.target.checked)}
+                className="mt-0.5 w-4 h-4 accent-kunai shrink-0"
+                required
+                aria-required="true"
+              />
+              <span>I'm 13 or older.</span>
+            </label>
             <label className="flex items-start gap-2 cursor-pointer text-sm text-gray-400">
               <input
                 type="checkbox"
@@ -198,12 +183,12 @@ export function Signup() {
                 .
               </span>
             </label>
-            <button type="submit" disabled={loading || !termsAccepted || !ageCheck.ok || usernameCheck.blocked} className="btn-primary w-full">
+            <button type="submit" disabled={loading || !termsAccepted || !ageConsent || usernameCheck.blocked} className="btn-primary w-full">
               {loading ? 'Creating…' : 'Create account'}
             </button>
-            {!termsAccepted && (
+            {(!termsAccepted || !ageConsent) && (
               <p className="text-xs text-gray-500 text-center -mt-2">
-                Agree to the Terms and Privacy Policy above to enable Create account.
+                Confirm you're 13+ and agree to the Terms and Privacy Policy above to enable Create account.
               </p>
             )}
 

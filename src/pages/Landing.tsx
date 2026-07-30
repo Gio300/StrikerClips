@@ -80,7 +80,7 @@ export function Landing() {
       </header>
 
       <nav className="mb-7 grid grid-cols-2 gap-2 lg:grid-cols-4" aria-label="TKO quick actions">
-        <QuickAction to="/highlight/create" icon={Video} title="Create" detail="Build a multi-angle reel" />
+        <QuickAction to="/create" icon={Video} title="Create" detail="Pick what you want to make" />
         <QuickAction to="/tournaments" icon={Trophy} title="Compete" detail="Find or run a bracket" />
         <QuickAction to="/conquest" icon={Swords} title="Conquest" detail="Fight for clan territory" />
         <QuickAction to="/rankings" icon={Crown} title="Rankings" detail="Track your power level" />

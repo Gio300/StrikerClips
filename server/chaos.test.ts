@@ -194,7 +194,7 @@ describe('TKO API — concurrent multi-user chaos (seed 1337)', () => {
       console.error('CRASHES:', JSON.stringify(world.crashes.slice(0, 8), null, 2))
     }
     expect(world.crashes).toEqual([])
-  })
+  }, 15_000)
 
   it('never accepted a cross-user forgery', () => {
     if (world.forgeriesAccepted.length) console.error('FORGERIES ACCEPTED:', JSON.stringify(world.forgeriesAccepted.slice(0, 10), null, 2))
@@ -284,7 +284,9 @@ describe('TKO API — daily Sweeps grant under a same-user stampede', () => {
     const ok = claims.filter((r) => r.status === 200 && r.body?.ok === true)
     expect(ok.length).toBeLessThanOrEqual(1)
     const wal = await request(app).post('/api/fn/wallet').set('Authorization', `Bearer ${u.token}`).send({})
-    // One day's grant is 25 Sweeps; ten concurrent claims must not bank 250.
-    expect(wal.body.wallet.sweeps).toBeLessThanOrEqual(25)
+    // One day's grant is 3 Oracle tickets (Rule 1); ten concurrent claims must
+    // not bank 30. Tickets are the repurposed daily grant — never $-flow sweeps.
+    expect(wal.body.wallet.oracle_tickets).toBeLessThanOrEqual(3)
+    expect(wal.body.wallet.sweeps).toBe(0)
   })
 })

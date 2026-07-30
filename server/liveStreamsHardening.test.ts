@@ -108,7 +108,9 @@ describe('live_streams API hardening', () => {
       table: 'live_sessions',
       action: 'insert',
       single: true,
-      values: { host_id: bob.id, title: 'Alice session', status: 'live' },
+      // A live session now needs an embeddable YouTube link (host_id is still
+      // FORCED to the caller regardless of the forged value).
+      values: { host_id: bob.id, title: 'Alice session', status: 'live', watch_url: 'https://youtu.be/alive1' },
     })
     expect(session.status).toBe(200)
     expect(session.body.data.host_id).toBe(alice.id)
@@ -232,5 +234,104 @@ describe('live_streams API hardening', () => {
     )
     expect(active.rows).toHaveLength(1)
     expect(['race one', 'race two']).toContain(active.rows[0].title)
+  })
+})
+
+// A public live_streams read runs the stale-live sweep first, so selecting is the
+// way to trigger it. Insert rows directly with a backdated updated_at to simulate
+// a host who stopped heartbeating, then read + check is_live on the row.
+async function insertStream(
+  pool: any,
+  userId: string,
+  opts: { youtube_url: string; placement?: string; game?: string; ageMinutes: number },
+): Promise<string> {
+  const mins = Number(opts.ageMinutes) || 0
+  const r = await pool.query(
+    `insert into live_streams (user_id, youtube_url, placement, game, is_live, updated_at, created_at)
+       values ($1, $2, $3, $4, true,
+               now() - interval '${mins} minutes',
+               now() - interval '${mins} minutes')
+     returning id`,
+    [userId, opts.youtube_url, opts.placement ?? 'profile', opts.game ?? 'Shinobi Striker'],
+  )
+  return r.rows[0].id
+}
+
+async function triggerSweep(app: any) {
+  // Any public live_streams read runs expireStaleLiveStreams(pool) before select.
+  await db(app, null, {
+    table: 'live_streams', action: 'select', columns: '*',
+    filters: [{ col: 'is_live', op: 'eq', val: true }],
+  })
+}
+
+async function isLive(pool: any, id: string): Promise<boolean> {
+  const r = await pool.query('select is_live from live_streams where id=$1', [id])
+  return r.rows[0]?.is_live === true
+}
+
+describe('live_streams — contextual (tiered) session timeouts', () => {
+  const pool = makeDb()
+  const app = createApp(pool)
+  let host: Who
+
+  beforeAll(async () => { host = await signUp(app, 'timeout_host') })
+  afterAll(async () => { await pool.end() })
+
+  it('tier 1 — an UNATTACHED live (no playable link) dies inside ~60s', async () => {
+    const id = await insertStream(pool, host.id, { youtube_url: '', ageMinutes: 2 })
+    await triggerSweep(app)
+    expect(await isLive(pool, id)).toBe(false)
+  })
+
+  it('tier 2 — an ATTACHED normal live SURVIVES well past 60s (host away 5 min)', async () => {
+    const id = await insertStream(pool, host.id, { youtube_url: 'https://youtu.be/attached', ageMinutes: 5 })
+    await triggerSweep(app)
+    expect(await isLive(pool, id)).toBe(true)
+
+    // …but a normal live that has been silent past ~60 min is finally dropped.
+    await pool.query("update live_streams set updated_at = now() - interval '90 minutes' where id=$1", [id])
+    await triggerSweep(app)
+    expect(await isLive(pool, id)).toBe(false)
+  })
+
+  it('tier 3 — a TOURNAMENT live SURVIVES past an hour (up to ~12h)', async () => {
+    const id = await insertStream(pool, host.id, {
+      youtube_url: 'https://youtu.be/bracket', placement: 'tournament', ageMinutes: 120,
+    })
+    await triggerSweep(app)
+    expect(await isLive(pool, id)).toBe(true)
+
+    // Past the 12-hour bracket window it does finally expire.
+    await pool.query("update live_streams set updated_at = now() - interval '13 hours' where id=$1", [id])
+    await triggerSweep(app)
+    expect(await isLive(pool, id)).toBe(false)
+  })
+})
+
+describe('live_streams — approved-game gate on the public live read', () => {
+  const pool = makeDb()
+  const app = createApp(pool)
+  let host: Who
+
+  beforeAll(async () => { host = await signUp(app, 'game_gate_host') })
+  afterAll(async () => { await pool.end() })
+
+  it('excludes a non-approved-game live from the public "who is live" list', async () => {
+    const approvedId = await insertStream(pool, host.id, {
+      youtube_url: 'https://youtu.be/approved', game: 'Shinobi Striker', ageMinutes: 0,
+    })
+    const unapprovedId = await insertStream(pool, host.id, {
+      youtube_url: 'https://youtu.be/unapproved', game: 'Fortnite', ageMinutes: 0,
+    })
+
+    const r = await db(app, null, {
+      table: 'live_streams', action: 'select', columns: '*',
+      filters: [{ col: 'is_live', op: 'eq', val: true }],
+    })
+    expect(r.status).toBe(200)
+    const ids = (r.body.data as any[]).map((row) => row.id)
+    expect(ids).toContain(approvedId)
+    expect(ids).not.toContain(unapprovedId)
   })
 })

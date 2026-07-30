@@ -246,6 +246,8 @@ function KindIcon({ kind, unread }: { kind: string; unread: boolean }) {
         return '⚖️'
       case 'live_group_invite':
         return '🎥'
+      case 'live_invite':
+        return '🎙️'
       case 'live_link_created':
       case 'live_battle_both_live':
         return '🔗'

@@ -2,9 +2,11 @@ import { describe, it, expect } from 'vitest'
 import {
   dedupeProducedVideos,
   latestProducedVersions,
+  mergeProducedVideoSources,
   producedVideoTitle,
   watchUrlFor,
   type ClipRecordLite,
+  type ProducedVideo,
 } from './producedVideos'
 
 const rec = (over: Partial<ClipRecordLite>): ClipRecordLite => ({
@@ -18,6 +20,19 @@ const rec = (over: Partial<ClipRecordLite>): ClipRecordLite => ({
   match_id: null,
   recorded_at: null,
   created_at: null,
+  ...over,
+})
+
+const video = (over: Partial<ProducedVideo>): ProducedVideo => ({
+  youtubeId: 'video',
+  title: 'Multi-angle match',
+  thumbnail: 'thumb',
+  watchUrl: 'watch',
+  playerIds: [],
+  handles: [],
+  angleCount: 2,
+  matchId: null,
+  createdAt: null,
   ...over,
 })
 
@@ -79,6 +94,35 @@ describe('latestProducedVersions', () => {
       },
     ])
     expect(out.map((video) => video.youtubeId)).toEqual(['current'])
+  })
+})
+
+describe('mergeProducedVideoSources', () => {
+  it('keeps newer legacy renders visible when canonical data is stale', () => {
+    const out = mergeProducedVideoSources(
+      [video({ youtubeId: 'canonical-old', matchId: 'match-1', createdAt: '2026-07-25T01:00:00Z' })],
+      [video({ youtubeId: 'legacy-new', matchId: 'match-2', createdAt: '2026-07-27T01:00:00Z' })],
+    )
+
+    expect(out.map((item) => item.youtubeId)).toEqual(['legacy-new', 'canonical-old'])
+  })
+
+  it('uses the newest render when both sources identify the same match', () => {
+    const out = mergeProducedVideoSources(
+      [video({ youtubeId: 'canonical-old', matchId: 'match-1', createdAt: '2026-07-25T01:00:00Z' })],
+      [video({ youtubeId: 'legacy-new', matchId: 'match-1', createdAt: '2026-07-27T01:00:00Z' })],
+    )
+
+    expect(out.map((item) => item.youtubeId)).toEqual(['legacy-new'])
+  })
+
+  it('does not duplicate one YouTube upload referenced by both tables', () => {
+    const out = mergeProducedVideoSources(
+      [video({ youtubeId: 'same-upload', matchId: 'match-1', createdAt: '2026-07-27T01:00:00Z' })],
+      [video({ youtubeId: 'same-upload', matchId: null, createdAt: '2026-07-27T01:00:00Z' })],
+    )
+
+    expect(out).toHaveLength(1)
   })
 })
 

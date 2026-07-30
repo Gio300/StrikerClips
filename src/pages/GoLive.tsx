@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/hooks/useAuth'
@@ -11,10 +11,12 @@ import { loadLibrary, loadHandle, youtubeLiveUrl, loadChannelId, channelLiveUrl,
 import { isYouTubeLinked } from '@/lib/youtubeLink'
 import { acceptProposedStage, autoLinkForStream, type AutoLinkOutcome } from '@/lib/liveLinkService'
 import { LiveLinkOptOut } from '@/components/LiveLinkOptOut'
-import { StepFlow, Step } from '@/components/ui/StepFlow'
+import { HostAnglePanel } from '@/components/HostAnglePanel'
+import { sendLiveHeartbeat, searchPeople, addAngle, type PersonHit } from '@/lib/liveAngles'
+import { Avatar } from '@/components/ui'
 import { ActionCard } from '@/components/ui/ActionCard'
 import { ChipInput } from '@/components/ui/ChipInput'
-import type { NinjaIconName } from '@/components/ui/NinjaIcon'
+import { NinjaIcon, type NinjaIconName } from '@/components/ui/NinjaIcon'
 import {
   canStreamTo,
   upgradeNudge,
@@ -26,18 +28,28 @@ import {
 } from '@/lib/tiers'
 
 /**
- * Go Live — pick a stream URL + WHERE it's placed, then broadcast.
+ * Go Live — the MERGED host/solo setup.
  *
- * Rules (owner):
- *  - You must be a PAYING member to live stream at all. Free users see a
- *    members-only state with a link to /redeem.
- *  - Placement is tier-gated: My Profile (Pro) < My Clan Page (Supporter) <
- *    Front Page (Creator). Tournament streams only if you're in one.
- *  - Locked placements stay VISIBLE with a lock + one-line upgrade nudge, so
- *    users naturally see the next tier.
+ * Old app had two doors ("go live — my gameplay" and "host a multi-stream").
+ * They're the same thing: you go live, you just pick which STREAM(S) go on the
+ * show — your own (optional), other players' (optional), or both. So this is one
+ * screen. To keep it "easy, not cluttered" the config lives in COLLAPSIBLE
+ * DROPDOWNS, all collapsed by default with sensible defaults, so a host can just
+ * hit "Go Live" without touching anything:
  *
- * Works standalone against the supabase shim (mock backend). On submit we insert
- * a `live_streams` row carrying the chosen `placement`.
+ *   • Streams   — search players by name and add their streams as angles; add
+ *                 "my stream" (linked YouTube auto, or paste). The merged input.
+ *   • Where     — placement (profile / clan / front page / tournament), tier-gated.
+ *   • Hosts     — per host: share video+mic / video only / mic only.
+ *   • Chat      — on / off.
+ *   • Access    — Free or Paid (price stored; NO payment collection here — Phase 2).
+ *   • Tournament— connect this live to one of your tournaments, or none.
+ *   • Look      — background image + team names (feed the broadcast banner) + title.
+ *   • Layout    — preset for where host/chat sit.
+ *
+ * On submit we insert a `live_streams` row carrying the chosen placement AND the
+ * new config columns, then attach any staged other-player streams as angles. The
+ * auto-angle + tap/tap-hold VIEWER system is unchanged — this is just the setup.
  */
 
 const PLACEMENTS: { id: Placement; blurb: string; icon: NinjaIconName }[] = [
@@ -46,6 +58,26 @@ const PLACEMENTS: { id: Placement; blurb: string; icon: NinjaIconName }[] = [
   { id: 'front_page', blurb: 'Front and center on the TKO home page.', icon: 'torii' },
   { id: 'tournament', blurb: 'Streams to the tournament you\'re competing in.', icon: 'trophy' },
 ]
+
+// How a host shares their feed. Stored on the row as `host_share`.
+type HostShare = 'both' | 'video' | 'mic'
+const HOST_SHARE_LABEL: Record<HostShare, string> = {
+  both: 'Video + mic',
+  video: 'Video only',
+  mic: 'Mic only',
+}
+
+// Where things sit on screen. Stored on the row as `layout`.
+type LayoutPreset = 'auto' | 'host_top_chat_right' | 'host_side_chat_bottom' | 'theater'
+const LAYOUTS: { id: LayoutPreset; label: string; blurb: string }[] = [
+  { id: 'auto', label: 'Auto', blurb: 'Let TKO place the host + chat.' },
+  { id: 'host_top_chat_right', label: 'Host top · chat right', blurb: 'Host centred up top, chat down the side.' },
+  { id: 'host_side_chat_bottom', label: 'Host side · chat bottom', blurb: 'Host to the side, chat along the bottom.' },
+  { id: 'theater', label: 'Theater', blurb: 'Big stream, chat tucked away.' },
+]
+
+type StagedLink = { url: string; label: string }
+type TournamentOpt = { id: string; name: string }
 
 export function GoLive() {
   const { user } = useAuth()
@@ -59,32 +91,44 @@ export function GoLive() {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [done, setDone] = useState<Placement | null>(null)
-  // Where to send them to watch what they just started — a real stream page if
-  // we got the row id back, else the direct-URL watch fallback.
+
+  // ── New, persisted config (all with sensible defaults) ────────────────────
+  const [chatEnabled, setChatEnabled] = useState(true)
+  const [isPaid, setIsPaid] = useState(false)
+  const [priceDollars, setPriceDollars] = useState('') // shown in $, stored in cents
+  const [hostShare, setHostShare] = useState<HostShare>('both')
+  const [tournamentId, setTournamentId] = useState('') // '' = none
+  const [showBracket, setShowBracket] = useState(true)
+  const [tournaments, setTournaments] = useState<TournamentOpt[]>([])
+  const [backgroundUrl, setBackgroundUrl] = useState('')
+  const [teamA, setTeamA] = useState('')
+  const [teamB, setTeamB] = useState('')
+  const [layout, setLayout] = useState<LayoutPreset>('auto')
+
+  // ── Streams: staged other-player angles to attach right after we go live ──
+  const [query, setQuery] = useState('')
+  const [hits, setHits] = useState<PersonHit[]>([])
+  const [searching, setSearching] = useState(false)
+  const [stagedPlayers, setStagedPlayers] = useState<PersonHit[]>([])
+  const [stagedLinks, setStagedLinks] = useState<StagedLink[]>([])
+  const [angleUrl, setAngleUrl] = useState('')
+  const [angleLabel, setAngleLabel] = useState('')
+
   const [watchTo, setWatchTo] = useState<string>('/live')
   const [shareUrl, setShareUrl] = useState<string>('')
-  // Set when the link engine connected this stream to someone already live
-  // (a scheduled opponent, a clanmate, a fellow entrant) — see liveLink.ts.
   const [linked, setLinked] = useState<AutoLinkOutcome | null>(null)
+  const [createdStreamId, setCreatedStreamId] = useState<string | null>(null)
 
-  // "Remember me" state: did we pre-fill from a saved stream link, and does the
-  // user already have a linked YouTube (a connected clip library or a link they
-  // saved before)? Keyed per user so it feels personal, not global.
   const LAST_KEY = user ? `kc_last_live_${user.id}` : ''
   const [restored, setRestored] = useState(false)
   const [hasLibrary, setHasLibrary] = useState(false)
-  // Their saved YouTube @handle — so we go live from their channel automatically
-  // and never make them paste a link. Only revealed for editing on request.
   const [savedHandle, setSavedHandle] = useState<string | null>(null)
   const [editingLink, setEditingLink] = useState(false)
-  // Cross-device truth: connected even if this device has no local cache.
   const [backendLinked, setBackendLinked] = useState(false)
-  // The link we'll auto-broadcast from their channel (handle live tab, or a
-  // resolved channel-id live URL) — so a linked user never pastes anything.
   const [autoUrl, setAutoUrl] = useState<string>('')
 
-  // Pre-fill the last stream URL + placement the user submitted, so a returning
-  // user just taps Go Live again.
+  // Pre-fill the last stream URL + placement, and work out the "go live from my
+  // YouTube" link so a linked user never pastes anything.
   useEffect(() => {
     if (!user) return
     const lib = loadLibrary(user.id)
@@ -92,10 +136,6 @@ export function GoLive() {
     const h = loadHandle(user.id)
     setSavedHandle(h)
     void isYouTubeLinked(user.id).then(setBackendLinked)
-    // Work out the "go live from my YouTube" link, no paste needed:
-    //  1) a saved @handle → its /live tab
-    //  2) a cached channel id → channel /live
-    //  3) resolve the channel id from their library once, then use that.
     if (h) {
       setAutoUrl(youtubeLiveUrl(h))
     } else {
@@ -117,32 +157,58 @@ export function GoLive() {
     } catch { /* ignore malformed cache */ }
   }, [user])
 
-  // Their YouTube counts as "linked" if we have a cached library, a saved
-  // channel handle, or they've saved a stream link before.
   const youTubeLinked = hasLibrary || restored || !!savedHandle || backendLinked
-  // The link we'll actually broadcast: whatever they typed, else their saved
-  // channel's live URL, else the last stream link they used.
+  // The link we actually broadcast: typed → saved handle → resolved channel →
+  // (if the host has no own stream) the first pasted angle link.
   const effectiveUrl = (): string => {
     const typed = url.trim()
     if (typed) return typed
     if (savedHandle) return youtubeLiveUrl(savedHandle)
     if (autoUrl) return autoUrl
+    if (stagedLinks[0]?.url) return stagedLinks[0].url
     return ''
   }
-  // If their YouTube is linked at all, we already know the source — show it as
-  // done and keep the paste box tucked away behind a dropdown.
   const sourceKnown = youTubeLinked || restored || url.trim().length > 0
 
-  // Am I in a tournament right now? (Being a tournament admin counts.) In the
-  // mock backend this is empty, so the Tournament card stays honestly locked.
+  // Am I in a tournament right now? (Admin counts.) Also load MY tournaments for
+  // the "connect to a tournament" select — best-effort against the mock backend.
   useEffect(() => {
     if (!user) return
     supabase
       .from('tournament_admins')
-      .select('id')
+      .select('tournament_id')
       .eq('user_id', user.id)
-      .then(({ data }) => setInTournament((data?.length ?? 0) > 0))
+      .then(async ({ data }) => {
+        const ids = Array.from(new Set((data ?? []).map((r: { tournament_id?: string }) => r.tournament_id).filter(Boolean))) as string[]
+        setInTournament(ids.length > 0)
+        if (!ids.length) { setTournaments([]); return }
+        try {
+          const { data: ts } = await supabase.from('tournaments').select('id, name').in('id', ids)
+          setTournaments((ts ?? []) as TournamentOpt[])
+        } catch { setTournaments([]) }
+      })
   }, [user])
+
+  // Debounced people search for the Streams section (reuses Discover's ilike).
+  useEffect(() => {
+    const q = query.trim()
+    if (!q) { setHits([]); return }
+    let cancelled = false
+    setSearching(true)
+    const t = window.setTimeout(async () => {
+      const rows = await searchPeople(q, user?.id)
+      if (!cancelled) { setHits(rows); setSearching(false) }
+    }, 250)
+    return () => { cancelled = true; window.clearTimeout(t) }
+  }, [query, user])
+
+  // Heartbeat while the host sits on the "you're live" screen.
+  useEffect(() => {
+    if (!createdStreamId) return
+    void sendLiveHeartbeat(createdStreamId)
+    const t = window.setInterval(() => { void sendLiveHeartbeat(createdStreamId) }, 20_000)
+    return () => window.clearInterval(t)
+  }, [createdStreamId])
 
   // ── Not signed in ─────────────────────────────────────────────────────────
   if (!user) {
@@ -188,6 +254,27 @@ export function GoLive() {
     return upgradeNudge(p)
   }
 
+  function stagePlayer(person: PersonHit) {
+    setStagedPlayers((cur) => (cur.some((p) => p.id === person.id) ? cur : [...cur, person]))
+    setQuery('')
+    setHits([])
+  }
+  function unstagePlayer(id: string) {
+    setStagedPlayers((cur) => cur.filter((p) => p.id !== id))
+  }
+  function stageLink() {
+    const u = angleUrl.trim()
+    if (!u) return
+    setStagedLinks((cur) => [...cur, { url: u, label: angleLabel.trim() || 'Added angle' }])
+    setAngleUrl('')
+    setAngleLabel('')
+  }
+  function unstageLink(i: number) {
+    setStagedLinks((cur) => cur.filter((_, idx) => idx !== i))
+  }
+
+  const stagedCount = stagedPlayers.length + stagedLinks.length
+
   async function submit(e: React.FormEvent) {
     e.preventDefault()
     setError('')
@@ -198,11 +285,14 @@ export function GoLive() {
       return
     }
     const trimmed = effectiveUrl()
-    // Accept a YouTube link (validated), a channel live URL, OR any https stream.
     const isYouTube = !!extractYouTubeId(trimmed) || /youtube\.com\/@[^/]+\/live/i.test(trimmed)
     const isHttps = /^https:\/\/\S+$/i.test(trimmed)
     if (!trimmed) {
-      setError('Connect your YouTube once and we\'ll go live from it — or add a link below.')
+      setError(
+        stagedCount > 0
+          ? 'Add your own stream or paste a link — one stream anchors the show.'
+          : 'Connect your YouTube once and we\'ll go live from it — or add a stream below.',
+      )
       setEditingLink(true)
       return
     }
@@ -211,6 +301,12 @@ export function GoLive() {
       return
     }
 
+    // Money-safety: only store a price when the stream is actually paid, and
+    // clamp to a non-negative integer number of cents. NO charge happens here.
+    const priceCents = isPaid
+      ? Math.max(0, Math.round(Number(priceDollars || '0') * 100)) || 0
+      : null
+
     setBusy(true)
     const { data: inserted, error: err } = await supabase.from('live_streams').insert({
       user_id: user!.id,
@@ -218,16 +314,22 @@ export function GoLive() {
       title: title.trim() || null,
       placement,
       is_live: true,
+      chat_enabled: chatEnabled,
+      is_paid: isPaid,
+      price_cents: priceCents,
+      tournament_id: tournamentId || null,
+      show_bracket: Boolean(tournamentId && showBracket),
+      host_share: hostShare,
+      background_url: backgroundUrl.trim() || null,
+      team_a: teamA.trim() || null,
+      team_b: teamB.trim() || null,
+      layout,
     }).select().single()
-    setBusy(false)
     if (err) {
+      setBusy(false)
       setError(err.message)
       return
     }
-    // Point them at the playing stream: a real /watch/:id page if we got the row
-    // id back, else /watch?u=<url> so it still plays and is shareable.
-    // Carry the stream url in the link so a shared link plays for anyone who
-    // opens it — even where the stream row doesn't exist (no backend/profile).
     const qs = new URLSearchParams({ u: trimmed })
     if (title.trim()) qs.set('t', title.trim())
     const q = `?${qs.toString()}`
@@ -235,11 +337,23 @@ export function GoLive() {
     if (newId) {
       setWatchTo(`/watch/${newId}${q}`)
       setShareUrl(`https://tko.cam/watch/${newId}${q}`)
+      // Attach any staged other-player streams as angles (best-effort — going
+      // live already succeeded even if a particular angle can't be resolved).
+      for (const p of stagedPlayers) {
+        await addAngle({ liveStreamId: newId, userId: p.id, label: p.username ?? undefined })
+      }
+      for (const l of stagedLinks) {
+        // The first pasted link may have BEEN the row source (host with no own
+        // stream); don't also add it as a duplicate angle.
+        if (l.url === trimmed) continue
+        await addAngle({ liveStreamId: newId, youtubeUrl: l.url, label: l.label })
+      }
+      setCreatedStreamId(newId)
     } else {
       setWatchTo(`/watch${q}`)
       setShareUrl(`https://tko.cam/watch${q}`)
     }
-    // Remember this stream link + placement for next time.
+    setBusy(false)
     try {
       localStorage.setItem(LAST_KEY, JSON.stringify({ url: trimmed, placement }))
     } catch { /* ignore */ }
@@ -247,20 +361,12 @@ export function GoLive() {
     setDone(placement)
     setUrl('')
     setTitle('')
+    setStagedPlayers([])
+    setStagedLinks([])
 
-    // CONNECT IT FOR THEM. If someone they're actually matched with is already
-    // live — their scheduled opponent, a clanmate, a fellow entrant — link the
-    // streams into one multi-angle stage and notify both sides + their
-    // followers. Best-effort: never blocks or fails going live.
-    //
-    // Unless somebody said otherwise: if either side's autoLinkMode is 'ask' the
-    // result comes back `pending` (a proposal, nothing joined) and if either is
-    // 'off', or there's a block between them, nothing comes back at all.
     if (newId && user) {
       autoLinkForStream(newId, user.id)
-        .then((res) => {
-          if (res) setLinked(res)
-        })
+        .then((res) => { if (res) setLinked(res) })
         .catch(() => { /* going live already succeeded */ })
     }
   }
@@ -282,7 +388,7 @@ export function GoLive() {
             )}
             <button
               type="button"
-              onClick={() => { setDone(null); setLinked(null) }}
+              onClick={() => { setDone(null); setLinked(null); setCreatedStreamId(null) }}
               className="px-4 py-2 rounded-lg border border-dark-border text-white hover:border-accent/50"
             >
               Start another
@@ -290,9 +396,21 @@ export function GoLive() {
           </div>
         </div>
 
-        {/* WE CONNECTED IT FOR THEM. Someone they're actually matched with was
-            already live, so their streams are now one multi-angle view — and
-            both sides + their followers have been told. */}
+        {/* Add / manage more camera angles live. Available to every host now —
+            the merged Go Live means any stream can become a multi-angle show. */}
+        {createdStreamId && (
+          <div className="mt-4">
+            <div className="mb-2">
+              <h2 className="text-lg font-bold text-white">Add more players to your show</h2>
+              <p className="text-sm text-gray-400">
+                Search a player by name and add their live as another angle. You're the host —
+                viewers switch between every camera on one screen.
+              </p>
+            </div>
+            <HostAnglePanel liveStreamId={createdStreamId} />
+          </div>
+        )}
+
         {linked && !linked.pending && linked.groupId && (
           <div className="mt-4 rounded-xl border border-accent bg-accent/10 p-5">
             <p className="text-white font-semibold">
@@ -311,7 +429,6 @@ export function GoLive() {
             >
               {linked.stage.reason === 'scheduled_battle' ? 'Watch both angles' : 'Open the combined view'}
             </Link>
-            {/* The way out, right where the link is announced. */}
             {user && (
               <div className="mt-3">
                 <LiveLinkOptOut
@@ -324,7 +441,6 @@ export function GoLive() {
           </div>
         )}
 
-        {/* PROPOSED, not linked — one of you asked to be consulted first. */}
         {linked && linked.pending && (
           <div className="mt-4 rounded-xl border border-dark-border bg-dark-card p-5">
             <p className="text-white font-semibold">Link your streams?</p>
@@ -358,6 +474,13 @@ export function GoLive() {
     )
   }
 
+  // Summaries shown on each collapsed dropdown header, so a host sees the current
+  // choice without expanding — "clean, not cluttered".
+  const streamsSummary =
+    stagedCount > 0
+      ? `${sourceKnown ? 'Your stream' : 'Host'} + ${stagedCount} added`
+      : sourceKnown ? 'Your stream — ready' : 'Add a stream'
+
   // ── The form ──────────────────────────────────────────────────────────────
   return (
     <div className="p-6 sm:p-8 max-w-2xl mx-auto">
@@ -372,10 +495,10 @@ export function GoLive() {
         </button>
       </div>
       <p className="text-sm text-gray-500 mt-1">
-        Paste your live stream link, choose where it goes, and broadcast.
+        Add stream(s) — yours, other players', or both — and hit Go Live. Everything below is
+        optional: sensible defaults are already set, so you can just go.
       </p>
 
-      {/* "Your channel" memory — remembered so you don't reconnect every time. */}
       {youTubeLinked ? (
         <div className="mt-4 flex items-center gap-2 text-sm text-leaf">
           <span className="text-base leading-none">✓</span>
@@ -388,31 +511,25 @@ export function GoLive() {
         </div>
       )}
 
-      <form onSubmit={submit} className="mt-6">
-        <StepFlow>
-          {/* 1 · Source — we already know their YouTube, so there's nothing to
-              paste. The link box only appears if they choose to use a different
-              one (a dropdown), so lengthy copy-paste is never in the way. */}
-          <Step title="Stream source" complete={sourceKnown}>
+      <form onSubmit={submit} className="mt-6 space-y-3">
+        {/* ── Streams (open by default — it's the one thing you usually touch) ── */}
+        <Section icon="clan" title="Streams" summary={streamsSummary} defaultOpen>
+          {/* Your own stream (optional — auto-connects from your linked YouTube). */}
+          <div className="rounded-lg border border-dark-border bg-dark p-3">
+            <p className="text-xs uppercase tracking-wider text-gray-500 mb-2">My stream (optional)</p>
             {sourceKnown && !editingLink ? (
               <div className="flex items-center gap-3 flex-wrap">
                 <ConnectedBadge
                   label={
                     savedHandle
                       ? `Your YouTube — @${savedHandle}`
-                      : youTubeLinked
-                        ? 'Your YouTube'
-                        : 'Your stream link — saved'
+                      : youTubeLinked ? 'Your YouTube' : 'Your stream link — saved'
                   }
                 />
                 {(savedHandle || (youTubeLinked && !restored)) && (
                   <span className="text-xs text-leaf">auto-connects when you go live</span>
                 )}
-                <button
-                  type="button"
-                  onClick={() => setEditingLink(true)}
-                  className="text-xs text-accent hover:underline"
-                >
+                <button type="button" onClick={() => setEditingLink(true)} className="text-xs text-accent hover:underline">
                   Use a different link ▾
                 </button>
               </div>
@@ -423,7 +540,7 @@ export function GoLive() {
                   value={url}
                   onChange={(e) => { setUrl(e.target.value); setRestored(false) }}
                   placeholder="https://youtube.com/watch?v=…  or any https:// stream"
-                  className="w-full px-4 py-2 rounded-lg bg-dark border border-dark-border text-white focus:outline-none focus:border-accent"
+                  className="w-full px-3 py-2 rounded-lg bg-dark-card border border-dark-border text-white text-sm focus:outline-none focus:border-accent"
                 />
                 {youTubeLinked && (
                   <button
@@ -436,60 +553,336 @@ export function GoLive() {
                 )}
               </div>
             )}
-          </Step>
+          </div>
 
-          {/* 2 · Placement (required) — button-first ActionCards, tier-gated */}
-          <Step
-            title="Where should it go?"
-            complete={isUnlocked(placement)}
-            hint={<>Tier: <span className="text-accent font-medium">{LEVEL_TIER_NAME[Math.max(1, tierLevel(tier))] ?? 'Pro'}</span></>}
-          >
-            <div className="grid sm:grid-cols-2 gap-3">
-              {PLACEMENTS.map(({ id, blurb, icon }) => {
-                const unlocked = isUnlocked(id)
-                const selected = placement === id
-                const lockTag = id === 'tournament' ? 'Locked' : LEVEL_TIER_NAME[PLACEMENT_MIN_LEVEL[id]]
-                return (
-                  <ActionCard
-                    key={id}
-                    icon={icon}
-                    label={PLACEMENT_LABEL[id]}
-                    sublabel={unlocked ? blurb : lockReason(id)}
-                    selected={selected}
-                    locked={!unlocked}
-                    lockTag={lockTag}
-                    onClick={() => setPlacement(id)}
-                  />
-                )
-              })}
+          {/* Other players' streams — search by name (reuses Discover's ilike). */}
+          <div className="mt-3">
+            <p className="text-xs uppercase tracking-wider text-gray-500 mb-2">Add other players (optional)</p>
+            <div className="relative">
+              <NinjaIcon name="search" size={16} className="text-gray-500 absolute left-2.5 top-1/2 -translate-y-1/2" />
+              <input
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="Search a player by name…"
+                className="w-full pl-8 pr-3 py-2 rounded-lg bg-dark border border-dark-border text-sm text-white focus:outline-none focus:border-accent"
+              />
             </div>
-            <p className="mt-3 text-xs text-gray-500">
-              Higher placements need a higher tier.{' '}
-              <Link to="/redeem" className="text-accent hover:underline">Upgrade →</Link>
-            </p>
-          </Step>
+            {searching && <p className="mt-1 text-xs text-gray-500">Searching…</p>}
+            {hits.length > 0 && (
+              <ul className="mt-2 space-y-1.5">
+                {hits.map((p) => (
+                  <li key={p.id} className="flex items-center justify-between gap-2">
+                    <span className="flex items-center gap-2 min-w-0">
+                      <Avatar src={p.avatar_url} name={p.username ?? 'player'} seed={p.id} size={24} />
+                      <span className="truncate text-sm text-white">@{p.username ?? 'player'}</span>
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => stagePlayer(p)}
+                      className="shrink-0 inline-flex items-center gap-1 rounded-md bg-accent px-2.5 py-1 text-xs font-semibold text-dark hover:shadow-glow"
+                    >
+                      <NinjaIcon name="plus" size={14} /> Add
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
 
-          {/* 3 · Title (optional) — collapsed behind "+ Add a title" */}
-          <Step title="Title" optional addLabel="Add a title">
-            <ChipInput
-              fieldKey="live_title"
-              value={title}
-              onChange={setTitle}
-              placeholder="Ranked grind — road to A-rank"
-            />
-          </Step>
-        </StepFlow>
+            {/* Paste-a-link fallback for a stream with no linked player. */}
+            <div className="mt-2 grid grid-cols-1 sm:grid-cols-[1fr_auto] gap-2">
+              <input
+                value={angleUrl}
+                onChange={(e) => setAngleUrl(e.target.value)}
+                placeholder="…or paste a stream link"
+                className="w-full px-3 py-2 rounded-lg bg-dark border border-dark-border text-sm text-white focus:outline-none focus:border-accent"
+              />
+              <button
+                type="button"
+                onClick={stageLink}
+                disabled={!angleUrl.trim()}
+                className="inline-flex items-center justify-center gap-1 rounded-lg border border-accent/50 px-3 py-2 text-xs font-semibold text-accent hover:bg-accent/10 disabled:opacity-40"
+              >
+                <NinjaIcon name="plus" size={14} /> Add link
+              </button>
+            </div>
 
-        {error && <p className="text-kunai text-sm mb-3">{error}</p>}
+            {(stagedPlayers.length > 0 || stagedLinks.length > 0) && (
+              <ul className="mt-3 space-y-1.5">
+                {stagedPlayers.map((p) => (
+                  <li key={p.id} className="flex items-center justify-between gap-2 text-sm text-gray-300">
+                    <span className="min-w-0 truncate">@{p.username ?? 'player'}</span>
+                    <button type="button" onClick={() => unstagePlayer(p.id)} className="text-gray-500 hover:text-kunai" aria-label="Remove">
+                      <NinjaIcon name="plus" size={15} className="rotate-45" />
+                    </button>
+                  </li>
+                ))}
+                {stagedLinks.map((l, i) => (
+                  <li key={`${l.url}-${i}`} className="flex items-center justify-between gap-2 text-sm text-gray-300">
+                    <span className="min-w-0 truncate">{l.label}</span>
+                    <button type="button" onClick={() => unstageLink(i)} className="text-gray-500 hover:text-kunai" aria-label="Remove">
+                      <NinjaIcon name="plus" size={15} className="rotate-45" />
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </Section>
+
+        {/* ── Where it shows (placement) — tier-gated ─────────────────────── */}
+        <Section icon="torii" title="Where it shows" summary={PLACEMENT_LABEL[placement]}>
+          <div className="grid sm:grid-cols-2 gap-3">
+            {PLACEMENTS.map(({ id, blurb, icon }) => {
+              const unlocked = isUnlocked(id)
+              const lockTag = id === 'tournament' ? 'Locked' : LEVEL_TIER_NAME[PLACEMENT_MIN_LEVEL[id]]
+              return (
+                <ActionCard
+                  key={id}
+                  icon={icon}
+                  label={PLACEMENT_LABEL[id]}
+                  sublabel={unlocked ? blurb : lockReason(id)}
+                  selected={placement === id}
+                  locked={!unlocked}
+                  lockTag={lockTag}
+                  onClick={() => setPlacement(id)}
+                />
+              )
+            })}
+          </div>
+          <p className="mt-3 text-xs text-gray-500">
+            Tier: <span className="text-accent font-medium">{LEVEL_TIER_NAME[Math.max(1, tierLevel(tier))] ?? 'Pro'}</span>.
+            Higher placements need a higher tier.{' '}
+            <Link to="/redeem" className="text-accent hover:underline">Upgrade →</Link>
+          </p>
+        </Section>
+
+        {/* ── Hosts: how each host shares their feed ──────────────────────── */}
+        <Section icon="user" title="Hosts" summary={HOST_SHARE_LABEL[hostShare]}>
+          <label className="block text-sm text-gray-400 mb-2">For each host / angle, share:</label>
+          <div className="grid grid-cols-3 gap-2">
+            {(Object.keys(HOST_SHARE_LABEL) as HostShare[]).map((k) => (
+              <button
+                key={k}
+                type="button"
+                onClick={() => setHostShare(k)}
+                className={`rounded-lg border px-3 py-2 text-xs font-semibold transition-colors ${
+                  hostShare === k
+                    ? 'border-accent bg-accent/15 text-white'
+                    : 'border-dark-border bg-dark text-gray-300 hover:border-accent/50'
+                }`}
+              >
+                {HOST_SHARE_LABEL[k]}
+              </button>
+            ))}
+          </div>
+        </Section>
+
+        {/* ── Chat: on / off ──────────────────────────────────────────────── */}
+        <Section icon="chat" title="Chat" summary={chatEnabled ? 'On' : 'Off'}>
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-sm text-gray-300">Let viewers chat during your stream.</span>
+            <Toggle checked={chatEnabled} onChange={setChatEnabled} label="Chat" />
+          </div>
+        </Section>
+
+        {/* ── Access: free / paid (price stored only; NO collection — Phase 2) ── */}
+        <Section icon="ticket" title="Access" summary={isPaid ? `Paid${priceDollars ? ` · $${priceDollars}` : ''}` : 'Free'}>
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              onClick={() => setIsPaid(false)}
+              className={`rounded-lg border px-3 py-2 text-sm font-semibold transition-colors ${
+                !isPaid ? 'border-accent bg-accent/15 text-white' : 'border-dark-border bg-dark text-gray-300 hover:border-accent/50'
+              }`}
+            >
+              Free
+            </button>
+            <button
+              type="button"
+              onClick={() => setIsPaid(true)}
+              className={`rounded-lg border px-3 py-2 text-sm font-semibold transition-colors ${
+                isPaid ? 'border-accent bg-accent/15 text-white' : 'border-dark-border bg-dark text-gray-300 hover:border-accent/50'
+              }`}
+            >
+              Paid
+            </button>
+          </div>
+          {isPaid && (
+            <div className="mt-3">
+              <label className="block text-sm text-gray-400 mb-1">Price</label>
+              <div className="flex items-center gap-2">
+                <span className="text-gray-400">$</span>
+                <input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  inputMode="decimal"
+                  value={priceDollars}
+                  onChange={(e) => setPriceDollars(e.target.value)}
+                  placeholder="4.99"
+                  className="w-32 px-3 py-2 rounded-lg bg-dark border border-dark-border text-white text-sm focus:outline-none focus:border-accent"
+                />
+              </div>
+              <p className="mt-1 text-xs text-gray-600">
+                We save the price now. Paid access checkout is coming in a later update.
+              </p>
+            </div>
+          )}
+        </Section>
+
+        {/* ── Tournament: connect this live to one of yours, or none ──────── */}
+        <Section
+          icon="trophy"
+          title="Tournament"
+          summary={tournamentId ? (tournaments.find((t) => t.id === tournamentId)?.name ?? 'Connected') : 'None'}
+        >
+          {tournaments.length > 0 ? (
+            <select
+              value={tournamentId}
+              onChange={(e) => {
+                setTournamentId(e.target.value)
+                if (!e.target.value) setShowBracket(false)
+              }}
+              className="w-full px-3 py-2 rounded-lg bg-dark border border-dark-border text-white text-sm focus:outline-none focus:border-accent"
+            >
+              <option value="">None</option>
+              {tournaments.map((t) => (
+                <option key={t.id} value={t.id}>{t.name}</option>
+              ))}
+            </select>
+          ) : (
+            <p className="text-sm text-gray-500">You're not running a tournament right now — nothing to connect.</p>
+          )}
+        </Section>
+
+        {/* ── Look: background + team names (feed the broadcast banner) + title ── */}
+        {tournamentId && (
+          <div className="mb-3 flex items-center justify-between gap-4 rounded-lg border border-dark-border bg-dark-card px-4 py-3">
+            <div>
+              <p className="text-sm font-medium text-white">Show live bracket</p>
+              <p className="mt-0.5 text-xs text-gray-500">
+                Keep advancing player art visible beneath the match.
+              </p>
+            </div>
+            <Toggle checked={showBracket} onChange={setShowBracket} label="Show live bracket" />
+          </div>
+        )}
+
+        <Section
+          icon="sparkle"
+          title="Look"
+          summary={teamA || teamB ? `${teamA || 'Team A'} vs ${teamB || 'Team B'}` : 'Default'}
+        >
+          <label className="block text-sm text-gray-400 mb-1">Background image</label>
+          <input
+            type="url"
+            value={backgroundUrl}
+            onChange={(e) => setBackgroundUrl(e.target.value)}
+            placeholder="https://…/background.png (url or upload link)"
+            className="w-full px-3 py-2 rounded-lg bg-dark border border-dark-border text-white text-sm focus:outline-none focus:border-accent"
+          />
+          <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <ChipInput fieldKey="live_team_a" value={teamA} onChange={setTeamA} label="Team A" placeholder="Leaf" />
+            <ChipInput fieldKey="live_team_b" value={teamB} onChange={setTeamB} label="Team B" placeholder="Sand" />
+          </div>
+          <div className="mt-3">
+            <ChipInput fieldKey="live_title" value={title} onChange={setTitle} label="Show title" placeholder="Ranked grind — road to A-rank" />
+          </div>
+        </Section>
+
+        {/* ── Layout: quick presets for where host + chat sit ─────────────── */}
+        <Section icon="scroll" title="Layout" summary={LAYOUTS.find((l) => l.id === layout)?.label ?? 'Auto'}>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            {LAYOUTS.map((l) => (
+              <button
+                key={l.id}
+                type="button"
+                onClick={() => setLayout(l.id)}
+                className={`rounded-lg border px-3 py-2 text-left transition-colors ${
+                  layout === l.id ? 'border-accent bg-accent/15' : 'border-dark-border bg-dark hover:border-accent/50'
+                }`}
+              >
+                <span className="block text-sm font-semibold text-white">{l.label}</span>
+                <span className="block text-xs text-gray-500">{l.blurb}</span>
+              </button>
+            ))}
+          </div>
+        </Section>
+
+        {error && <p className="text-kunai text-sm">{error}</p>}
 
         <button
           type="submit"
           disabled={busy || !isUnlocked(placement)}
           className="w-full py-3 rounded-lg bg-accent text-dark font-semibold hover:shadow-glow disabled:opacity-50"
         >
-          {busy ? 'Going live…' : `Go live on ${PLACEMENT_LABEL[placement]}`}
+          {busy ? 'Going live…' : `Go Live on ${PLACEMENT_LABEL[placement]}`}
         </button>
       </form>
     </div>
+  )
+}
+
+// ── A clean, collapsible dropdown section — collapsed by default, shows the
+// current value in its header so nothing needs opening to be understood. ──────
+function Section({
+  icon,
+  title,
+  summary,
+  children,
+  defaultOpen = false,
+}: {
+  icon: NinjaIconName
+  title: string
+  summary?: ReactNode
+  children: ReactNode
+  defaultOpen?: boolean
+}) {
+  const [open, setOpen] = useState(defaultOpen)
+  return (
+    <div className="rounded-xl border border-dark-border bg-dark-card overflow-hidden">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
+        className="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-dark-elevated transition-colors"
+      >
+        <span className="shrink-0 text-accent"><NinjaIcon name={icon} size={18} /></span>
+        <span className="min-w-0 flex-1">
+          <span className="block text-sm font-semibold text-white">{title}</span>
+          {summary != null && <span className="block text-xs text-gray-500 truncate">{summary}</span>}
+        </span>
+        <span className={`shrink-0 text-gray-500 transition-transform ${open ? 'rotate-180' : ''}`}>
+          <NinjaIcon name="chevron-down" size={18} />
+        </span>
+      </button>
+      <div className={`grid transition-[grid-template-rows] duration-300 ease-out ${open ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'}`}>
+        <div className="min-h-0 overflow-hidden">
+          <div className="px-4 pb-4 pt-1">{children}</div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// A small on/off switch (Tailwind core, inline — no deps).
+function Toggle({ checked, onChange, label }: { checked: boolean; onChange: (v: boolean) => void; label: string }) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label={label}
+      onClick={() => onChange(!checked)}
+      className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors ${
+        checked ? 'bg-accent' : 'bg-dark-elevated border border-dark-border'
+      }`}
+    >
+      <span
+        className={`inline-block h-5 w-5 transform rounded-full bg-white transition-transform ${
+          checked ? 'translate-x-5' : 'translate-x-0.5'
+        }`}
+      />
+    </button>
   )
 }

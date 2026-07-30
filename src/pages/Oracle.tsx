@@ -20,6 +20,7 @@ import {
 } from '@/lib/predictions'
 import { getOwned, subscribeAssets, loadAssetState, kindLabel, type DigitalAsset } from '@/lib/assets'
 import { CollapsibleSection } from '@/components/CollapsibleSection'
+import { IS_MOBILE_STORE_BUILD } from '@/lib/storeBuild'
 
 /**
  * Oracle hub — the cash-free prediction surface.
@@ -108,8 +109,14 @@ export function Oracle() {
 
       {atCap && (
         <div className="mb-8 rounded-lg border border-chakra/40 bg-chakra/10 px-4 py-3 text-sm text-chakra flex flex-wrap items-center gap-2">
-          <span>{predictionUpgradeNudge(tier)}</span>
-          <Link to="/upgrade" className="text-accent hover:underline">See tiers →</Link>
+          <span>
+            {IS_MOBILE_STORE_BUILD
+              ? 'Prediction limit reached. Additional prediction capacity is not available in the mobile app.'
+              : predictionUpgradeNudge(tier)}
+          </span>
+          {!IS_MOBILE_STORE_BUILD && (
+            <Link to="/upgrade" className="text-accent hover:underline">See tiers →</Link>
+          )}
         </div>
       )}
 

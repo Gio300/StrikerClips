@@ -49,7 +49,13 @@ import {
   type ConquestEffect,
   type ConquestMembershipTier,
 } from '../src/lib/conquestArtifacts'
-import { canStreamTo, type Placement } from '../src/lib/tiers'
+import { canStreamTo, TIER_LEVEL, type Placement } from '../src/lib/tiers'
+import { createPhysicalMerchService } from './physicalMerch'
+import {
+  firstRoundAssignments,
+  nextBracketPosition,
+  totalBracketRounds,
+} from '../src/lib/tournamentBracket'
 
 type PoolClient = {
   query: (text: string, params?: any[]) => Promise<{ rows: any[] }>
@@ -229,6 +235,24 @@ async function hasCurrentTournamentInvolvement(pool: Pooly, a: Actor): Promise<b
 const LIVE_PLACEMENTS = new Set<Placement>(['profile', 'clan', 'front_page', 'tournament'])
 
 /** Server-side mirror of src/lib/tiers.ts plus the tournament involvement gate. */
+/**
+ * A live stream's PAID price, in cents. This is a STORED display value only —
+ * no payment is collected against it (checkout is a later phase). `price_cents`
+ * is a global money-safety privilege col (see PRIVILEGE_COLS) so the generic
+ * scrub strips it everywhere; the live_streams insert/update paths call this to
+ * re-accept it, clamped to a sane non-negative integer, and only when the stream
+ * is actually marked paid. Anything else stores NULL (free).
+ */
+function sanitizeLiveStreamPrice(src: any): number | null {
+  if (!src || typeof src !== 'object') return null
+  const paid = src.is_paid === true || src.is_paid === 'true'
+  if (!paid) return null
+  const raw = Number(src.price_cents)
+  if (!Number.isFinite(raw) || raw <= 0) return null
+  // Cap at $1,000,000 so a fat-finger can't store an absurd headline price.
+  return Math.min(Math.round(raw), 100_000_000)
+}
+
 async function canStartLiveStream(pool: Pooly, a: Actor, row: any): Promise<boolean> {
   const placement = String(row?.placement || 'profile') as Placement
   if (!LIVE_PLACEMENTS.has(placement)) return false
@@ -421,6 +445,11 @@ const TABLE_POLICY: Record<string, TablePolicy> = {
   },
   // Follower lists/counts are public; you may only create/remove your own follow.
   follows: { owner: 'follower_id', select: 'public', insert: 'owner', write: 'owner' },
+  // Creator/streamer GOALS. PUBLIC READ so viewers + the live banner can show a
+  // creator's live progress bar; ALL WRITES are denied here and go through the
+  // trusted /api/fn/goal-set + /api/fn/goal-remove handlers (which enforce the
+  // paid streaming-tier gate and the one-active-goal-per-kind upsert).
+  creator_goals: { owner: 'user_id', select: 'public', insert: 'deny', write: 'deny' },
   //
   // BLOCKS — the one table here that is private in BOTH directions.
   //
@@ -676,6 +705,24 @@ const TABLE_POLICY: Record<string, TablePolicy> = {
   user_youtube_links: { owner: 'user_id', select: 'public', insert: 'owner', write: 'owner' },
   // Angles of a live multi-cam stage — viewers must be able to read them.
   stream_slots: { owner: 'user_id', select: 'public', insert: 'owner', write: 'owner' },
+  // Host-curated ANGLES of a single live_streams "show": the host's own stream is
+  // angle 1, and the host adds other players' streams as further angles. READ is
+  // PUBLIC (a viewer must see every angle to switch between them). WRITES go only
+  // through the trusted /api/fn/live-angle-* handlers, which verify the caller
+  // owns the parent live_streams row — so nobody can graft an angle onto someone
+  // else's live, and no client can forge the parent link.
+  live_stream_angles: { select: 'public', insert: 'deny', write: 'deny' },
+  // Co-stream INVITES: a host (or an accepted co-host) invites another player to
+  // add THEIR OWN stream as an angle. READ is owner-scoped and covers BOTH sides
+  // (the invitee reads "you're invited", the inviter/host reads who they invited)
+  // via ownerAny. WRITES are fn-only — every insert/update goes through the
+  // trusted /api/fn/live-invite* handlers, which force the ids from the JWT and
+  // enforce the role ceiling — so no client can forge an inviter, an invitee, or
+  // a status.
+  live_stream_invites: {
+    owner: 'invitee_id', ownerAny: ['invitee_id', 'inviter_id'],
+    select: 'owner', insert: 'deny', write: 'deny',
+  },
   // Live chat: everyone in the stream reads it; any signed-in user may post;
   // you may only edit/delete your own message.
   stream_messages: { owner: 'user_id', select: 'public', insert: 'owner', write: 'owner' },
@@ -734,7 +781,7 @@ const TABLE_POLICY: Record<string, TablePolicy> = {
     // only the HOST may set the status or declare the winner.
     ownerAny: ['player_a', 'player_b'], select: 'public', insert: 'elevated', write: 'ownerOrElevated',
     elevate: (pool, a, row) => isTournamentHost(pool, a, row.tournament_id),
-    elevatedCols: ['status', 'winner', 'round', 'tournament_id', 'player_a', 'player_b'],
+    elevatedCols: ['status', 'winner', 'round', 'bracket_slot', 'tournament_id', 'player_a', 'player_b'],
   },
   battle_meetups: {
     // The private pit card: readable only by the two fighters (and hosts).
@@ -907,8 +954,21 @@ const TKO_SYSTEM = `You are "Ask TKO", the in-app assistant for TKO.cam, a multi
 Features you can explain: Power Level; tournaments and TKO King; Stat Checks; making clips and reels; Artifacts and the Forge; the official, creator, and clan marketplace; Shinobi Conquest; live broadcasts; clans and villages; the social wall; membership tiers; Give Points; and redeem codes. TKO does not offer cash wagering. Give Points are non-cash support and prestige.
 Official match scores and MVP results require full-match footage. A short clip can support highlights and a provisional Highlight MVP, but you must tell the player to upload the complete match when they ask for full results.
 You may receive public live TKO totals and a private snapshot for the signed-in player. Use only the supplied facts. Never expose or infer another user's private information, credentials, email address, payment data, or secrets.
+Matching help: TKO groups players into the same match partly by WHEN each clip was recorded. So if a player says their clips aren't showing up in videos with their squad, tell them to check that their capture device's DATE, TIME, and TIME ZONE are set correctly — a mis-set clock (even the right zone but a wrong time, or an unusual clock/format setting) can stamp their clips hours off and keep them out of the group. Fixing the device clock is the reliable fix.
+Authentication matters: creating or managing tournaments and other personal actions requires signing in. When someone says a button or control is missing, first check whether they are signed in. If they are logged out, clearly tell them to sign in and return to that screen; specifically, the tournament Create button is hidden until they sign in.
 Style: friendly, concise gamer tone, usually 2-4 sentences. If the user wants to do something, point them to the right place in the app. If unsure, say so briefly. Never invent features or figures.`
-const ASK_TKO_MODEL = process.env.VERTEX_MODEL || 'gemini-2.5-flash'
+const ASK_TKO_MODEL = process.env.VERTEX_MODEL || 'gemini-2.5-pro'
+
+// ── In-stream "Highlight my comment" ─────────────────────────────────────────
+// A viewer spends utility Tokens (never sweeps — highlighting is play/prestige,
+// not a wager) to pin a highlighted chat line into a live stream. The debit runs
+// through the trusted, atomic spendTokens path; the highlighted row is written
+// server-side (so the marker can't be forged client-side) and echoes to viewers
+// over the same Realtime channel the normal chat uses. The client renders any
+// content beginning with STREAM_HIGHLIGHT_PREFIX as a glowing/pinned line.
+const HIGHLIGHT_COST_TOKENS = 50
+// Keep this string in sync with src/lib/streamChatMarkup.ts (STREAM_HIGHLIGHT_PREFIX).
+const STREAM_HIGHLIGHT_PREFIX = '[[tko-hl]]'
 
 /**
  * A snapshot of live TKO numbers so Ask TKO can answer "how many clans are
@@ -1043,11 +1103,11 @@ async function askTko(question: string, context = ''): Promise<string> {
     body: JSON.stringify({
       systemInstruction: { parts: [{ text: system }] },
       contents: [{ role: 'user', parts: [{ text: question }] }],
-      // gemini-2.5-flash spends "thinking" tokens out of maxOutputTokens — with a
-      // small cap that left only a truncated fragment (which then fell back to
-      // the canned KB). Disable thinking for a fast, concise assistant and give
-      // the answer real room.
-      generationConfig: { temperature: 0.5, maxOutputTokens: 500, thinkingConfig: { thinkingBudget: 0 } },
+      // Ask TKO now runs on gemini-2.5-pro (a stronger model than Flash) for the
+      // app. Gemini 2.5 spends "thinking" tokens out of maxOutputTokens, so we
+      // cap thinking to a modest budget and give the ANSWER real room (2048) so a
+      // smarter reply is never truncated into the canned-KB fallback.
+      generationConfig: { temperature: 0.5, maxOutputTokens: 2048, thinkingConfig: { thinkingBudget: 512 } },
     }),
   })
   if (!r.ok) throw new Error(`vertex ${r.status}: ${(await r.text()).slice(0, 160)}`)
@@ -1099,6 +1159,16 @@ export async function recomputePower(pool: Pooly, playerId: string): Promise<num
       const pr = await pool.query('select coalesce(oracle_points,0)::int as pts from profiles where id=$1', [playerId])
       oraclePoints = Number(pr.rows[0]?.pts ?? 0)
     } catch { oraclePoints = 0 }
+    // NEVER wipe an account that has NOTHING to compute from. Recompute is only
+    // authoritative for accounts with real activity (match records or oracle
+    // points). A founder / seeded account has no *player* clip_records, so a blind
+    // recompute would write 0 over its stored power_level on EVERY login — exactly
+    // the bug that kept zeroing the founder's 5,200. If there's no activity to base
+    // a number on, leave the stored power untouched and just return it.
+    if (wins + losses + neutral + produced === 0 && oraclePoints === 0) {
+      const cur = await pool.query('select coalesce(power_level,0)::int as p from profiles where id=$1', [playerId])
+      return Number(cur.rows[0]?.p ?? 0)
+    }
     const power = Math.max(
       0,
       wins * POWER_WIN - losses * POWER_LOSS + neutral * POWER_UPLOAD + produced * POWER_PRODUCED + oraclePoints,
@@ -1118,6 +1188,57 @@ export async function recomputePower(pool: Pooly, playerId: string): Promise<num
 // ---------------------------------------------------------------------------
 export const TOP_TIER = 'creator'
 
+// ---------------------------------------------------------------------------
+// ORACLE BETTING ECONOMY — money-safety constants (see the oracle-bet handlers).
+//
+// The invariants these enforce:
+//   • The daily free grant is now ORACLE-USE-ONLY tickets, never $ (Rule 1).
+//   • Only PAID sweeps carry a real-cent value (stake_cents); tickets and
+//     artifacts are $0-basis stakes, so they can NEVER inflate a streamer payout.
+//   • The streamer earns ORACLE_STREAMER_SHARE_RATE (25%) of the paid-sweeps
+//     cents bet on their stream, MINUS a flat $2 fee and a platform (tax/overhead)
+//     fee, and the credit is HARD-CAPPED so cumulative streamer payout on a stream
+//     can never exceed 25% of the real sweeps-cents ever bet there (Rule 4).
+// ---------------------------------------------------------------------------
+/** Free ORACLE-USE-ONLY tickets granted per day (the repurposed daily grant). */
+export const ORACLE_DAILY_TICKETS = 3
+/** The streamer's share of the real sweeps-$ bet on their stream. */
+export const ORACLE_STREAMER_SHARE_RATE = 0.25
+/** Flat per-settlement streamer fee, deducted from the gross share (USD cents). */
+export const ORACLE_STREAMER_FLAT_FEE_CENTS = 200
+/** Platform (taxes/overhead) fee rate, taken off the gross share. Env-configurable. */
+export const ORACLE_PLATFORM_FEE_RATE = (() => {
+  const raw = Number(process.env.ORACLE_PLATFORM_FEE_RATE)
+  return Number.isFinite(raw) && raw >= 0 && raw < 1 ? raw : 0.30
+})()
+
+/**
+ * The streamer's CAPPED payout (USD cents) for one settlement, given the total
+ * real sweeps-cents bet on the match and the stream's running tally BEFORE this
+ * settlement. Pure + exported so the profit-cap is unit-testable in isolation.
+ *
+ * gross     = floor(sweepsCentsIn * 25%)
+ * platformFee = floor(gross * PLATFORM_FEE_RATE)
+ * share     = max(0, gross - $2 flat - platformFee)
+ * capped    = min(share, floor((priorIn + sweepsCentsIn) * 25%) - priorPaid)
+ *
+ * The final `min(..)` is the HARD CAP: it makes it mathematically impossible for
+ * cumulative streamer payout to exceed 25% of cumulative sweeps-cents, whatever
+ * the fee constants are.
+ */
+export function oracleStreamerShareCents(
+  sweepsCentsIn: number,
+  priorIn: number,
+  priorPaid: number,
+): number {
+  const s = Math.max(0, Math.floor(sweepsCentsIn))
+  const gross = Math.floor(s * ORACLE_STREAMER_SHARE_RATE)
+  const platformFee = Math.floor(gross * ORACLE_PLATFORM_FEE_RATE)
+  const share = Math.max(0, gross - ORACLE_STREAMER_FLAT_FEE_CENTS - platformFee)
+  const capRemaining = Math.floor((Math.max(0, priorIn) + s) * ORACLE_STREAMER_SHARE_RATE) - Math.max(0, priorPaid)
+  return Math.max(0, Math.min(share, capRemaining))
+}
+
 /**
  * Resolve the ACTIVE (non-expired) paid tier from a parsed user_metadata blob.
  * Mirrors src/lib/entitlements.ts: an expired `reelone_tier_expires` lapses the
@@ -1136,6 +1257,17 @@ export function activeTierFromMeta(meta: any, now: number = Date.now()): string 
 /** True if a parsed metadata blob resolves to an ACTIVE top-tier membership. */
 export function isTopTierMeta(meta: any, now: number = Date.now()): boolean {
   return activeTierFromMeta(meta, now) === TOP_TIER
+}
+
+/**
+ * The ladder LEVEL (0..3) of a user's ACTIVE tier — the "role" the co-stream
+ * INVITE ceiling is measured against. We deliberately reuse the streaming tier
+ * ladder (free/ad_free=0, pro=1, supporter/Elite=2, creator/Legend=3) as the
+ * "role": an inviter may invite an invitee only when the invitee's level <= the
+ * inviter's. If a dedicated live-role is added later, swap ONLY this resolver.
+ */
+export function tierLevelFromMeta(meta: any, now: number = Date.now()): number {
+  return TIER_LEVEL[activeTierFromMeta(meta, now)] ?? 0
 }
 
 // ---------------------------------------------------------------------------
@@ -1191,6 +1323,64 @@ export function ageFromDob(dob: unknown, now: Date = new Date()): number | null 
   if (nM < mo || (nM === mo && nD < d)) age -= 1
   if (age < 0 || age > MAX_AGE_YEARS) return null
   return age
+}
+
+// ---------------------------------------------------------------------------
+// LIVE SESSIONS — freshness + embeddability.
+// A live session must (a) stay fresh: a row whose started_at is older than this
+// TTL with no refresh has gone stale (the host closed the tab / lost network)
+// and must stop counting as "live"; and (b) point at a YouTube link so the app
+// can embed it, instead of rendering an "isn't a YouTube link" card.
+// ---------------------------------------------------------------------------
+export const LIVE_SESSION_TTL_MINUTES = 15
+
+// A `live_streams` row (the older per-host stream record + the go-live conflict
+// slot) has the SAME staleness problem: a host who closes the tab or drops
+// network leaves is_live=true forever. That (a) shows fake "LIVE NOW" entries
+// and (b) BLOCKS the same host from going live again (the go-live conflict check
+// sees their own dead row).
+//
+// The old 15-minute window was far too long: an "active stream" that was never
+// really attached (no playable link) or whose host walked away lingered for a
+// quarter hour, so a user saw a phantom "active live stream already exists" and
+// stale LIVE NOW cards. Now a live stream is treated as DEAD when it either has
+// NO playable link (unattached) or has not sent a heartbeat within ~60 seconds.
+// Genuinely-live hosts ping every ~20s (see LiveControlLayout / GoLive), so this
+// short window only ever catches sessions whose host closed the tab or left.
+export const STALE_LIVE_STREAM_TTL_SECONDS = 60
+
+// CONTEXTUAL TIMEOUTS. A 60s cutoff is right for a session that never really
+// attached, but far too aggressive for a genuinely-live host who steps away.
+// So the sweep is TIERED by what the row actually is:
+//   • unattached (no playable link) / no heartbeat → 60s  (STALE_… above)
+//   • an ATTACHED, heartbeating normal live → the host may be away up to ~60 MIN
+//   • an ATTACHED TOURNAMENT live (placement='tournament') → up to ~12 HOURS
+// A live host still heartbeats every ~20s, so these only ever catch a stream
+// whose host truly closed the tab / dropped for the whole window.
+export const ATTACHED_LIVE_STREAM_TTL_SECONDS = 60 * 60        // ~60 minutes
+export const TOURNAMENT_LIVE_STREAM_TTL_SECONDS = 12 * 60 * 60 // ~12 hours
+
+// APPROVED-GAME GATE. Only streams whose `game` is on this allowlist are
+// FEATURED on the public "who's live" read. Start with the one supported title;
+// extend the array to add more. (Real vision-based verification is out of scope
+// — this is the metadata gate + the hook to extend later.)
+export const APPROVED_GAMES: readonly string[] = ['Shinobi Striker']
+
+/** True when `raw` is a real YouTube watch/live URL we can embed. */
+export function isYouTubeUrl(raw: unknown): boolean {
+  const s = String(raw ?? '').trim()
+  if (!s) return false
+  try {
+    const u = new URL(s)
+    const host = u.hostname.toLowerCase().replace(/^www\./, '')
+    return host === 'youtube.com'
+      || host === 'youtu.be'
+      || host === 'm.youtube.com'
+      || host === 'youtube-nocookie.com'
+      || host.endsWith('.youtube.com')
+  } catch {
+    return false
+  }
 }
 
 /** True only for an explicit acceptance of the legal versions in this build. */
@@ -1405,6 +1595,8 @@ function verifyStripeSignature(payload: Buffer, header: string, secret: string):
   const t = parts.find((p) => p.startsWith('t='))?.slice(2)
   const sigs = parts.filter((p) => p.startsWith('v1=')).map((p) => p.slice(3))
   if (!t || !sigs.length) return false
+  const timestamp = Number(t)
+  if (!Number.isFinite(timestamp) || Math.abs(Math.floor(Date.now() / 1000) - timestamp) > 300) return false
   const expected = createHmac('sha256', secret).update(`${t}.${payload.toString('utf8')}`, 'utf8').digest('hex')
   const exp = Buffer.from(expected, 'hex')
   return sigs.some((s) => {
@@ -1546,12 +1738,70 @@ export function createApp(pool: Pooly) {
     }
   }
 
+  /**
+   * Expire dead live_streams. A row still flagged is_live=true is flipped to
+   * is_live=false when EITHER:
+   *   • it never carried a playable link (no youtube_url) and is older than the
+   *     short window — an "active stream" that was never really attached, or
+   *   • it has not refreshed its heartbeat (updated_at, else created_at) within
+   *     the short window — the host closed the tab / dropped network.
+   * A genuinely-live host heartbeats every ~20s, so an attached, actively-pinging
+   * stream keeps a fresh updated_at and survives; everything else drops within
+   * ~60s so it (a) stops blocking the same host from going live and (b) drops off
+   * every public "who is live now" read. Idempotent + cheap; runs before the
+   * go-live conflict check and before any public live_streams select. Best-effort:
+   * a slim schema without updated_at just skips it.
+   */
+  const expireStaleLiveStreams = async (db: Pooly): Promise<void> => {
+    // TIERED cutoffs by what the row actually is. Each is a separate statement so
+    // a slim schema / dialect quirk in one never blocks the others.
+    //
+    // (1) ATTACHED, non-tournament: the host may step away up to ~60 MIN. Only a
+    // stream that has gone that long with no heartbeat (updated_at) is dropped —
+    // a genuinely-live host pinging every ~20s always survives.
+    try {
+      await db.query(
+        `update live_streams set is_live=false
+           where is_live=true
+             and youtube_url is not null and youtube_url <> ''
+             and coalesce(placement, '') <> 'tournament'
+             and coalesce(updated_at, created_at) < now() - interval '${ATTACHED_LIVE_STREAM_TTL_SECONDS} seconds'`,
+      )
+    } catch { /* slim schema without updated_at/placement — nothing to clean */ }
+    // (2) ATTACHED TOURNAMENT (placement='tournament'): a bracket runs for hours,
+    // so the away window stretches to ~12 HOURS before we call it dead.
+    try {
+      await db.query(
+        `update live_streams set is_live=false
+           where is_live=true
+             and youtube_url is not null and youtube_url <> ''
+             and coalesce(placement, '') = 'tournament'
+             and coalesce(updated_at, created_at) < now() - interval '${TOURNAMENT_LIVE_STREAM_TTL_SECONDS} seconds'`,
+      )
+    } catch { /* slim schema — skip the tournament sweep */ }
+    // (3) UNATTACHED: a row that never carried a playable link is an "active
+    // stream" that was never really a broadcast — expire it fast (~60s), so it
+    // stops blocking the same host from going live and drops off every public
+    // "who is live now" read.
+    try {
+      await db.query(
+        `update live_streams set is_live=false
+           where is_live=true
+             and (youtube_url is null or youtube_url = '')
+             and coalesce(updated_at, created_at) < now() - interval '${STALE_LIVE_STREAM_TTL_SECONDS} seconds'`,
+      )
+    } catch { /* slim schema — skip the unattached sweep */ }
+  }
+
   const withLiveStreamStartSlot = async <T>(
     userId: string,
     excludeIds: any[],
     fn: (db: Pooly) => Promise<T>,
   ): Promise<T> => serializeLiveStreamMutation(userId, () => withTransaction(async (db) => {
     await db.query('select id from users where id=$1 for update', [userId])
+    // Clear the caller's OWN stale live rows first, so a dead session (closed
+    // tab / dropped network) can never block them from going live again.
+    await expireStaleLiveStreams(db)
     const params: any[] = [userId]
     let sql = 'select id from live_streams where user_id=$1 and is_live=true'
     if (excludeIds.length) {
@@ -1615,19 +1865,28 @@ export function createApp(pool: Pooly) {
       return res.status(400).json({ error: 'email + 6+ char password required' })
     }
 
-    // ---- 13+ AGE GATE ----------------------------------------------------
-    // Re-checked HERE and not only in the UI: the client is not a trust
-    // boundary, and "the Terms say 13+" is not enforcement. A date of birth is
-    // only accepted when it is present, real, in the past and old enough.
-    // Mirrors src/lib/age.ts (MIN_AGE_YEARS) — keep the two in sync.
+    // ---- 13+ CONSENT (not a hard DOB gate) -------------------------------
+    // The product is all-ages; the account requires a 13+ CONSENT attestation,
+    // NOT a date of birth. A DOB is OPTIONAL: signup is never blocked on its
+    // absence. When a DOB *is* supplied it is still validated and must clear the
+    // 13+ minimum (a real under-13 birthday is refused), but a missing DOB is
+    // fine. Mirrors src/lib/age.ts (MIN_AGE_YEARS) — keep the two in sync.
     const dobRaw = (req.body || {}).date_of_birth ?? (req.body || {}).dob ?? null
-    const age = ageFromDob(dobRaw)
-    if (age === null) {
-      return res.status(400).json({ error: 'a valid date of birth (YYYY-MM-DD) is required' })
+    const dobProvided = dobRaw != null && String(dobRaw).trim() !== ''
+    let age: number | null = null
+    if (dobProvided) {
+      age = ageFromDob(dobRaw)
+      if (age === null) {
+        return res.status(400).json({ error: 'a valid date of birth (YYYY-MM-DD) is required' })
+      }
+      if (age < MIN_AGE_YEARS) {
+        return res.status(403).json({ error: `you must be at least ${MIN_AGE_YEARS} years old to create an account` })
+      }
     }
-    if (age < MIN_AGE_YEARS) {
-      return res.status(403).json({ error: `you must be at least ${MIN_AGE_YEARS} years old to create an account` })
-    }
+    // The client sends a 13+ consent attestation (a checked box). It is stored,
+    // never used to block signup — the API is the record, not a bouncer here.
+    const ageConsent13Plus = (req.body || {}).age_consent_13_plus === true
+      || (req.body || {}).age_consent_13_plus === 'true'
 
     // ---- VERSIONED TERMS + PRIVACY ACCEPTANCE ----------------------------
     // A checked box in the browser is useful UX, but the API is the trust
@@ -1659,9 +1918,14 @@ export function createApp(pool: Pooly) {
       privacy_accepted: true,
       privacy_version: PRIVACY_VERSION,
     }
-    attestations.date_of_birth = String(dobRaw).trim()
-    attestations.age_at_signup = age
-    attestations.age_verified_13_plus = true
+    // Store the DOB + derived age ONLY when the client supplied a valid one.
+    if (dobProvided && age !== null) {
+      attestations.date_of_birth = String(dobRaw).trim()
+      attestations.age_at_signup = age
+    }
+    // The 13+ consent attestation the account is actually created on.
+    attestations.age_consent_13_plus = ageConsent13Plus
+    attestations.age_verified_13_plus = dobProvided && age !== null ? true : ageConsent13Plus
     attestations.age_attested_at = new Date().toISOString()
     const meta = JSON.stringify({ username: base, reelone_tier: '', ...attestations })
     const u = await pool.query(
@@ -1752,6 +2016,26 @@ export function createApp(pool: Pooly) {
     const valid = parts.filter((p) => p === '*' || IDENT.test(p))
     if (!valid.length) return '*'
     return valid.map((p) => (p === '*' ? '*' : q(p))).join(', ')
+  }
+
+  // SYNTHETIC `profiles` columns. These are NOT real columns on the table — they
+  // are stamped onto every returned row by decorateProfilesWithTag() below via a
+  // join on user_equipped_tag → artifact_tags. Client code (feed, chat, rankings,
+  // DMs) still lists them in its `.select('… equipped_tag_text, equipped_tag_rarity')`,
+  // so they arrive here in body.columns and would otherwise reach the SQL
+  // `select … from profiles`, which Postgres rejects ("column … does not exist").
+  // They are stripped from the requested column list BEFORE the query is built and
+  // re-added by the decoration, so a client select that lists them succeeds.
+  const PROFILE_SYNTHETIC_COLS = new Set(['equipped_tag_text', 'equipped_tag_rarity', 'equipped_tag_id'])
+  function stripSyntheticProfileCols(columns: any): any {
+    if (!columns || columns === '*') return columns
+    const kept = String(columns)
+      .split(',')
+      .map((s) => s.trim())
+      .filter((s) => s && !PROFILE_SYNTHETIC_COLS.has(s))
+    // If the caller asked for ONLY synthetic columns, fall back to '*' so the row
+    // still has an id for the decoration join to key on (and other real fields).
+    return kept.length ? kept.join(', ') : '*'
   }
 
   /** Resolve the caller into an Actor with its active tier and host capability. */
@@ -1848,6 +2132,48 @@ export function createApp(pool: Pooly) {
   }
 
   /**
+   * Attach the HOST PROFILE to live_streams rows so the public "LIVE NOW" cards
+   * can read a real username + avatar instead of a raw user id and a "?" bubble.
+   *
+   * The frontend asks for the PostgREST embed `.select('*, profiles(username,
+   * avatar_url)')`, but this API strips embedded-join syntax (see selectCols), so
+   * the embed never resolves and `row.profiles` came back undefined. We resolve it
+   * here in ONE query keyed on live_streams.user_id and stamp `row.profiles` (the
+   * exact shape the cards read) onto every row. Best-effort: on a slim schema it
+   * simply leaves the rows undecorated.
+   */
+  const decorateLiveStreamsWithHost = async (data: any): Promise<void> => {
+    const list: any[] = Array.isArray(data) ? data : data ? [data] : []
+    const ids = [...new Set(list.map((r) => r?.user_id).filter((x) => x != null).map((x) => String(x)))]
+    if (!ids.length) return
+    const byUser = new Map<string, { username: string | null; avatar_url: string | null }>()
+    try {
+      // Explicit `id in ($1, $2, …)` — the in-memory Postgres used by tests does
+      // not honour `id::text = ANY($1)`, so build the list the same way the write
+      // path (idIn) does.
+      const params: any[] = []
+      const inList = ids.map((id) => { params.push(id); return `$${params.length}` }).join(', ')
+      const r = await pool.query(
+        `select id, username, avatar_url from profiles where id in (${inList})`,
+        params,
+      )
+      for (const row of r.rows) {
+        byUser.set(String(row.id), { username: row.username ?? null, avatar_url: row.avatar_url ?? null })
+      }
+    } catch { return /* profiles unreadable / slim schema — leave undecorated */ }
+    for (const row of list) {
+      const p = byUser.get(String(row?.user_id))
+      // Stamp the embed shape the cards read; also mirror flat fields for any
+      // consumer that reads them directly.
+      row.profiles = p ?? row.profiles ?? null
+      if (p) {
+        if (row.username == null) row.username = p.username
+        if (row.avatar_url == null) row.avatar_url = p.avatar_url
+      }
+    }
+  }
+
+  /**
    * Idempotently ensure the single global TKO-BETA tester chat space (and its
    * #general channel) exist, returning its id. Called when a user redeems
    * TKO-BETA so the space is present even on a fresh DB (tests don't run the boot
@@ -1896,28 +2222,69 @@ export function createApp(pool: Pooly) {
       const filters: any[] = Array.isArray(body.filters) ? body.filters : []
 
       if (action === 'select') {
+        // STALE LIVE CLEANUP. A live_sessions row whose started_at is older than
+        // the TTL with no refresh has gone stale (host closed the tab / dropped
+        // network) — end it so it stops showing up in the public "who is live
+        // now" read. Idempotent and cheap; runs before any live_sessions read.
+        if (table === 'live_sessions') {
+          try {
+            await pool.query(
+              `update live_sessions
+                  set status='ended', ended_at=coalesce(ended_at, now())
+                where status='live'
+                  and started_at < now() - interval '${LIVE_SESSION_TTL_MINUTES} minutes'`,
+            )
+          } catch { /* slim schema without live_sessions — nothing to clean */ }
+        }
+        // Same for the older live_streams record: expire stale is_live=true rows
+        // before any public "who is live now" read, so the LIVE NOW list only
+        // shows genuinely-active lives (not one host's abandoned sessions).
+        if (table === 'live_streams') {
+          await expireStaleLiveStreams(pool)
+        }
         // Server-side visibility predicate, appended to (never replaced by) the
         // client's filters. Hosts read everything the policy exposes at all.
         const scopeParams: any[] = []
         let scopeSql = ''
         if (actor && !actor.host) {
           if (pol.select === 'owner' && pol.owner) {
+            // Rows the caller owns. When ownerAny lists several ownership columns
+            // (e.g. a co-stream invite is "owned" by BOTH its invitee and its
+            // inviter), the caller may read a row matching ANY of them.
+            const ownerCols = pol.ownerAny?.length ? pol.ownerAny : [pol.owner]
             scopeParams.push(actor.id)
-            scopeSql = `${q(pol.owner)} = $#${scopeParams.length}`
+            const idx = scopeParams.length
+            scopeSql = ownerCols.map((c) => `${q(c)} = $#${idx}`).join(' or ')
+            if (ownerCols.length > 1) scopeSql = `(${scopeSql})`
           } else if (pol.select === 'scoped' && pol.scope) {
             const s = await pol.scope(pool, actor)
             scopeParams.push(s.ids)
             scopeSql = `${q(s.col)} = ANY($#${scopeParams.length})`
           }
         }
+        // APPROVED-GAME GATE: the public "who's live" read only features streams
+        // whose game is on the allowlist. A NULL game (legacy row / default) is
+        // treated as the supported title, so nothing existing disappears. Applied
+        // to every live_streams read (count + select) so an unapproved game is
+        // never featured. Extend APPROVED_GAMES to add more titles.
+        const gateApprovedGame = table === 'live_streams'
         // Re-number the scope placeholders after the client filter params.
         const renumber = (sql: string, offset: number) => sql.replace(/\$#(\d+)/g, (_m, n) => `$${offset + Number(n)}`)
         const clause = (params: any[]): string => {
           const w = buildWhere(filters, params)
-          if (!scopeSql) return w
-          const s = renumber(scopeSql, params.length)
-          params.push(...scopeParams)
-          return w ? `${w} and ${s}` : ` where ${s}`
+          const extra: string[] = []
+          if (scopeSql) {
+            const s = renumber(scopeSql, params.length)
+            params.push(...scopeParams)
+            extra.push(s)
+          }
+          if (gateApprovedGame) {
+            params.push(APPROVED_GAMES as string[])
+            extra.push(`(${q('game')} is null or ${q('game')} = ANY($${params.length}))`)
+          }
+          if (!extra.length) return w
+          const joined = extra.join(' and ')
+          return w ? `${w} and ${joined}` : ` where ${joined}`
         }
 
         let count: number | null = null
@@ -1928,7 +2295,10 @@ export function createApp(pool: Pooly) {
         }
         const params: any[] = []
         const where = clause(params)
-        let sql = `select ${selectCols(body.columns)} from ${T}${where}`
+        // For profiles, drop the synthetic decoration columns from the requested
+        // SQL list; the decoration re-adds them to every row after the read.
+        const requestedCols = table === 'profiles' ? stripSyntheticProfileCols(body.columns) : body.columns
+        let sql = `select ${selectCols(requestedCols)} from ${T}${where}`
         if (body.order && typeof body.order.col === 'string' && IDENT.test(body.order.col)) {
           sql += ` order by ${q(body.order.col)} ${body.order.ascending === false ? 'desc' : 'asc'}`
         }
@@ -1940,6 +2310,9 @@ export function createApp(pool: Pooly) {
         // so the frontend can render it inline (chat, profile, lists) from the
         // same profiles read it already makes.
         if (table === 'profiles') await decorateProfilesWithTag(data)
+        // Enrich live_streams reads with the host profile (username + avatar) so
+        // the public "LIVE NOW" cards render a real name/avatar, not a raw id.
+        if (table === 'live_streams') await decorateLiveStreamsWithHost(data)
         return res.json({ data, count, error: null })
       }
 
@@ -1978,6 +2351,30 @@ export function createApp(pool: Pooly) {
                 return forbidden(res, `not allowed to create this ${table} row`)
               }
               break
+          }
+          // A live_sessions row marked live must point at an EMBEDDABLE YouTube
+          // link, else the app renders an "isn't a YouTube link" card. If the
+          // client's watch_url isn't YouTube, resolve one from the host's linked
+          // YouTube handle; if there is none, refuse to go live.
+          if (table === 'live_sessions') {
+            const isLive = values.status == null || values.status === 'live'
+            if (isLive && !isYouTubeUrl(values.watch_url)) {
+              const linked = await pool.query(
+                'select url from user_youtube_links where user_id=$1 order by created_at desc limit 5',
+                [a.id],
+              )
+              const resolved = linked.rows.map((r) => r.url).find((u) => isYouTubeUrl(u))
+              if (resolved) values.watch_url = String(resolved)
+              else return res.status(400).json({ data: null, count: null, error: 'a YouTube live link is required to go live' })
+            }
+          }
+          // A live stream's PAID price. `price_cents` is a global privilege col
+          // (money-safety) so scrub strips it everywhere — but a live stream's
+          // price is a STORED, non-settlement display value, so we re-accept it
+          // here through this trusted path only, clamped to a sane non-negative
+          // integer. NO payment is collected here (checkout is a later phase).
+          if (table === 'live_streams') {
+            values.price_cents = sanitizeLiveStreamPrice(src)
           }
           rows.push(values)
         }
@@ -2045,6 +2442,16 @@ export function createApp(pool: Pooly) {
 
         if (action === 'update') {
           const { values, blocked } = scrub(pol, body.values || {}, anyElevated)
+          // Re-accept a live stream's STORED paid price on the trusted owner path
+          // (scrub strips the money-safety `price_cents` col). Only when the
+          // client actually sent it, so unrelated updates (e.g. heartbeats) never
+          // clobber it; is_paid falls back to the existing row when not re-sent.
+          if (table === 'live_streams' && Object.prototype.hasOwnProperty.call(body.values || {}, 'price_cents')) {
+            values.price_cents = sanitizeLiveStreamPrice({
+              is_paid: (body.values || {}).is_paid ?? matched[0]?.is_paid,
+              price_cents: (body.values || {}).price_cents,
+            })
+          }
           const keys = Object.keys(values)
           if (!keys.length) {
             if (blocked.length) return forbidden(res, `cannot set ${blocked.join(', ')} through this API`)
@@ -2262,6 +2669,76 @@ export function createApp(pool: Pooly) {
     }
   }
 
+  // ── ORACLE TICKETS — a $0-basis, ORACLE-USE-ONLY balance (Rule 1) ─────────
+  /** Read a user's oracle-ticket balance (creating the zero wallet row first). */
+  const readOracleTickets = async (userId: string): Promise<number> => {
+    await readWalletRow(userId)
+    const r = await pool.query('select oracle_tickets from wallets where user_id=$1', [userId])
+    return Number(r.rows[0]?.oracle_tickets ?? 0)
+  }
+  /**
+   * Atomically DEBIT oracle tickets in one guarded UPDATE (the ticket twin of
+   * spendSweeps). Concurrent debits serialize on the wallet row-lock, so a bet
+   * stampede can never over-draw tickets. Fails closed (ok:false) on too few.
+   * Books a 0-money audit row: tickets are NEVER part of the $ flow.
+   */
+  const spendOracleTickets = async (
+    userId: string, amount: number, l: LedgerInput,
+  ): Promise<{ ok: boolean; oracle_tickets: number }> => {
+    await readWalletRow(userId)
+    const spend = Math.max(0, Math.round(amount))
+    if (spend === 0) return { ok: true, oracle_tickets: await readOracleTickets(userId) }
+    // Debit as a COMMUTATIVE add of a negative (`col + $neg`, not `col - $amt`):
+    // identical result in real Postgres, and robust to the test engine's binary
+    // `col - $param` evaluation. The `>= $amt` guard keeps it atomic + fail-closed.
+    const r = await pool.query(
+      `update wallets set oracle_tickets = oracle_tickets + $2, updated_at = now()
+         where user_id = $1 and oracle_tickets >= $3
+       returning oracle_tickets`,
+      [userId, -spend, spend],
+    )
+    if (!r.rows[0]) return { ok: false, oracle_tickets: await readOracleTickets(userId) }
+    await bookLedger(userId, 0, 0, l)
+    return { ok: true, oracle_tickets: Number(r.rows[0].oracle_tickets ?? 0) }
+  }
+  /**
+   * Atomically DEBIT paid_sweeps_cents (the $ basis of an Oracle bet). Uses the
+   * commutative `col + $neg` form so it is correct in real Postgres AND robust in
+   * the test engine. Fail-closed on an insufficient balance. Books a $-audit row.
+   */
+  const debitPaidSweepsCents = async (
+    userId: string, cents: number, l: LedgerInput,
+  ): Promise<{ ok: boolean; paid_sweeps_cents: number }> => {
+    await readWalletRow(userId)
+    const spend = Math.max(0, Math.round(cents))
+    if (spend === 0) return { ok: true, paid_sweeps_cents: (await readWalletRow(userId)).paid_sweeps_cents }
+    const r = await pool.query(
+      `update wallets set paid_sweeps_cents = paid_sweeps_cents + $2, updated_at = now()
+         where user_id = $1 and paid_sweeps_cents >= $3
+       returning paid_sweeps_cents`,
+      [userId, -spend, spend],
+    )
+    if (!r.rows[0]) return { ok: false, paid_sweeps_cents: (await readWalletRow(userId)).paid_sweeps_cents }
+    await bookLedger(userId, 0, 0, l, -spend)
+    return { ok: true, paid_sweeps_cents: Number(r.rows[0].paid_sweeps_cents ?? 0) }
+  }
+
+  /** Atomically CREDIT oracle tickets (payout / refund) + a 0-money audit row. */
+  const creditOracleTickets = async (
+    userId: string, amount: number, l: LedgerInput,
+  ): Promise<number> => {
+    await readWalletRow(userId)
+    const credit = Math.max(0, Math.round(amount))
+    if (credit === 0) return readOracleTickets(userId)
+    const r = await pool.query(
+      `update wallets set oracle_tickets = oracle_tickets + $2, updated_at = now()
+         where user_id = $1 returning oracle_tickets`,
+      [userId, credit],
+    )
+    await bookLedger(userId, 0, 0, l)
+    return Number(r.rows[0]?.oracle_tickets ?? 0)
+  }
+
   /** Credit only the dollar-backed marketplace balance after Stripe verifies it. */
   const creditPaidSweeps = async (
     db: Pooly,
@@ -2384,18 +2861,18 @@ export function createApp(pool: Pooly) {
   }
 
   /** Upsert-increment the victor's Shinobi Trophy Closet entry for a defeated foe. */
-  const recordDefeat = async (winner: string, loser: string): Promise<void> => {
+  const recordDefeat = async (winner: string, loser: string, db: Pooly = pool): Promise<void> => {
     if (!winner || !loser || String(winner) === String(loser)) return
-    const ex = await pool.query(
+    const ex = await db.query(
       'select id, beat_count from shinobi_defeats where user_id=$1 and opponent_id=$2', [winner, loser],
     )
     if (ex.rows[0]) {
-      await pool.query(
+      await db.query(
         'update shinobi_defeats set beat_count=$1, updated_at=$2 where id=$3',
         [Number(ex.rows[0].beat_count ?? 1) + 1, new Date().toISOString(), ex.rows[0].id],
       )
     } else {
-      await pool.query(
+      await db.query(
         'insert into shinobi_defeats (user_id, opponent_id, beat_count) values ($1,$2,1)', [winner, loser],
       )
     }
@@ -2577,6 +3054,54 @@ export function createApp(pool: Pooly) {
     }
   }
 
+  const propagateTournamentBracket = async (
+    db: Pooly,
+    tournamentId: string,
+    totalRounds: number,
+  ): Promise<void> => {
+    const rounds = Math.max(0, Math.floor(totalRounds))
+    for (let round = 1; round < rounds; round += 1) {
+      const current = (await db.query(
+        `select * from tournament_battles
+          where tournament_id=$1 and round=$2
+          order by bracket_slot, created_at`,
+        [tournamentId, round],
+      )).rows
+      const bySlot = new Map(current.map((battle) => [Number(battle.bracket_slot), battle]))
+      const nextMatchCount = 2 ** Math.max(0, rounds - round - 1)
+      for (let nextSlot = 0; nextSlot < nextMatchCount; nextSlot += 1) {
+        const left = bySlot.get(nextSlot * 2)
+        const right = bySlot.get(nextSlot * 2 + 1)
+        const leftDone = left && ['complete', 'forfeit'].includes(String(left.status)) && left.winner
+        const rightDone = right && ['complete', 'forfeit'].includes(String(right.status)) && right.winner
+        if (!leftDone || !rightDone) continue
+
+        const position = nextBracketPosition(round, nextSlot * 2)
+        const existing = await one(
+          db,
+          `select * from tournament_battles
+            where tournament_id=$1 and round=$2 and bracket_slot=$3`,
+          [tournamentId, position.round, position.bracketSlot],
+        )
+        if (!existing) {
+          await db.query(
+            `insert into tournament_battles
+               (tournament_id, player_a, player_b, status, round, bracket_slot)
+             values ($1,$2,$3,'scheduled',$4,$5)`,
+            [tournamentId, left.winner, right.winner, position.round, position.bracketSlot],
+          )
+        } else if (!existing.winner) {
+          await db.query(
+            `update tournament_battles
+                set player_a=$1, player_b=$2
+              where id=$3`,
+            [left.winner, right.winner, existing.id],
+          )
+        }
+      }
+    }
+  }
+
   /**
    * The economy function dispatcher. Returns true when it handled the call.
    * Business refusals answer 200 with { ok:false, reason } so the client gets a
@@ -2594,6 +3119,195 @@ export function createApp(pool: Pooly) {
         reason: 'feature-retired',
         error: 'Wagering is not available. TKO uses Give Points for support and prestige.',
       })
+      return true
+    }
+
+    // -- Tournament bracket: seed and advance --------------------------------
+    // Bracket writes live here instead of in the browser so a viewer cannot
+    // move their own portrait forward. `bracket_slot` makes the feeder path
+    // stable even when results arrive out of order.
+    if (name === 'tournament-bracket-seed') {
+      const tournamentId = String(body.tournamentId || '')
+      const actor = await loadActor(req)
+      if (!tournamentId || !actor || !(await isTournamentHost(pool, actor, tournamentId))) {
+        res.status(403).json({ ok: false, error: 'only a tournament host may build the bracket' })
+        return true
+      }
+      const result = await withTransaction(async (db) => {
+        const existing = await db.query(
+          'select * from tournament_battles where tournament_id=$1 order by round, bracket_slot, created_at',
+          [tournamentId],
+        )
+        if (existing.rows.length) return { ok: false as const, reason: 'exists', battles: existing.rows }
+
+        let entrants = (await db.query(
+          `select user_id, created_at
+             from tournament_entrants
+            where tournament_id=$1 and status='accepted'
+            order by created_at, user_id`,
+          [tournamentId],
+        )).rows
+        if (entrants.length < 2) {
+          entrants = (await db.query(
+            `select user_id, registered_at as created_at
+               from tournament_registrations
+              where tournament_id=$1
+              order by registered_at, user_id`,
+            [tournamentId],
+          )).rows
+        }
+        const playerIds = Array.from(new Set(entrants.map((row) => String(row.user_id))))
+        if (body.seedMode === 'shuffle') {
+          for (let i = playerIds.length - 1; i > 0; i -= 1) {
+            const j = Math.floor(Math.random() * (i + 1))
+            ;[playerIds[i], playerIds[j]] = [playerIds[j], playerIds[i]]
+          }
+        }
+        const assignments = firstRoundAssignments(playerIds)
+        if (assignments.length === 0) {
+          return { ok: false as const, reason: 'not-enough-entrants', battles: [] }
+        }
+        for (const match of assignments) {
+          await db.query(
+            `insert into tournament_battles
+               (tournament_id, player_a, player_b, status, winner, round, bracket_slot)
+             values ($1,$2,$3,$4,$5,$6,$7)`,
+            [
+              tournamentId,
+              match.playerA,
+              match.playerB,
+              match.status,
+              match.winner,
+              match.round,
+              match.bracketSlot,
+            ],
+          )
+        }
+        await propagateTournamentBracket(db, tournamentId, totalBracketRounds(playerIds.length))
+        const seeded = await db.query(
+          'select * from tournament_battles where tournament_id=$1 order by round, bracket_slot, created_at',
+          [tournamentId],
+        )
+        return { ok: true as const, battles: seeded.rows, totalRounds: totalBracketRounds(playerIds.length) }
+      })
+      res.json(result)
+      return true
+    }
+
+    if (name === 'tournament-bracket-winner') {
+      const battleId = String(body.battleId || '')
+      const winnerId = String(body.winnerId || '')
+      const battle = await one(pool, 'select * from tournament_battles where id=$1', [battleId])
+      const actor = battle ? await loadActor(req) : null
+      if (!battle) {
+        res.status(404).json({ ok: false, error: 'matchup not found' })
+        return true
+      }
+      if (!actor || !(await isTournamentHost(pool, actor, battle.tournament_id))) {
+        res.status(403).json({ ok: false, error: 'only a tournament host may record the winner' })
+        return true
+      }
+      if (!winnerId || (![battle.player_a, battle.player_b].filter(Boolean).some((id) => same(id, winnerId)))) {
+        res.status(400).json({ ok: false, error: 'winner must be in this matchup' })
+        return true
+      }
+      const result = await withTransaction(async (db) => {
+        const locked = await one(db, 'select * from tournament_battles where id=$1 for update', [battleId])
+        if (locked.winner) {
+          return locked.winner === winnerId
+            ? { ok: true as const, alreadyRecorded: true, champion: null }
+            : { ok: false as const, reason: 'already-decided' }
+        }
+        await db.query(
+          "update tournament_battles set status='complete', winner=$1 where id=$2",
+          [winnerId, battleId],
+        )
+        const entrantCountRow = await one(
+          db,
+          "select count(*) as count from tournament_entrants where tournament_id=$1 and status='accepted'",
+          [locked.tournament_id],
+        )
+        let entrantCount = Number(entrantCountRow?.count ?? 0)
+        if (entrantCount < 2) {
+          const registrationCount = await one(
+            db,
+            'select count(*) as count from tournament_registrations where tournament_id=$1',
+            [locked.tournament_id],
+          )
+          entrantCount = Number(registrationCount?.count ?? 0)
+        }
+        const totalRounds = totalBracketRounds(entrantCount)
+        await propagateTournamentBracket(db, locked.tournament_id, totalRounds)
+
+        const round = Number(locked.round ?? 1)
+        const loserId = same(winnerId, locked.player_a) ? locked.player_b : locked.player_a
+        if (loserId) await recordDefeat(winnerId, String(loserId), db)
+
+        const champion = round >= totalRounds ? winnerId : null
+        if (champion) {
+          const prior = await one(
+            db,
+            'select id from tournament_results where tournament_id=$1 and winner_profile_id=$2 limit 1',
+            [locked.tournament_id, champion],
+          )
+          if (!prior) {
+            await db.query(
+              `insert into tournament_results
+                 (tournament_id, winner_profile_id, submitted_by)
+               values ($1,$2,$3)`,
+              [locked.tournament_id, champion, actor.id],
+            )
+          }
+        }
+        const rows = await db.query(
+          'select * from tournament_battles where tournament_id=$1 order by round, bracket_slot, created_at',
+          [locked.tournament_id],
+        )
+        return { ok: true as const, battles: rows.rows, champion, totalRounds }
+      })
+      res.json(result)
+      return true
+    }
+
+    // ── HIGHLIGHT MY COMMENT (in-stream, spends utility Tokens) ──────────────
+    // Debit is atomic (spendTokens), so a stampede can't over-draw or double-pin,
+    // and the highlighted row is written HERE (server-side) — a client can never
+    // forge the highlight marker onto an unpaid message. Echoes to every viewer
+    // over the stream's existing Realtime chat channel.
+    if (name === 'highlight-message') {
+      const streamId = String(body.streamId || '').trim()
+      const text = String(body.content ?? body.text ?? '').trim().slice(0, 300)
+      if (!streamId || !text) {
+        res.json({ ok: false, reason: 'invalid' })
+        return true
+      }
+      const price = HIGHLIGHT_COST_TOKENS
+      const spend = await spendTokens(me, price, {
+        kind: 'spend', event: 'highlight', reason: 'highlight chat message', refId: streamId,
+      })
+      if (!spend.ok) {
+        res.json({ ok: false, reason: 'insufficient', wallet: spend, cost: price })
+        return true
+      }
+      let message: unknown = null
+      try {
+        const ins = await pool.query(
+          `insert into stream_messages (stream_id, user_id, content)
+           values ($1, $2, $3)
+           returning id, stream_id, user_id, content, created_at`,
+          [streamId, me, `${STREAM_HIGHLIGHT_PREFIX}${text}`],
+        )
+        message = ins.rows[0] ?? null
+      } catch {
+        // The pin failed to write — refund the charge so the viewer isn't out
+        // Tokens for a highlight that never posted.
+        await creditTokens(me, price, {
+          kind: 'adjustment', event: 'highlight', reason: 'highlight post failed refund', refId: streamId,
+        })
+        res.json({ ok: false, reason: 'post-failed', wallet: await readWalletRow(me) })
+        return true
+      }
+      res.json({ ok: true, wallet: spend, cost: price, message })
       return true
     }
 
@@ -3348,7 +4062,9 @@ export function createApp(pool: Pooly) {
 
     // ---- wallet: read (creating the zero row on first sign-in) --------------
     if (name === 'wallet') {
-      res.json({ ok: true, wallet: await readWalletRow(me) })
+      const w = await readWalletRow(me)
+      const oracle_tickets = await readOracleTickets(me)
+      res.json({ ok: true, wallet: { ...w, oracle_tickets } })
       return true
     }
 
@@ -3366,42 +4082,50 @@ export function createApp(pool: Pooly) {
     // (uq_wallet_daily_grant) is the real-Postgres backstop for the rare case
     // two conditional inserts still race.
     if (name === 'sweeps-daily') {
-      const DAILY_BONUS_SWEEPS = 25
+      // REPURPOSED (Oracle Rule 1): the daily free grant now credits ORACLE-USE-
+      // ONLY tickets (default 3), NOT $-flow currency. Tickets can be BET but
+      // contribute $0 to any streamer payout. The claim stays idempotent /
+      // once-per-UTC-day exactly as the old Sweeps grant was.
       const today = new Date().toISOString().slice(0, 10)
       await readWalletRow(me) // ensure the wallet row exists to claim against
       // ATOMIC CLAIM + CREDIT in one statement. The credit and the "already
-      // claimed today?" guard are the SAME update: it adds the Sweeps only when
-      // this user has not already claimed today's date. The old code read the
-      // ledger, saw no row, and only then credited — so ten simultaneous taps
-      // all saw "not claimed" and each banked a day's Sweeps. Here Postgres
-      // row-locks the wallet for the update, so a second concurrent claim
-      // re-checks the guard against the just-written date and matches 0 rows.
+      // claimed today?" guard are the SAME update: it adds the tickets only when
+      // this user has not already claimed today's date. Postgres row-locks the
+      // wallet for the update, so a second concurrent claim re-checks the guard
+      // against the just-written date and matches 0 rows — no double grant.
       const claim = await pool.query(
         `update wallets
-            set sweeps = coalesce(sweeps,0) + $2,
+            set oracle_tickets = coalesce(oracle_tickets,0) + $2,
                 daily_sweeps_claimed_on = $3,
                 updated_at = now()
           where user_id = $1
             and (daily_sweeps_claimed_on is null or daily_sweeps_claimed_on <> $3)
-        returning sweeps, tokens, paid_sweeps_cents`,
-        [me, DAILY_BONUS_SWEEPS, today],
+        returning sweeps, tokens, paid_sweeps_cents, oracle_tickets`,
+        [me, ORACLE_DAILY_TICKETS, today],
       )
       if (!claim.rows.length) {
-        res.json({ ok: false, reason: 'already-claimed', wallet: await readWalletRow(me) })
+        const w = await readWalletRow(me)
+        const t = await readOracleTickets(me)
+        res.json({ ok: false, reason: 'already-claimed', granted: 0, wallet: { ...w, oracle_tickets: t } })
         return true
       }
-      // Book the append-only audit row for the grant we just made.
-      await bookLedger(me, 0, DAILY_BONUS_SWEEPS, {
-        kind: 'grant', reason: 'daily', refId: today, event: 'Daily free Sweeps', status: 'Paid',
+      // Book the append-only audit row for the grant we just made. Tickets are
+      // NOT $ and NOT free-sweeps, so both money deltas are 0 — the row is a
+      // pure audit trail (kind='grant', reason='daily-oracle-tickets').
+      await bookLedger(me, 0, 0, {
+        kind: 'grant', reason: 'daily-oracle-tickets', refId: today,
+        event: `Daily Oracle Tickets +${ORACLE_DAILY_TICKETS}`, status: 'Paid',
       })
       const row = claim.rows[0]
       res.json({
         ok: true,
-        granted: DAILY_BONUS_SWEEPS,
+        granted: ORACLE_DAILY_TICKETS,
+        grantedKind: 'oracle_tickets',
         wallet: {
           tokens: Number(row.tokens ?? 0),
           sweeps: Number(row.sweeps ?? 0),
           paid_sweeps_cents: Number(row.paid_sweeps_cents ?? 0),
+          oracle_tickets: Number(row.oracle_tickets ?? 0),
         },
       })
       return true
@@ -4059,6 +4783,427 @@ export function createApp(pool: Pooly) {
       return true
     }
 
+    // ==========================================================================
+    // ORACLE BETTING ECONOMY — live-only, host-tier-only, MONEY-SAFE.
+    //
+    // MONEY-SAFETY invariants (Oracle Rules 1–4):
+    //   • LIVE + HOST-TIER GATE. A bet is accepted ONLY on a genuinely LIVE
+    //     live_streams row whose host is a TOP-TIER user who may host (tko_host OR
+    //     active tier == creator). Pre-recorded/automerge videos are not in
+    //     live_streams at all, so they can never be bet on.
+    //   • STAKE LEGALITY (Rule 3). A stake is exactly ONE of: oracle TICKETS
+    //     ($0 basis), PAID sweeps (real cents → the ONLY thing that drives a
+    //     streamer payout), or a FORGED/PURCHASED artifact ($0 basis). Free/
+    //     earned artifacts (origin free/seed/reward/prize) and host-issued
+    //     officials are refused. Every debit is a trusted, atomic, fail-closed
+    //     wallet path (spendOracleTickets / debitPaidSweeps); the artifact is
+    //     escrowed by an active-bet lock so it can't be double-staked.
+    //   • ONE BET PER GAME. unique(match_ref, user_id), pre-checked before any
+    //     wallet touch, and enforced again by the unique index on a race.
+    //   • CONSERVED POT. Winners split the pot pro-rata, per stake kind, integer-
+    //     safe (remainder to the largest winner) — sum(payouts)==pot exactly. No
+    //     mint, no burn.
+    //   • CAPPED STREAMER SHARE (Rule 4). The streamer earns 25% of the real
+    //     sweeps-cents that actually flowed on their stream, minus a $2 flat fee
+    //     and a platform (tax/overhead) fee, HARD-CAPPED by oracleStreamerShareCents
+    //     against a per-stream running tally so cumulative payout can NEVER exceed
+    //     25% of the sweeps-cents ever bet there. It is credited from the platform
+    //     (creditPaidSweeps) — never minted out of the bettors' conserved pot.
+    //   • IDEMPOTENT resolve/cancel via a one-row-per-match settlement claim.
+    // ==========================================================================
+    const BETTABLE_ARTIFACT_ORIGINS = new Set(['forge', 'purchase'])
+    const STAKE_KINDS = new Set(['ticket', 'sweeps', 'artifact'])
+
+    /** Live + host-tier eligibility for a stream. Fail-closed on anything odd. */
+    const oracleBetEligibility = async (
+      streamId: string,
+    ): Promise<{ ok: true; hostId: string } | { ok: false; reason: string }> => {
+      if (!streamId) return { ok: false, reason: 'invalid-stream' }
+      const s = await one(pool, 'select id, user_id, is_live from live_streams where id=$1', [streamId])
+      if (!s) return { ok: false, reason: 'no-stream' } // not a live row → pre-recorded/automerge
+      if (s.is_live !== true) return { ok: false, reason: 'not-live' }
+      const host = await one(pool, 'select user_metadata from users where id=$1', [s.user_id])
+      const meta = parseMeta(host?.user_metadata)
+      const hostTier = meta.tko_host === true || activeTierFromMeta(meta) === TOP_TIER
+      if (!hostTier) return { ok: false, reason: 'not-host-tier' }
+      return { ok: true, hostId: String(s.user_id) }
+    }
+
+    const readMinConfig = async (streamId: string) => {
+      const c = await one(pool, 'select min_bet, min_stake_kind from oracle_stream_config where stream_id=$1', [streamId])
+      return { min_bet: Number(c?.min_bet ?? 1), min_stake_kind: String(c?.min_stake_kind ?? 'ticket') }
+    }
+
+    // ---- oracle-bet-config-set (host) : set the per-stream minimum bet --------
+    if (name === 'oracle-bet-config-set') {
+      const streamId = String(body.streamId || '')
+      const s = await one(pool, 'select id, user_id from live_streams where id=$1', [streamId])
+      if (!s) { res.json({ ok: false, reason: 'no-stream' }); return true }
+      const actor = await loadActor(req)
+      if (!actor || !(actor.host === true || same(actor.id, s.user_id))) {
+        res.status(403).json({ ok: false, error: 'only the stream host may set the minimum bet' })
+        return true
+      }
+      const rawMin = Number(body.minBet)
+      const min_bet = Number.isFinite(rawMin) ? Math.max(0, Math.floor(rawMin)) : 1
+      const min_stake_kind = STAKE_KINDS.has(String(body.minStakeKind)) ? String(body.minStakeKind) : 'ticket'
+      await pool.query(
+        `insert into oracle_stream_config (stream_id, min_bet, min_stake_kind)
+         values ($1,$2,$3)
+         on conflict (stream_id) do update
+           set min_bet=excluded.min_bet, min_stake_kind=excluded.min_stake_kind, updated_at=now()`,
+        [streamId, min_bet, min_stake_kind],
+      )
+      res.json({ ok: true, config: { stream_id: streamId, min_bet, min_stake_kind } })
+      return true
+    }
+
+    // ---- oracle-bet-config : eligibility + minimum + my ticket balance -------
+    if (name === 'oracle-bet-config') {
+      const streamId = String(body.streamId || '')
+      const matchRef = String(body.matchRef || '').trim()
+      const oracle_tickets = await readOracleTickets(me)
+      const elig = await oracleBetEligibility(streamId)
+      if (!elig.ok) {
+        res.json({ ok: true, eligible: false, reason: elig.reason, oracle_tickets })
+        return true
+      }
+      const cfg = await readMinConfig(streamId)
+      const existing = matchRef
+        ? await one(pool, 'select id, choice, stake_kind, stake_amount, status from oracle_bets where match_ref=$1 and user_id=$2', [matchRef, me])
+        : null
+      // The caller's BETTABLE artifacts (forged/purchased, unused, non-official) —
+      // served here so the client never needs to read the artifacts table itself.
+      const artifacts = (await pool.query(
+        `select id, name, rarity, origin from artifacts
+          where owner_id=$1 and used_at is null and official_override=false
+            and origin in ('forge','purchase')
+          order by created_at desc limit 50`,
+        [me],
+      )).rows
+      res.json({
+        ok: true, eligible: true, host_id: elig.hostId,
+        min_bet: cfg.min_bet, min_stake_kind: cfg.min_stake_kind,
+        oracle_tickets, existing_bet: existing ?? null, artifacts,
+      })
+      return true
+    }
+
+    // ---- oracle-bet : escrow a stake on a LIVE, host-tier stream -------------
+    if (name === 'oracle-bet') {
+      const matchRef = String(body.matchRef || '').trim().slice(0, 200)
+      const streamId = String(body.streamId || '')
+      const choice = String(body.choice || '').trim().slice(0, 120)
+      const stakeKind = String(body.stakeKind || '')
+      const amount = Number(body.amount)
+      const artifactId = String(body.artifactId || '')
+
+      if (!matchRef || !choice || !STAKE_KINDS.has(stakeKind)) {
+        res.json({ ok: false, reason: 'invalid' })
+        return true
+      }
+      // LIVE + HOST-TIER GATE — fail closed on a non-live or non-host-tier stream.
+      const elig = await oracleBetEligibility(streamId)
+      if (!elig.ok) { res.json({ ok: false, reason: elig.reason }); return true }
+
+      // ONE BET PER GAME — reject a duplicate BEFORE touching any balance.
+      const dupe = await one(pool, 'select id from oracle_bets where match_ref=$1 and user_id=$2', [matchRef, me])
+      if (dupe) { res.json({ ok: false, reason: 'already-bet' }); return true }
+
+      const cfg = await readMinConfig(streamId)
+      // A streamer who requires 'sweeps' wants real-money bets only — reject the
+      // no-$ kinds. ('ticket' default allows any kind.)
+      if (cfg.min_stake_kind === 'sweeps' && stakeKind !== 'sweeps') {
+        res.json({ ok: false, reason: 'sweeps-only-stream', min_stake_kind: 'sweeps' })
+        return true
+      }
+
+      let stakeAmount = 0
+      let stakeCents = 0
+      let escrowArtifactId: string | null = null
+
+      if (stakeKind === 'ticket') {
+        if (!Number.isFinite(amount) || Math.floor(amount) !== amount || amount <= 0) {
+          res.json({ ok: false, reason: 'invalid-amount' }); return true
+        }
+        if (amount < cfg.min_bet) { res.json({ ok: false, reason: 'below-minimum', min_bet: cfg.min_bet }); return true }
+        const spend = await spendOracleTickets(me, amount, {
+          kind: 'wager', event: 'Oracle bet', reason: 'oracle ticket stake', refId: matchRef,
+        })
+        if (!spend.ok) { res.json({ ok: false, reason: 'insufficient-tickets', oracle_tickets: spend.oracle_tickets }); return true }
+        stakeAmount = amount
+        stakeCents = 0 // TICKETS ARE $0 — never part of the money flow.
+      } else if (stakeKind === 'sweeps') {
+        // PAID sweeps measured in real cents; stake_cents == the $ value bet.
+        if (!Number.isFinite(amount) || Math.floor(amount) !== amount || amount <= 0) {
+          res.json({ ok: false, reason: 'invalid-amount' }); return true
+        }
+        if (amount < cfg.min_bet) { res.json({ ok: false, reason: 'below-minimum', min_bet: cfg.min_bet }); return true }
+        const spend = await debitPaidSweepsCents(me, amount, {
+          kind: 'wager', event: 'Oracle bet', reason: 'oracle paid-sweeps stake', refId: matchRef,
+        })
+        if (!spend.ok) { res.json({ ok: false, reason: 'insufficient-sweeps', paid_sweeps_cents: spend.paid_sweeps_cents }); return true }
+        stakeAmount = amount
+        stakeCents = amount
+      } else {
+        // ARTIFACT — only a FORGED/PURCHASED, currently-owned, unused, non-official
+        // artifact may be staked; free/earned ones are refused (Rule 3).
+        if (!artifactId) { res.json({ ok: false, reason: 'invalid-artifact' }); return true }
+        const art = await one(pool, 'select * from artifacts where id=$1', [artifactId])
+        if (!art || !same(art.owner_id, me)) { res.json({ ok: false, reason: 'artifact-not-owned' }); return true }
+        if (art.used_at) { res.json({ ok: false, reason: 'artifact-used' }); return true }
+        if (art.official_override === true || !BETTABLE_ARTIFACT_ORIGINS.has(String(art.origin))) {
+          res.json({ ok: false, reason: 'artifact-not-bettable' }); return true
+        }
+        // Escrow lock: refuse if this artifact is already staked in a live bet.
+        const inUse = await one(pool, "select id from oracle_bets where artifact_id=$1 and status='active'", [artifactId])
+        if (inUse) { res.json({ ok: false, reason: 'artifact-in-use' }); return true }
+        stakeAmount = 1
+        stakeCents = 0 // ARTIFACTS ARE $0-basis — never inflate a streamer payout.
+        escrowArtifactId = artifactId
+      }
+
+      // Persist the bet. On the unique(match_ref,user_id) race, REFUND the just-
+      // escrowed stake through the trusted path and report the duplicate.
+      let bet
+      try {
+        const ins = await pool.query(
+          `insert into oracle_bets
+             (match_ref, stream_id, user_id, choice, stake_kind, stake_amount, stake_cents, artifact_id, status)
+           values ($1,$2,$3,$4,$5,$6,$7,$8,'active') returning *`,
+          [matchRef, streamId, me, choice, stakeKind, stakeAmount, stakeCents, escrowArtifactId],
+        )
+        bet = ins.rows[0]
+      } catch {
+        if (stakeKind === 'ticket') {
+          await creditOracleTickets(me, stakeAmount, { kind: 'adjustment', event: 'Oracle bet', reason: 'duplicate bet refund', refId: matchRef })
+        } else if (stakeKind === 'sweeps') {
+          await creditPaidSweeps(pool, me, stakeCents, { kind: 'adjustment', event: 'Oracle bet', reason: 'duplicate bet refund', refId: matchRef })
+        }
+        res.json({ ok: false, reason: 'already-bet' })
+        return true
+      }
+      const oracle_tickets = await readOracleTickets(me)
+      res.json({ ok: true, bet, oracle_tickets })
+      return true
+    }
+
+    // ---- oracle-bet-resolve (host) : grade, pay the conserved pot, cap the
+    //      streamer's 25%-of-sweeps-$ share, credit them, idempotent -----------
+    if (name === 'oracle-bet-resolve') {
+      const matchRef = String(body.matchRef || '').trim()
+      const winningChoice = String(body.winningChoice || '').trim()
+      if (!matchRef || !winningChoice) { res.json({ ok: false, reason: 'invalid' }); return true }
+
+      // The bets carry the stream; derive it (and thus the streamer) from them.
+      const anyBet = await one(pool, 'select stream_id from oracle_bets where match_ref=$1 limit 1', [matchRef])
+      const streamId = anyBet ? String(anyBet.stream_id ?? '') : ''
+      const streamRow = streamId ? await one(pool, 'select id, user_id from live_streams where id=$1', [streamId]) : null
+
+      // HOST GATE — a global TKO host, or the host of this stream.
+      const actor = await loadActor(req)
+      const isHost = !!actor && (actor.host === true || (streamRow && same(actor.id, streamRow.user_id)))
+      if (!isHost) {
+        res.status(403).json({ ok: false, error: 'only the host may resolve this match' })
+        return true
+      }
+      const hostId = streamRow ? String(streamRow.user_id) : ''
+
+      // IDEMPOTENT CLAIM — one settlement row per match (match_ref is the PK). A
+      // second resolve (or a resolve after a cancel) hits the duplicate-key and
+      // settles nothing. The DB uniqueness is the guard; the loser just reports.
+      try {
+        await pool.query(
+          `insert into oracle_bet_settlements (match_ref, stream_id, winning_choice) values ($1,$2,$3)`,
+          [matchRef, streamId || null, winningChoice],
+        )
+      } catch {
+        res.json({ ok: true, resolved: false, reason: 'already-settled' })
+        return true
+      }
+
+      const active = (await pool.query(
+        "select * from oracle_bets where match_ref=$1 and status='active' order by created_at asc, id asc",
+        [matchRef],
+      )).rows
+
+      // Integer-safe, pot-conserving pro-rata split of `pot` over `winners`
+      // (subset of `bets`) in the stake's own unit. Remainder → largest winner
+      // (earliest breaks ties, since rows are ordered). Returns [] when no winner.
+      const splitPot = (bets: any[], amtOf: (b: any) => number): Array<{ bet: any; payout: number }> => {
+        const pot = bets.reduce((s, b) => s + amtOf(b), 0)
+        const winners = bets.filter((b) => String(b.choice) === winningChoice)
+        if (pot <= 0 || winners.length === 0) return []
+        const wStake = winners.reduce((s, b) => s + amtOf(b), 0)
+        const payouts = winners.map((b) => Math.floor((pot * amtOf(b)) / wStake))
+        let topIdx = 0
+        for (let i = 1; i < winners.length; i++) if (amtOf(winners[i]) > amtOf(winners[topIdx])) topIdx = i
+        payouts[topIdx] += pot - payouts.reduce((s, p) => s + p, 0)
+        return winners.map((b, i) => ({ bet: b, payout: payouts[i] }))
+      }
+
+      const now = new Date().toISOString()
+      const results: any = { tickets: { pot: 0, winners: [], refunded: [] }, sweeps: { pot: 0, winners: [], refunded: [] }, artifacts: { won: [], lost: [] } }
+
+      // ---- TICKET pot (no $) : split in tickets, or refund if no winner -------
+      const ticketBets = active.filter((b) => b.stake_kind === 'ticket')
+      const ticketPot = ticketBets.reduce((s, b) => s + Number(b.stake_amount || 0), 0)
+      results.tickets.pot = ticketPot
+      if (ticketPot > 0) {
+        const won = splitPot(ticketBets, (b) => Number(b.stake_amount || 0))
+        if (won.length === 0) {
+          for (const b of ticketBets) {
+            const amt = Number(b.stake_amount || 0)
+            await creditOracleTickets(String(b.user_id), amt, { kind: 'wager', event: 'Oracle bet', reason: 'no-winner ticket refund', refId: matchRef })
+            await pool.query("update oracle_bets set status='refunded', payout=$1 where id=$2", [amt, b.id])
+            results.tickets.refunded.push({ user_id: b.user_id, tickets: amt })
+          }
+        } else {
+          const winIds = new Set(won.map((w) => w.bet.id))
+          for (const { bet, payout } of won) {
+            await creditOracleTickets(String(bet.user_id), payout, { kind: 'wager', event: 'Oracle bet', result: 'Win', status: 'Paid', prize: `${payout} tickets`, reason: 'oracle ticket payout', refId: matchRef })
+            await pool.query("update oracle_bets set status='won', payout=$1 where id=$2", [payout, bet.id])
+            results.tickets.winners.push({ user_id: bet.user_id, stake: Number(bet.stake_amount || 0), payout })
+          }
+          for (const b of ticketBets) if (!winIds.has(b.id)) await pool.query("update oracle_bets set status='lost', payout=0 where id=$1", [b.id])
+        }
+      }
+
+      // ---- SWEEPS pot ($) : split in cents, or refund if no winner -----------
+      const sweepsBets = active.filter((b) => b.stake_kind === 'sweeps')
+      const sweepsPot = sweepsBets.reduce((s, b) => s + Number(b.stake_cents || 0), 0)
+      results.sweeps.pot = sweepsPot
+      let sweepsRevenueCents = 0 // real $ that actually FLOWED (drives streamer share)
+      if (sweepsPot > 0) {
+        const won = splitPot(sweepsBets, (b) => Number(b.stake_cents || 0))
+        if (won.length === 0) {
+          for (const b of sweepsBets) {
+            const amt = Number(b.stake_cents || 0)
+            await creditPaidSweeps(pool, String(b.user_id), amt, { kind: 'wager', event: 'Oracle bet', reason: 'no-winner sweeps refund', refId: matchRef })
+            await pool.query("update oracle_bets set status='refunded', payout=$1, payout_cents=$1 where id=$2", [amt, b.id])
+            results.sweeps.refunded.push({ user_id: b.user_id, cents: amt })
+          }
+        } else {
+          sweepsRevenueCents = sweepsPot // distributed → this is the real flow
+          const winIds = new Set(won.map((w) => w.bet.id))
+          for (const { bet, payout } of won) {
+            await creditPaidSweeps(pool, String(bet.user_id), payout, { kind: 'wager', event: 'Oracle bet', result: 'Win', status: 'Paid', prize: `${payout}¢`, reason: 'oracle sweeps payout', refId: matchRef })
+            await pool.query("update oracle_bets set status='won', payout=$1, payout_cents=$1 where id=$2", [payout, bet.id])
+            results.sweeps.winners.push({ user_id: bet.user_id, stake_cents: Number(bet.stake_cents || 0), payout_cents: payout })
+          }
+          for (const b of sweepsBets) if (!winIds.has(b.id)) await pool.query("update oracle_bets set status='lost', payout=0, payout_cents=0 where id=$1", [b.id])
+        }
+      }
+
+      // ---- ARTIFACT bets : winner keeps it, loser forfeits it to the platform -
+      for (const b of active.filter((x) => x.stake_kind === 'artifact')) {
+        if (String(b.choice) === winningChoice) {
+          await pool.query("update oracle_bets set status='won', payout=0 where id=$1", [b.id])
+          results.artifacts.won.push({ user_id: b.user_id, artifact_id: b.artifact_id })
+        } else {
+          // Forfeit: consume the artifact (owner_id is NOT NULL, so we mark it
+          // used rather than null the owner). A consumed artifact can't be re-
+          // staked (place checks used_at) or activated.
+          if (b.artifact_id) await pool.query('update artifacts set used_at=$2 where id=$1', [b.artifact_id, now])
+          await pool.query("update oracle_bets set status='lost', payout=0 where id=$1", [b.id])
+          results.artifacts.lost.push({ user_id: b.user_id, artifact_id: b.artifact_id })
+        }
+      }
+
+      // ---- STREAMER SHARE — 25% of the sweeps-$ that flowed, HARD-CAPPED ------
+      // Paid from the platform (creditPaidSweeps), never minted from the pot.
+      let streamerCents = 0
+      if (hostId && sweepsRevenueCents > 0) {
+        const tally = await one(pool, 'select sweeps_cents_in, streamer_cents_paid from oracle_stream_tally where stream_id=$1', [streamId])
+        const priorIn = Number(tally?.sweeps_cents_in ?? 0)
+        const priorPaid = Number(tally?.streamer_cents_paid ?? 0)
+        streamerCents = oracleStreamerShareCents(sweepsRevenueCents, priorIn, priorPaid)
+        // Advance the per-stream tally FIRST (the cap accounting), then pay. Two
+        // steps (ensure-row, then self-referencing UPDATE) — the same pattern the
+        // daily grant uses — so the running totals are exact and pg-portable.
+        await pool.query(
+          `insert into oracle_stream_tally (stream_id, sweeps_cents_in, streamer_cents_paid)
+           values ($1,0,0) on conflict (stream_id) do nothing`,
+          [streamId],
+        )
+        await pool.query(
+          `update oracle_stream_tally
+              set sweeps_cents_in = sweeps_cents_in + $2,
+                  streamer_cents_paid = streamer_cents_paid + $3,
+                  updated_at = now()
+            where stream_id = $1`,
+          [streamId, sweepsRevenueCents, streamerCents],
+        )
+        if (streamerCents > 0) {
+          await creditPaidSweeps(pool, hostId, streamerCents, {
+            kind: 'marketplace', event: 'Oracle streamer share', status: 'Paid',
+            prize: `${streamerCents}¢`, reason: 'oracle streamer revenue share (capped 25%)', refId: matchRef,
+          })
+        }
+      }
+      // Stamp the settlement figures for audit.
+      await pool.query(
+        'update oracle_bet_settlements set sweeps_cents_in=$2, streamer_cents_paid=$3 where match_ref=$1',
+        [matchRef, sweepsRevenueCents, streamerCents],
+      )
+
+      res.json({
+        ok: true, resolved: true, winningChoice,
+        graded: active.length,
+        streamer_cents: streamerCents, sweeps_cents_in: sweepsRevenueCents,
+        results,
+      })
+      return true
+    }
+
+    // ---- oracle-bet-cancel (host) : refund every active bet (idempotent) -----
+    if (name === 'oracle-bet-cancel') {
+      const matchRef = String(body.matchRef || '').trim()
+      if (!matchRef) { res.json({ ok: false, reason: 'invalid' }); return true }
+      const anyBet = await one(pool, 'select stream_id from oracle_bets where match_ref=$1 limit 1', [matchRef])
+      if (!anyBet) { res.json({ ok: true, cancelled: true, refunded: [] }); return true }
+      const streamId = String(anyBet.stream_id ?? '')
+      const streamRow = streamId ? await one(pool, 'select id, user_id from live_streams where id=$1', [streamId]) : null
+      const actor = await loadActor(req)
+      const isHost = !!actor && (actor.host === true || (streamRow && same(actor.id, streamRow.user_id)))
+      if (!isHost) {
+        res.status(403).json({ ok: false, error: 'only the host may cancel this match' })
+        return true
+      }
+      // IDEMPOTENT CLAIM — the same one-row-per-match settlement guard as resolve,
+      // so a cancelled match can never later be resolved (and vice-versa).
+      try {
+        await pool.query(
+          `insert into oracle_bet_settlements (match_ref, stream_id, winning_choice) values ($1,$2,null)`,
+          [matchRef, streamId || null],
+        )
+      } catch {
+        res.json({ ok: true, cancelled: false, reason: 'already-settled', refunded: [] })
+        return true
+      }
+
+      const active = (await pool.query("select * from oracle_bets where match_ref=$1 and status='active'", [matchRef])).rows
+      const refunded: any[] = []
+      for (const b of active) {
+        // Guarded per-bet flip so a concurrent cancel can't double-refund.
+        const flip = await pool.query("update oracle_bets set status='refunded' where id=$1 and status='active' returning *", [b.id])
+        if (!flip.rows.length) continue
+        if (b.stake_kind === 'ticket') {
+          const amt = Number(b.stake_amount || 0)
+          await creditOracleTickets(String(b.user_id), amt, { kind: 'wager', event: 'Oracle bet', reason: 'oracle cancel ticket refund', refId: matchRef })
+          refunded.push({ user_id: b.user_id, tickets: amt })
+        } else if (b.stake_kind === 'sweeps') {
+          const amt = Number(b.stake_cents || 0)
+          await creditPaidSweeps(pool, String(b.user_id), amt, { kind: 'wager', event: 'Oracle bet', reason: 'oracle cancel sweeps refund', refId: matchRef })
+          refunded.push({ user_id: b.user_id, cents: amt })
+        } else {
+          refunded.push({ user_id: b.user_id, artifact_id: b.artifact_id }) // escrow released; owner keeps it
+        }
+      }
+      res.json({ ok: true, cancelled: true, refunded })
+      return true
+    }
+
     return false
   }
 
@@ -4145,6 +5290,386 @@ export function createApp(pool: Pooly) {
         })
       }
     }
+
+    // ── CREATOR GOALS: set / upsert one active goal per kind ───────────────────
+    // A streamer creates the goals shown on their Creator Dashboard + the live
+    // banner (e.g. "24 followers to go — 5776/5800"). PAID STREAMING TIER is
+    // required server-side (pro/supporter/creator; free and the ad-only ad_free
+    // tier are refused) — the client gate is bypassable, this one is not. Exactly
+    // one ACTIVE goal per kind per creator: setting a kind retires the previous
+    // active goal of that kind and inserts the new one, so a re-set is an upsert.
+    if (name === 'goal-set') {
+      const me = uid(req)
+      const body = req.body || {}
+      const kind = String(body.kind || '').trim()
+      const label = String(body.label || '').trim().slice(0, 120)
+      const target = Math.floor(Number(body.target))
+      const ALLOWED = new Set(['followers', 'sub_points', 'donations', 'custom'])
+      if (!ALLOWED.has(kind)) return res.status(400).json({ ok: false, error: 'invalid goal kind' })
+      if (!Number.isFinite(target) || target <= 0) {
+        return res.status(400).json({ ok: false, error: 'target must be a positive number' })
+      }
+      // PAID GATE — creator goals are a paid streaming-tier feature. `paidContentTier`
+      // resolves to '' for free AND the ad-only ad_free tier, so only an active
+      // pro/supporter/creator member passes.
+      const meta = parseMeta((await pool.query('select user_metadata from users where id=$1', [me])).rows[0]?.user_metadata)
+      if (paidContentTier(meta) === '') {
+        return res.status(403).json({ ok: false, error: 'A paid streaming plan is required to set creator goals.' })
+      }
+      const fallbackLabel: Record<string, string> = {
+        followers: 'Followers goal',
+        sub_points: 'Sub points goal',
+        donations: 'Donations goal',
+        custom: 'Goal',
+      }
+      try {
+        const goal = await withTransaction(async (db) => {
+          await db.query('update creator_goals set active=false where user_id=$1 and kind=$2 and active=true', [me, kind])
+          const ins = await db.query(
+            `insert into creator_goals (user_id, kind, label, target, active)
+             values ($1,$2,$3,$4,true) returning *`,
+            [me, kind, label || fallbackLabel[kind], target],
+          )
+          return ins.rows[0]
+        })
+        return res.json({ ok: true, goal })
+      } catch (e: any) {
+        return res.status(400).json({ ok: false, error: e?.message || 'could not save goal' })
+      }
+    }
+
+    // ── CREATOR GOALS: remove one of MY goals ──────────────────────────────────
+    // Owner-scoped delete (id must belong to the caller). No paid gate: pruning
+    // your own goal is harmless, and a lapsed member should still be able to.
+    if (name === 'goal-remove') {
+      const me = uid(req)
+      const id = String((req.body || {}).id || '').trim()
+      if (!id) return res.status(400).json({ ok: false, error: 'id required' })
+      try {
+        const r = await pool.query('delete from creator_goals where id=$1 and user_id=$2 returning id', [id, me])
+        return res.json({ ok: true, removed: r.rows.length })
+      } catch (e: any) {
+        return res.status(400).json({ ok: false, error: e?.message || 'could not remove goal' })
+      }
+    }
+
+    // ── CREATOR STATS: the real-time stats strip + live goal progress ──────────
+    // One authenticated, paid-gated aggregate so the dashboard can poll a single
+    // endpoint. Everything here is a REAL number read server-side; each read
+    // fails soft to 0 so a slim schema (missing follows/gifted_subs/donations)
+    // never 500s the strip. gifted_subs is giver-owned in TABLE_POLICY (a
+    // recipient can't read it through /api/db), which is exactly why the received
+    // count is computed here rather than on the client.
+    if (name === 'creator-stats') {
+      const me = uid(req)
+      const meta = parseMeta((await pool.query('select user_metadata from users where id=$1', [me])).rows[0]?.user_metadata)
+      if (paidContentTier(meta) === '') {
+        return res.status(403).json({ ok: false, error: 'A paid streaming plan is required.' })
+      }
+      const num = async (sql: string, params: any[]): Promise<number> => {
+        try { const r = await pool.query(sql, params); return Number(r.rows[0]?.n ?? 0) } catch { return 0 }
+      }
+      const [followers, subPoints, donations, donationCents, producedVideos, powerLevel, tokens, sweeps, liveCount] =
+        await Promise.all([
+          num('select count(*) as n from follows where following_id=$1', [me]),
+          num('select count(*) as n from gifted_subs where recipient_id=$1', [me]),
+          num("select count(*) as n from donations where creator_id=$1 and status='paid'", [me]),
+          num("select coalesce(sum(amount_cents),0) as n from donations where creator_id=$1 and status='paid'", [me]),
+          num('select count(*) as n from clip_records where player_id=$1 and composite_youtube_id is not null', [me]),
+          num('select coalesce(power_level,0) as n from profiles where id=$1', [me]),
+          num('select coalesce(tokens,0) as n from wallets where user_id=$1', [me]),
+          num('select coalesce(sweeps,0) as n from wallets where user_id=$1', [me]),
+          num('select count(*) as n from live_streams where user_id=$1 and is_live=true', [me]),
+        ])
+      return res.json({
+        ok: true,
+        stats: {
+          followers, subPoints, donations, donationCents, producedVideos,
+          powerLevel, tokens, sweeps, liveNow: liveCount > 0,
+          // TODO: per-stream live viewer count isn't tracked yet (no viewers/
+          // presence table). Surface it here once a heartbeat/presence count lands.
+          liveViewers: null as number | null,
+        },
+      })
+    }
+
+    // ── LIVE HEARTBEAT ────────────────────────────────────────────────────────
+    // While a host is live, the client pings this so `updated_at` stays fresh and
+    // the stale-live TTL never expires a genuinely-active stream. Bumps only the
+    // caller's OWN is_live=true rows (optionally a single stream by id).
+    if (name === 'live-heartbeat') {
+      const me = uid(req)
+      const streamId = String((req.body || {}).streamId || '').trim()
+      const params: any[] = [me]
+      let sql = 'update live_streams set updated_at=now() where user_id=$1 and is_live=true'
+      if (streamId) { params.push(streamId); sql += ` and id=$${params.length}` }
+      sql += ' returning id'
+      try {
+        const r = await pool.query(sql, params)
+        return res.json({ ok: true, updated: r.rows.length })
+      } catch (e: any) {
+        return res.status(400).json({ ok: false, error: e?.message || 'heartbeat failed' })
+      }
+    }
+
+    // ── ADD A LIVE ANGLE ──────────────────────────────────────────────────────
+    // The host assembles a multi-angle "show": their own stream is angle 1, and
+    // they add other players' streams as further angles. Only the OWNER of the
+    // parent live_streams row may add. When a player id is given and no url, we
+    // resolve that player's linked YouTube (their /live tab) so the host doesn't
+    // have to paste anything. A repeat add for the same player updates in place.
+    if (name === 'live-angle-add') {
+      const me = uid(req)
+      const body = req.body || {}
+      const liveStreamId = String(body.liveStreamId || '').trim()
+      if (!liveStreamId) return res.status(400).json({ ok: false, error: 'liveStreamId required' })
+      const stream = await one(pool, 'select id, user_id from live_streams where id=$1', [liveStreamId])
+      if (!stream) return res.status(404).json({ ok: false, error: 'live stream not found' })
+      if (!same(stream.user_id, me)) return res.status(403).json({ ok: false, error: 'only the host may add angles' })
+
+      const angleUserId = String(body.userId || '').trim() || null
+      let youtubeUrl = String(body.youtubeUrl || '').trim()
+      let label = String(body.label || '').trim()
+      // Resolve the added player's linked YouTube live URL when none was pasted.
+      if (!youtubeUrl && angleUserId) {
+        const linked = await pool.query(
+          'select url from user_youtube_links where user_id=$1 order by created_at desc limit 5',
+          [angleUserId],
+        )
+        const resolved = linked.rows.map((r) => r.url).find((u) => isYouTubeUrl(u))
+        if (resolved) youtubeUrl = String(resolved)
+      }
+      // Default the label to the added player's handle.
+      if (!label && angleUserId) {
+        const prof = await one(pool, 'select username from profiles where id=$1', [angleUserId])
+        if (prof?.username) label = String(prof.username)
+      }
+      if (!youtubeUrl) {
+        return res.status(400).json({ ok: false, error: 'a stream link is required for this angle' })
+      }
+      try {
+        // One angle per player on a given show — a repeat add just refreshes it.
+        if (angleUserId) {
+          const existing = await one(
+            pool,
+            'select id from live_stream_angles where live_stream_id=$1 and user_id=$2',
+            [liveStreamId, angleUserId],
+          )
+          if (existing) {
+            const upd = await pool.query(
+              'update live_stream_angles set youtube_url=$1, label=$2 where id=$3 returning *',
+              [youtubeUrl, label || null, existing.id],
+            )
+            return res.json({ ok: true, angle: upd.rows[0] })
+          }
+        }
+        const ins = await pool.query(
+          'insert into live_stream_angles (live_stream_id, user_id, label, youtube_url) values ($1,$2,$3,$4) returning *',
+          [liveStreamId, angleUserId, label || null, youtubeUrl],
+        )
+        return res.json({ ok: true, angle: ins.rows[0] })
+      } catch (e: any) {
+        return res.status(400).json({ ok: false, error: e?.message || 'could not add angle' })
+      }
+    }
+
+    // ── REMOVE A LIVE ANGLE ───────────────────────────────────────────────────
+    // Only the owner of the parent live_streams row may drop one of its angles.
+    if (name === 'live-angle-remove') {
+      const me = uid(req)
+      const angleId = String((req.body || {}).angleId || '').trim()
+      if (!angleId) return res.status(400).json({ ok: false, error: 'angleId required' })
+      const angle = await one(pool, 'select id, live_stream_id from live_stream_angles where id=$1', [angleId])
+      if (!angle) return res.json({ ok: true, removed: 0 })
+      const stream = await one(pool, 'select user_id from live_streams where id=$1', [angle.live_stream_id])
+      if (!stream || !same(stream.user_id, me)) {
+        return res.status(403).json({ ok: false, error: 'only the host may remove angles' })
+      }
+      try {
+        await pool.query('delete from live_stream_angles where id=$1', [angleId])
+        return res.json({ ok: true, removed: 1 })
+      } catch (e: any) {
+        return res.status(400).json({ ok: false, error: e?.message || 'could not remove angle' })
+      }
+    }
+
+    // ── INVITE A PLAYER TO CO-STREAM ──────────────────────────────────────────
+    // A host (owner of the live_streams row) OR an already-ACCEPTED co-host may
+    // invite ANOTHER player to co-stream. The invited player later adds THEIR OWN
+    // stream link themselves (live-angle-add-self) — so the host doesn't paste
+    // everyone's links.
+    //
+    // ROLE CEILING (interpretation): "role" is the user's streaming TIER LEVEL
+    // (see tierLevelFromMeta). An inviter may invite an invitee only when the
+    // invitee's level <= the inviter's — you can invite peers or lower, never
+    // higher. Swap tierLevelFromMeta for a dedicated live-role later to change it.
+    if (name === 'live-invite') {
+      const me = uid(req)
+      const body = req.body || {}
+      const liveStreamId = String(body.liveStreamId || '').trim()
+      const inviteeId = String(body.userId || '').trim()
+      if (!liveStreamId) return res.status(400).json({ ok: false, error: 'liveStreamId required' })
+      if (!inviteeId) return res.status(400).json({ ok: false, error: 'userId required' })
+      if (same(inviteeId, me)) return res.status(400).json({ ok: false, error: 'you cannot invite yourself' })
+
+      const stream = await one(pool, 'select id, user_id from live_streams where id=$1', [liveStreamId])
+      if (!stream) return res.status(404).json({ ok: false, error: 'live stream not found' })
+
+      // Caller must be the host OR an accepted co-host on this stream.
+      const isHost = same(stream.user_id, me)
+      const acceptedCoHost = isHost ? null : await one(
+        pool,
+        "select id from live_stream_invites where live_stream_id=$1 and invitee_id=$2 and status='accepted'",
+        [liveStreamId, me],
+      )
+      if (!isHost && !acceptedCoHost) {
+        return res.status(403).json({ ok: false, error: 'only the host or an accepted co-host may invite' })
+      }
+
+      // Role ceiling: invitee's tier level must be <= the caller's.
+      const inviteeRow = await one(pool, 'select id, user_metadata from users where id=$1', [inviteeId])
+      if (!inviteeRow) return res.status(404).json({ ok: false, error: 'that player was not found' })
+      const callerLevel = tierLevelFromMeta(parseMeta((await one(pool, 'select user_metadata from users where id=$1', [me]))?.user_metadata))
+      const inviteeLevel = tierLevelFromMeta(parseMeta(inviteeRow.user_metadata))
+      if (inviteeLevel > callerLevel) {
+        return res.status(403).json({ ok: false, reason: 'role-too-high', error: 'you can only invite players at your role or lower' })
+      }
+
+      // The role we stamp on the invite is the streaming tier at invite time.
+      const roleTier = activeTierFromMeta(parseMeta(inviteeRow.user_metadata)) || 'free'
+      try {
+        // Idempotent: a repeat invite to the same player re-opens (pending) the
+        // existing row rather than creating a duplicate (unique stream+invitee).
+        const existing = await one(
+          pool,
+          'select id from live_stream_invites where live_stream_id=$1 and invitee_id=$2',
+          [liveStreamId, inviteeId],
+        )
+        let invite
+        if (existing) {
+          const upd = await pool.query(
+            "update live_stream_invites set inviter_id=$1, role=$2, status='pending' where id=$3 returning *",
+            [me, roleTier, existing.id],
+          )
+          invite = upd.rows[0]
+        } else {
+          const ins = await pool.query(
+            "insert into live_stream_invites (live_stream_id, inviter_id, invitee_id, role, status) values ($1,$2,$3,$4,'pending') returning *",
+            [liveStreamId, me, inviteeId, roleTier],
+          )
+          invite = ins.rows[0]
+        }
+        // Notify the invitee. related_id points at the stream so the surface can
+        // deep-link; actor_id is the inviter.
+        const inviterName = (await one(pool, 'select username from profiles where id=$1', [me]))?.username
+        await pool.query(
+          `insert into notifications (user_id, kind, title, body, link, related_id, actor_id)
+           values ($1,'live_invite',$2,$3,$4,$5,$6)`,
+          [
+            inviteeId,
+            'You\'re invited to co-stream',
+            `${inviterName ? '@' + inviterName : 'A host'} invited you to add your stream to their live.`,
+            `/live-invites`,
+            liveStreamId,
+            me,
+          ],
+        )
+        return res.json({ ok: true, invite })
+      } catch (e: any) {
+        return res.status(400).json({ ok: false, error: e?.message || 'could not invite' })
+      }
+    }
+
+    // ── RESPOND TO A CO-STREAM INVITE ─────────────────────────────────────────
+    // Only the invitee may accept/decline their own invite. Forced from the JWT.
+    if (name === 'live-invite-respond') {
+      const me = uid(req)
+      const body = req.body || {}
+      const inviteId = String(body.inviteId || '').trim()
+      const accept = body.accept === true
+      if (!inviteId) return res.status(400).json({ ok: false, error: 'inviteId required' })
+      const invite = await one(pool, 'select id, invitee_id from live_stream_invites where id=$1', [inviteId])
+      if (!invite) return res.status(404).json({ ok: false, error: 'invite not found' })
+      if (!same(invite.invitee_id, me)) {
+        return res.status(403).json({ ok: false, error: 'only the invited player may respond' })
+      }
+      try {
+        const upd = await pool.query(
+          'update live_stream_invites set status=$1 where id=$2 returning *',
+          [accept ? 'accepted' : 'declined', inviteId],
+        )
+        return res.json({ ok: true, invite: upd.rows[0] })
+      } catch (e: any) {
+        return res.status(400).json({ ok: false, error: e?.message || 'could not respond' })
+      }
+    }
+
+    // ── ADD MY OWN ANGLE (SELF-SERVICE, VIA AN ACCEPTED INVITE) ───────────────
+    // This is what lets an INVITED player add their OWN link. The caller adds an
+    // angle carrying THEIR user_id and THEIR stream link (resolved from their
+    // linked YouTube when no url is given). Allowed only when the caller is the
+    // host OR holds an ACCEPTED invite to this stream — the ids come from the JWT,
+    // never the body, so nobody adds an angle "as" someone else.
+    if (name === 'live-angle-add-self') {
+      const me = uid(req)
+      const body = req.body || {}
+      const liveStreamId = String(body.liveStreamId || '').trim()
+      if (!liveStreamId) return res.status(400).json({ ok: false, error: 'liveStreamId required' })
+      const stream = await one(pool, 'select id, user_id from live_streams where id=$1', [liveStreamId])
+      if (!stream) return res.status(404).json({ ok: false, error: 'live stream not found' })
+
+      const isHost = same(stream.user_id, me)
+      const accepted = isHost ? null : await one(
+        pool,
+        "select id from live_stream_invites where live_stream_id=$1 and invitee_id=$2 and status='accepted'",
+        [liveStreamId, me],
+      )
+      if (!isHost && !accepted) {
+        return res.status(403).json({ ok: false, error: 'you need an accepted invite to add your stream' })
+      }
+
+      let youtubeUrl = String(body.youtubeUrl || '').trim()
+      // Resolve the CALLER's own linked YouTube live URL when none was pasted.
+      if (!youtubeUrl) {
+        const linked = await pool.query(
+          'select url from user_youtube_links where user_id=$1 order by created_at desc limit 5',
+          [me],
+        )
+        const resolved = linked.rows.map((r) => r.url).find((u) => isYouTubeUrl(u))
+        if (resolved) youtubeUrl = String(resolved)
+      }
+      if (!youtubeUrl) {
+        return res.status(400).json({ ok: false, error: 'add or link a stream URL first' })
+      }
+      let label = String(body.label || '').trim()
+      if (!label) {
+        const prof = await one(pool, 'select username from profiles where id=$1', [me])
+        if (prof?.username) label = String(prof.username)
+      }
+      try {
+        // One angle per player on a show — re-adding my own refreshes it in place.
+        const existing = await one(
+          pool,
+          'select id from live_stream_angles where live_stream_id=$1 and user_id=$2',
+          [liveStreamId, me],
+        )
+        if (existing) {
+          const upd = await pool.query(
+            'update live_stream_angles set youtube_url=$1, label=$2 where id=$3 returning *',
+            [youtubeUrl, label || null, existing.id],
+          )
+          return res.json({ ok: true, angle: upd.rows[0] })
+        }
+        const ins = await pool.query(
+          'insert into live_stream_angles (live_stream_id, user_id, label, youtube_url) values ($1,$2,$3,$4) returning *',
+          [liveStreamId, me, label || null, youtubeUrl],
+        )
+        return res.json({ ok: true, angle: ins.rows[0] })
+      } catch (e: any) {
+        return res.status(400).json({ ok: false, error: e?.message || 'could not add your angle' })
+      }
+    }
+
     // The economy handlers (wallet, artifacts, predictions, King prizes, clan
     // dues). Wrapped so a bad id / constraint violation is a clean 400 rather
     // than an unhandled rejection.
@@ -4159,12 +5684,18 @@ export function createApp(pool: Pooly) {
     if (name === 'ask') {
       const question = String((req.body || {}).question || '').trim().slice(0, 500)
       if (!question) return res.status(400).json({ ok: false, error: 'question required' })
+      // PAGE AWARENESS: the client already sends clientContext.path (the route the
+      // player is on) — use it so answers are situated ("on this tournament",
+      // "the button below"). The server had been ignoring it. Optional + capped.
+      const cc = (req.body || {}).clientContext || {}
+      const page = String(cc.path || '').trim().slice(0, 160)
       try {
         const [publicContext, privateContext] = await Promise.all([
           liveStats(pool).catch(() => ''),
           userStats(pool, uid(req)).catch(() => ''),
         ])
-        const context = [publicContext, privateContext].filter(Boolean).join('\n')
+        const pageContext = page ? `The player is currently on this screen of the app: ${page}. Tailor help to where they are.` : ''
+        const context = [publicContext, privateContext, pageContext].filter(Boolean).join('\n')
         const answer = await askTko(question, context)
         return res.json({
           ok: true,
@@ -4587,6 +6118,68 @@ export function createApp(pool: Pooly) {
   })
 
   // ==========================================================================
+  // INTERNAL — POST /api/internal/auto-merge-channels
+  //
+  // Called by the auto-merge PIPELINE (tko_autopilot.dynamic_channels, NOT a
+  // browser) at the start of every run to learn WHICH connected channels it is
+  // allowed to scan. Replaces the four hardcoded channels in the autopilot with
+  // a LIVE, eligibility-gated roster, so a newly-connected paid/beta user is
+  // auto-included with no code change and a lapsed user drops out automatically.
+  //
+  // Auth is the SAME shared service key as /internal/credit-produced (fail
+  // closed if TKO_SERVICE_KEY is unset) — it exposes other users' channels, so
+  // no signed-in user JWT may ever reach it.
+  //
+  // ELIGIBILITY (auto-merge audience): a connected channel is returned only when
+  // its owner is on a REAL paid tier (activeTierFromMeta !== '' — i.e. ad_free /
+  // "basic" and up, NOT free/expired) OR is a TKO-BETA tester
+  // (user_metadata.tko_beta === true). Free/non-beta owners are excluded.
+  //
+  // Response: { ok:true, channels: [{ user_id, username, url }] } where url is
+  // the stored YouTube url (e.g. https://www.youtube.com/@handle). One row per
+  // user (their most recently connected link).
+  // ==========================================================================
+  api.post('/internal/auto-merge-channels', async (req, res) => {
+    const key = process.env.TKO_SERVICE_KEY || ''
+    if (!key || String(req.headers['x-tko-service'] || '') !== key) {
+      return res.status(401).json({ ok: false, error: 'unauthorized' })
+    }
+    const parseMeta = (m: any) =>
+      typeof m === 'string' ? (() => { try { return JSON.parse(m) } catch { return {} } })() : (m || {})
+    try {
+      // Latest link per user (DISTINCT ON is unsupported by pg-mem, so pick the
+      // newest row in JS after ordering). Join users for tier/beta gating and
+      // profiles for the display username.
+      const rows = (await pool.query(
+        `select yl.user_id as user_id, yl.url as url, u.user_metadata as user_metadata,
+                p.username as username, yl.created_at as created_at
+           from user_youtube_links yl
+           join users u on u.id = yl.user_id
+           left join profiles p on p.id = yl.user_id
+          order by yl.created_at desc`,
+      )).rows as any[]
+      const seen = new Set<string>()
+      const channels: { user_id: string; username: string; url: string }[] = []
+      for (const row of rows) {
+        const userId = String(row.user_id || '')
+        const url = String(row.url || '').trim()
+        if (!userId || !url || seen.has(userId)) continue
+        const meta = parseMeta(row.user_metadata)
+        // PAID (any real active tier incl. ad_free/basic) OR BETA tester. Free
+        // (tier '' / expired) and non-beta are excluded.
+        const eligible = activeTierFromMeta(meta) !== '' || meta?.tko_beta === true
+        if (!eligible) continue
+        seen.add(userId)
+        const username = String(row.username || meta?.username || '').trim()
+        channels.push({ user_id: userId, username, url })
+      }
+      return res.json({ ok: true, channels })
+    } catch (e: any) {
+      return res.status(400).json({ ok: false, error: e?.message || 'roster failed' })
+    }
+  })
+
+  // ==========================================================================
   // ACCOUNT DELETION — DELETE /api/account
   //                    POST   /api/account/delete   (same handler, for clients
   //                                                  that can't send a body on DELETE)
@@ -4815,6 +6408,35 @@ export function createApp(pool: Pooly) {
     await pool.query('update users set stripe_customer_id=$1 where id=$2', [id, userId])
     return id
   }
+
+  const physicalMerch = createPhysicalMerchService({
+    pool,
+    auth,
+    uid,
+    withTransaction,
+    stripeFetch,
+    stripeConfigured,
+    ensureCustomer,
+    appUrl,
+    designAssistant: async (prompt, artifactName) => {
+      const raw = await askTko(
+        `You are TKO's print-merch design assistant. Return JSON only with these keys: ` +
+        `title, description, color ("Black" or "White"), placement ("front-center" or "back-center"), ` +
+        `recommendations (array of at most 5 short strings). The artifact is "${artifactName}". ` +
+        `The creator's direction is: ${prompt}`,
+      )
+      const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/i)?.[1]
+      const start = raw.indexOf('{')
+      const end = raw.lastIndexOf('}')
+      const candidate = fenced || (start >= 0 && end > start ? raw.slice(start, end + 1) : raw)
+      const parsed = JSON.parse(candidate)
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        throw new Error('Merch design assistant returned invalid JSON.')
+      }
+      return parsed as Record<string, unknown>
+    },
+  })
+  physicalMerch.register(api)
 
   /**
    * Resolve the account a webhook event belongs to: metadata first (set by our
@@ -6158,7 +7780,10 @@ export function createApp(pool: Pooly) {
         const amount = Number(obj.amount_total ?? 0)
         const currency = String(obj.currency || 'usd')
 
-        if (meta.kind === 'paid_sweeps') {
+        if (await physicalMerch.handleStripeCheckout(obj)) {
+          // Stripe-first physical orders are settled and then mirrored to an
+          // unpublished Shopify order plus a held print-provider draft.
+        } else if (meta.kind === 'paid_sweeps') {
           // Paid marketplace credits are distinct from free Give Points. The
           // stored package amount must match Stripe's paid total exactly.
           if (obj.mode === 'payment' && obj.payment_status === 'paid' && userId && meta.purchase_id) {
@@ -6282,6 +7907,12 @@ export function createApp(pool: Pooly) {
 
       // Capture the exact Stripe processing fee from the platform balance
       // transaction. The seller authorized reimbursement during Connect setup.
+      } else if (event?.type === 'checkout.session.expired') {
+        await physicalMerch.handleStripeExpired(obj)
+
+      } else if (event?.type === 'charge.refunded') {
+        await physicalMerch.handleStripeRefund(obj, eventId)
+
       } else if (event?.type === 'charge.succeeded') {
         const meta = obj.metadata || {}
         const paymentIntentId = obj.payment_intent ? String(obj.payment_intent) : ''

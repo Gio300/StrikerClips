@@ -3,6 +3,7 @@ import { useNavigate, Link, useParams, useSearchParams } from 'react-router-dom'
 import { Camera } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/hooks/useAuth'
+import { useEntitlements } from '@/hooks/useEntitlements'
 import { useWallet } from '@/hooks/useWallet'
 import { BRAND } from '@/lib/brand'
 import { prettyClip } from '@/lib/clipLabel'
@@ -21,6 +22,7 @@ import { ArtifactTagsPanel } from '@/components/ArtifactTagsPanel'
 import { UpgradeNudge } from '@/components/UpgradeNudge'
 import { DeleteAccountPanel } from '@/components/DeleteAccountPanel'
 import { DirectMessages } from '@/components/social/DirectMessages'
+import { ProfileCreatorTab } from '@/components/ProfileCreatorTab'
 import { SocialFeed } from '@/components/social/SocialFeed'
 import { AvailabilityHint, Avatar } from '@/components/ui'
 import { AvatarPicker } from '@/components/AvatarPicker'
@@ -35,7 +37,7 @@ import type {
 
 const EMOJI_PICKER = ['👍', '❤️', '😂', '🔥', '👏', '💯', '🎉', '😮']
 
-type ProfileSection = 'wall' | 'feed' | 'messages' | 'about'
+type ProfileSection = 'wall' | 'feed' | 'messages' | 'about' | 'stats'
 
 function profileSectionFromParam(value: string | null, isOwnProfile: boolean): ProfileSection {
   const normalized: ProfileSection =
@@ -45,7 +47,9 @@ function profileSectionFromParam(value: string | null, isOwnProfile: boolean): P
         ? 'feed'
         : value === 'about' || value === 'polls' || value === 'profile'
           ? 'about'
-          : 'wall'
+          : value === 'stats' || value === 'creator'
+            ? 'stats'
+            : 'wall'
   if (!isOwnProfile && (normalized === 'feed' || normalized === 'messages')) return 'wall'
   return normalized
 }
@@ -72,6 +76,7 @@ function WalletChip() {
 
 function ProfileContent() {
   const { user, profile, loading: authLoading } = useAuth()
+  const { isPremium } = useEntitlements()
   const navigate = useNavigate()
   const { userId } = useParams()
   const [searchParams, setSearchParams] = useSearchParams()
@@ -409,8 +414,8 @@ function ProfileContent() {
 
       <div className="mb-6 flex gap-1 overflow-x-auto border-b border-dark-border">
           {(isOwnProfile
-            ? (['wall', 'feed', 'messages', 'about'] as const)
-            : (['wall', 'about'] as const)
+            ? (['wall', 'feed', 'messages', 'about', 'stats'] as const)
+            : (['wall', 'about', 'stats'] as const)
           ).map((tab) => (
             <button
               key={tab}
@@ -419,7 +424,7 @@ function ProfileContent() {
                 activeTab === tab ? 'bg-accent/10 text-accent border-b-2 border-accent' : 'text-gray-400 hover:text-white'
               }`}
             >
-              {tab === 'wall' ? 'Wall' : tab === 'feed' ? 'News Feed' : tab === 'messages' ? 'Messages' : 'About'}
+              {tab === 'wall' ? 'Wall' : tab === 'feed' ? 'News Feed' : tab === 'messages' ? 'Messages' : tab === 'stats' ? 'Stats' : 'About'}
             </button>
           ))}
       </div>
@@ -430,6 +435,14 @@ function ProfileContent() {
           viewerId={user?.id ?? null}
           profileId={targetUserId}
           composerProfile={isOwnProfile ? viewProfile : null}
+        />
+      )}
+
+      {activeTab === 'stats' && targetUserId && (
+        <ProfileCreatorTab
+          userId={targetUserId}
+          isOwnProfile={isOwnProfile}
+          isPremium={isPremium}
         />
       )}
 
@@ -458,7 +471,7 @@ function ProfileContent() {
         />
       )}
 
-      {activeTab === 'about' && isOwnProfile && <WalletChip />}
+      {activeTab === 'about' && isOwnProfile && !IS_MOBILE_STORE_BUILD && <WalletChip />}
 
       {activeTab === 'about' && isOwnProfile && user && <WinningsLedger userId={user.id} />}
 

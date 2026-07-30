@@ -12,6 +12,7 @@ export function authWallReason(path: string): string {
   if (path.startsWith('/boards/create')) return 'Sign in to start a clan'
   if (path.startsWith('/boards') || path.startsWith('/chat')) return 'Sign in to join the chat'
   if (path.startsWith('/matches/create') || path.startsWith('/create-match')) return 'Sign in to create a match'
+  if (path.startsWith('/tournaments')) return 'Sign in to create or manage a tournament'
   if (path.startsWith('/my-clips')) return 'Sign in to see your clips'
   if (path.startsWith('/profile')) return 'Sign in to view your profile'
   if (path.startsWith('/redeem')) return 'Sign in to redeem a pass'

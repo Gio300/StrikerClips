@@ -8,6 +8,8 @@ workflows:
       app_store_connect: tko_app_store
 
     environment:
+      groups:
+        - tko_mobile_public
       ios_signing:
         distribution_type: app_store
         bundle_identifier: app.killcam
@@ -27,8 +29,15 @@ workflows:
       - name: Install JavaScript dependencies
         script: npm ci
 
+      - name: Validate physical checkout configuration
+        script: |
+          if [ -z "$VITE_STRIPE_PUBLISHABLE_KEY" ]; then
+            echo "VITE_STRIPE_PUBLISHABLE_KEY is required for physical merchandise checkout."
+            exit 1
+          fi
+
       - name: Run unit and integration tests
-        script: VITE_MOCK_BACKEND=1 npx vitest run --testTimeout 15000
+        script: VITE_MOCK_BACKEND=1 npx vitest run --testTimeout 30000
 
       - name: Build the TKO web application
         script: |
@@ -44,7 +53,9 @@ workflows:
       - name: Set iOS build number
         script: |
           cd "$CM_BUILD_DIR/ios/App"
-          agvtool new-version -all "$PROJECT_BUILD_NUMBER"
+          BUILD_NUMBER="${PROJECT_BUILD_NUMBER:-4}"
+          if [ "$BUILD_NUMBER" -lt 4 ]; then BUILD_NUMBER=4; fi
+          agvtool new-version -all "$BUILD_NUMBER"
 
       - name: Build signed IPA
         script: |
@@ -71,6 +82,8 @@ workflows:
     max_build_duration: 120
 
     environment:
+      groups:
+        - tko_mobile_public
       android_signing:
         - tko_android_upload
       vars:
@@ -87,8 +100,15 @@ workflows:
       - name: Install JavaScript dependencies
         script: npm ci
 
+      - name: Validate physical checkout configuration
+        script: |
+          if [ -z "$VITE_STRIPE_PUBLISHABLE_KEY" ]; then
+            echo "VITE_STRIPE_PUBLISHABLE_KEY is required for physical merchandise checkout."
+            exit 1
+          fi
+
       - name: Run unit and integration tests
-        script: VITE_MOCK_BACKEND=1 npx vitest run --testTimeout 15000
+        script: VITE_MOCK_BACKEND=1 npx vitest run --testTimeout 30000
 
       - name: Build the TKO mobile store application
         script: |

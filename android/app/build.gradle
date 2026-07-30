@@ -4,7 +4,7 @@ def releaseKeystorePath = System.getenv("CM_KEYSTORE_PATH")
 def releaseKeystorePassword = System.getenv("CM_KEYSTORE_PASSWORD")
 def releaseKeyAlias = System.getenv("CM_KEY_ALIAS")
 def releaseKeyPassword = System.getenv("CM_KEY_PASSWORD")
-def ciBuildNumber = System.getenv("PROJECT_BUILD_NUMBER") ?: "1"
+def ciBuildNumber = Math.max((System.getenv("PROJECT_BUILD_NUMBER") ?: "4").toInteger(), 4)
 
 android {
     namespace "app.killcam"

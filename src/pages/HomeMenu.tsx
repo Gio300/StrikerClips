@@ -1,4 +1,22 @@
 import { useEffect, useState } from 'react'
+import {
+  CircleUserRound,
+  Clapperboard,
+  FolderOpen,
+  Gem,
+  GitBranch,
+  LayoutDashboard,
+  Library,
+  Link2,
+  MessageCircle,
+  Play,
+  Radio,
+  Search,
+  Smartphone,
+  Trophy,
+  Tv,
+  UserPlus,
+} from 'lucide-react'
 import { BigMenu, type BigMenuItem } from '@/components/BigMenu'
 import { ActionCard } from '@/components/ui/ActionCard'
 import { TkoKingHero } from '@/components/TkoKingHero'
@@ -7,65 +25,165 @@ import { RecentVideosStrip } from '@/components/RecentVideosStrip'
 import { NextStep } from '@/components/NextStep'
 import { LiveSessionsStrip } from '@/components/LiveSessionsStrip'
 import type { NinjaIconName } from '@/components/ui/NinjaIcon'
+import { useEntitlements } from '@/hooks/useEntitlements'
+import { IS_MOBILE_STORE_BUILD } from '@/lib/storeBuild'
 
-// The five top-level sections. Everything is a tap → slide → a few big
-// options → tap → destination. No typing to get anywhere.
 type Section = 'video' | 'clans' | 'tournaments' | 'live' | 'me'
 
 const SUBMENUS: Record<Section, { title: string; subtitle: string; items: BigMenuItem[] }> = {
   video: {
-    title: 'Video',
-    subtitle: 'Make it, keep it, watch it.',
+    title: 'Video studio',
+    subtitle: 'Create, manage, or watch.',
     items: [
-      { id: 'make-clip', icon: '🎬', label: 'Make a clip', sub: 'Turn your plays into a reel', to: '/highlight/create', primary: true },
-      { id: 'my-clips', icon: '📁', label: 'My clips', sub: 'Everything you have made', to: '/my-clips' },
-      { id: 'recent-videos', icon: '🆕', label: 'Recent videos', sub: 'Freshly produced multi-angle videos', to: '/videos' },
-      { id: 'watch-reels', icon: '▶️', label: 'Watch reels', sub: 'See the best of the squad', to: '/reels' },
+      {
+        id: 'make-clip',
+        icon: Clapperboard,
+        label: 'Create a reel',
+        sub: 'Add footage, arrange angles, and publish',
+        to: '/highlight/create',
+        primary: true,
+      },
+      {
+        id: 'my-clips',
+        icon: FolderOpen,
+        label: 'My studio',
+        sub: 'Continue drafts and manage finished reels',
+        to: '/my-clips',
+      },
+      {
+        id: 'recent-videos',
+        icon: Library,
+        label: 'Multi-angle matches',
+        sub: 'See matches TKO assembled for the squad',
+        to: '/videos',
+      },
+      {
+        id: 'watch-reels',
+        icon: Play,
+        label: 'Watch feed',
+        sub: 'Browse reels from players and clans',
+        to: '/reels',
+      },
     ],
   },
   clans: {
-    title: 'Clans & Chat',
+    title: 'Clans and chat',
     subtitle: 'Your crew lives here.',
     items: [
-      { id: 'my-clans', icon: '💬', label: 'My clans', sub: 'Boards, channels and chat', to: '/boards', primary: true },
-      { id: 'find-clan', icon: '🛡️', label: 'Find a clan', sub: 'Discover clans recruiting now', to: '/clans/discover' },
-      { id: 'create-clan', icon: '➕', label: 'Create a clan', sub: 'Start a new board', to: '/boards/create' },
+      {
+        id: 'my-clans',
+        icon: MessageCircle,
+        label: 'My clans',
+        sub: 'Boards, channels, and chat',
+        to: '/boards',
+        primary: true,
+      },
+      {
+        id: 'find-clan',
+        icon: Search,
+        label: 'Find a clan',
+        sub: 'Discover clans recruiting now',
+        to: '/clans/discover',
+      },
+      {
+        id: 'create-clan',
+        icon: UserPlus,
+        label: 'Create a clan',
+        sub: 'Start a new crew space',
+        to: '/boards/create',
+      },
     ],
   },
   tournaments: {
     title: 'Tournaments',
-    subtitle: 'Compete and prove it.',
+    subtitle: 'Find a competition or build one.',
     items: [
-      { id: 'browse-tournaments', icon: '🏆', label: 'Browse tournaments', sub: 'Find a bracket to join', to: '/tournaments', primary: true },
-      { id: 'stat-checks', icon: '📊', label: 'Stat checks', sub: 'Verify results and ranks', to: '/stat-check-room' },
+      {
+        id: 'browse-tournaments',
+        icon: Trophy,
+        label: 'Find a tournament',
+        sub: 'Search open brackets and live events',
+        to: '/tournaments',
+        primary: true,
+      },
+      {
+        id: 'create-tournament',
+        icon: GitBranch,
+        label: 'Create a tournament',
+        sub: 'Pick a format, then configure it',
+        to: '/tournaments?create=1',
+      },
     ],
   },
   live: {
     title: 'Live',
     subtitle: 'Go on air or tune in.',
     items: [
-      { id: 'watch-live', icon: '📺', label: 'Watch live', sub: 'Catch active streams', to: '/live?tab=watch', primary: true },
-      { id: 'go-live', icon: '🔴', label: 'Go live', sub: 'Start your own stream', to: '/go-live' },
-      { id: 'control-room', icon: '🎛️', label: 'Control room', sub: 'Host tools and direction', to: '/live?tab=host' },
+      {
+        id: 'live-menu',
+        icon: Radio,
+        label: 'Live control room',
+        sub: 'Go live, host, or watch',
+        to: '/live',
+        primary: true,
+      },
+      {
+        id: 'watch-live',
+        icon: Tv,
+        label: 'Watch live',
+        sub: 'Catch active streams',
+        to: '/live?do=watch',
+      },
+      {
+        id: 'go-live',
+        icon: Radio,
+        label: 'Go live',
+        sub: 'Add your stream and other players',
+        to: '/live?do=golive',
+      },
     ],
   },
   me: {
     title: 'Me',
-    subtitle: 'You and your account.',
+    subtitle: 'Your profile and account.',
     items: [
-      { id: 'my-profile', icon: '👤', label: 'My profile', sub: 'Trophies, clips and stats', to: '/profile', primary: true },
-      { id: 'post-clip', icon: '🎥', label: 'Post a clip', sub: 'Grab a clip from your apps', to: '/browser' },
-      { id: 'redeem', icon: '🎟️', label: 'Redeem a pass', sub: 'Unlock a code', to: '/redeem' },
-      { id: 'get-app', icon: '📲', label: 'Get the app', sub: 'Download for desktop', to: '/marketing' },
+      {
+        id: 'my-profile',
+        icon: CircleUserRound,
+        label: 'My profile',
+        sub: 'Trophies, clips, and stats',
+        to: '/profile',
+        primary: true,
+      },
+      {
+        id: 'post-clip',
+        icon: Link2,
+        label: 'Connected apps',
+        sub: 'Bring in clips from your accounts',
+        to: '/browser',
+      },
+      {
+        id: 'redeem',
+        icon: Gem,
+        label: 'Redeem a pass',
+        sub: 'Unlock a code',
+        to: '/redeem',
+      },
+      ...(!IS_MOBILE_STORE_BUILD
+        ? [
+            {
+              id: 'get-app',
+              icon: Smartphone,
+              label: 'Get the app',
+              sub: 'Install TKO on this device',
+              to: '/marketing',
+            },
+          ]
+        : []),
     ],
   },
 }
 
-// The home launcher: a guided grid of big ActionCards. One tap → the focused
-// page for that job. One-word labels, ninja icons, no menus to hunt through.
-// Each card links straight to its destination (Video/Clans drill into a
-// sub-menu via the sidebar's /video and /clans routes; from here we funnel
-// straight to the page people actually want).
 const LAUNCHER: {
   id: string
   icon: NinjaIconName
@@ -74,36 +192,49 @@ const LAUNCHER: {
   to: string
   primary?: boolean
 }[] = [
-  { id: 'create', icon: 'create', label: 'Create', sub: 'Turn plays into a reel', to: '/highlight/create', primary: true },
+  { id: 'create', icon: 'create', label: 'Create', sub: 'Pick what you want to make', to: '/create', primary: true },
   { id: 'watch', icon: 'watch', label: 'Watch', sub: 'Reels from the squad', to: '/reels' },
-  { id: 'play', icon: 'trophy', label: 'Play', sub: 'Tournaments & brackets', to: '/tournaments' },
-  { id: 'clans', icon: 'clan', label: 'Clans', sub: 'Your crew & chat', to: '/boards' },
+  { id: 'play', icon: 'trophy', label: 'Play', sub: 'Tournaments and brackets', to: '/tournaments' },
+  { id: 'clans', icon: 'clan', label: 'Clans', sub: 'Your crew and chat', to: '/boards' },
   { id: 'live', icon: 'live', label: 'Live', sub: 'Watch or go on air', to: '/live' },
-  { id: 'shop', icon: 'shop', label: 'Shop', sub: 'Rep your team', to: '/shop' },
-  // "Connect" is now the OPEN CROSS-CLAN CHAT builder: anyone (not just your own
-  // clan) can talk + follow each other, and "Make a chat" spins up new rooms.
-  // Reuses the existing open-space chat UI (src/pages/Chat.tsx).
-  { id: 'connect', icon: 'chat', label: 'Connect (Chat)', sub: 'Talk across clans · make rooms', to: '/chat' },
-  { id: 'me', icon: 'user', label: 'Me', sub: 'Trophies, clips & stats', to: '/profile' },
+  ...(!IS_MOBILE_STORE_BUILD
+    ? [{ id: 'shop', icon: 'shop' as const, label: 'Shop', sub: 'Rep your team', to: '/shop' }]
+    : []),
+  { id: 'connect', icon: 'chat', label: 'Connect', sub: 'Talk across clans and make rooms', to: '/chat' },
+  { id: 'me', icon: 'user', label: 'Me', sub: 'Trophies, clips, and stats', to: '/profile' },
 ]
 
 export function HomeMenu({ initialSection }: { initialSection?: Section }) {
   const [section, setSection] = useState<Section | null>(initialSection ?? null)
+  const { isPremium } = useEntitlements()
 
-  // Keep the view in sync if the route (and its initialSection) changes.
   useEffect(() => {
     setSection(initialSection ?? null)
   }, [initialSection])
 
-  // Sidebar mirror routes (/video, /clans) still open the drill-down sub-menu.
   if (section != null) {
+    const items =
+      section === 'me' && isPremium
+        ? [
+            SUBMENUS.me.items[0],
+            {
+              id: 'creator-dashboard',
+              icon: LayoutDashboard,
+              label: 'Creator dashboard',
+              sub: 'Goals, live stats, and hosting',
+              to: '/creator',
+            } as BigMenuItem,
+            ...SUBMENUS.me.items.slice(1),
+          ]
+        : SUBMENUS[section].items
+
     return (
-      <div className="px-4 md:px-8 py-6 md:py-10 w-full max-w-5xl">
+      <div className="w-full max-w-5xl px-4 py-6 md:px-8 md:py-10">
         <BigMenu
           key={section}
           title={SUBMENUS[section].title}
           subtitle={SUBMENUS[section].subtitle}
-          items={SUBMENUS[section].items}
+          items={items}
           onBack={() => setSection(null)}
         />
       </div>
@@ -111,32 +242,22 @@ export function HomeMenu({ initialSection }: { initialSection?: Section }) {
   }
 
   return (
-    <div className="px-4 md:px-8 py-6 md:py-10 w-full max-w-5xl">
+    <div className="w-full max-w-5xl px-4 py-6 md:px-8 md:py-10">
       <div className="mb-6 animate-fade-in">
-        <h1 className="text-3xl md:text-4xl font-bold">What do you want to do?</h1>
-        <p className="text-sm md:text-base text-gray-400 mt-1">Pick one. Big buttons, no menus to hunt through.</p>
+        <h1 className="text-3xl font-bold md:text-4xl">What do you want to do?</h1>
+        <p className="mt-1 text-sm text-gray-400 md:text-base">Pick a goal, then configure it.</p>
       </div>
 
-      {/* Guided next-step — surfaces the one logical next move for where the
-          user is (connect YouTube → make a clip → join a clan → enter the
-          ladder). Dismissible; disappears once they're set up. */}
       <div className="mb-5">
         <NextStep />
       </div>
 
-      {/* PRIME placement — the featured TKO King pit leads the home page. */}
       <TkoKingHero />
-
-      {/* Advertise the King's live + upcoming battles right under the hero. */}
       <NextBattlesStrip />
-
-      {/* Who's live right now + the freshest produced multi-angle videos. Each
-          strip renders nothing when it has no content, so a quiet app stays
-          clean. */}
       <LiveSessionsStrip />
       <RecentVideosStrip />
 
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 md:gap-4 animate-slide-up">
+      <div className="grid animate-slide-up grid-cols-2 gap-3 sm:grid-cols-3 md:gap-4 lg:grid-cols-4">
         {LAUNCHER.map((item) => (
           <ActionCard
             key={item.id}
@@ -149,11 +270,6 @@ export function HomeMenu({ initialSection }: { initialSection?: Section }) {
           />
         ))}
       </div>
-
-      {/* Home-feed ad real estate is rendered ONCE by the app shell (Layout's
-          FreeUserAdSlot below the routed content). We intentionally don't add a
-          second slot here, so free users never see two stacked "Sponsored"
-          banners on the launcher. */}
     </div>
   )
 }

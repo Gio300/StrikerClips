@@ -55,6 +55,7 @@ export function useWallet(): Wallet & {
     tokens: wallet.tokens,
     sweeps: wallet.sweeps,
     paid_sweeps_cents: wallet.paid_sweeps_cents,
+    oracle_tickets: wallet.oracle_tickets,
     refresh,
     claimDaily,
   }

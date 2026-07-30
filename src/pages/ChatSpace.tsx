@@ -7,6 +7,8 @@ import { Drawer } from '@/components/ui/Drawer'
 import { Avatar } from '@/components/ui'
 import { TagBadge } from '@/components/TagBadge'
 import { ChatComposer, ChatMessageContent } from '@/components/social/ChatPoll'
+import { callFn } from '@/lib/backend'
+import { extractTkoQuestion, encodeTkoBot, parseTkoBot, stripLeadingMarkers } from '@/lib/streamChatMarkup'
 import type { ArtifactRarity } from '@/types/database'
 import {
   groupChannels,
@@ -486,12 +488,34 @@ function ChannelView({
       }
       let names = new Map<string, ProfMeta>()
       if (ids.length > 0) {
-        const { data: profs } = await supabase
+        // Resolve sender names/avatars resiliently. Try the enriched select
+        // (with the equipped-tag columns) first; if that errors for any reason
+        // — e.g. those columns aren't present on this backend — fall back to a
+        // plain id/username/avatar select so senders NEVER blank out to
+        // "someone" just because the tag columns were unavailable.
+        type ProfRow = {
+          id: string
+          username: string
+          avatar_url: string | null
+          equipped_tag_text?: string | null
+          equipped_tag_rarity?: ArtifactRarity | null
+        }
+        let profs: ProfRow[] = []
+        const enriched = await supabase
           .from('profiles')
           .select('id, username, avatar_url, equipped_tag_text, equipped_tag_rarity')
           .in('id', ids)
+        if (enriched.error) {
+          const plain = await supabase
+            .from('profiles')
+            .select('id, username, avatar_url')
+            .in('id', ids)
+          profs = (plain.data ?? []) as ProfRow[]
+        } else {
+          profs = (enriched.data ?? []) as ProfRow[]
+        }
         names = new Map(
-          (profs ?? []).map((p) => [
+          profs.map((p) => [
             p.id,
             {
               username: p.username,
@@ -537,7 +561,8 @@ function ChannelView({
     if (nearBottom) el.scrollTop = el.scrollHeight
   }, [messages])
 
-  async function sendMessage(body: string): Promise<void> {
+  /** Insert one chat_messages row and optimistically append it. */
+  async function insertBody(body: string): Promise<void> {
     if (!userId) throw new Error('Log in to chat.')
     const { data: inserted, error: err } = await supabase
       .from('chat_messages')
@@ -550,7 +575,7 @@ function ChannelView({
     // Optimistic append — the standalone/mock backend has no realtime echo.
     const row =
       (inserted as ChatMessage | null) ?? {
-        id: `local-${Date.now()}`,
+        id: `local-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
         channel_id: channel.id,
         user_id: userId,
         body,
@@ -572,6 +597,27 @@ function ChannelView({
     )
   }
 
+  /** After a user line posts, if it @tko'd a question, ask + post the reply. */
+  async function maybeAnswerTko(text: string): Promise<void> {
+    const question = extractTkoQuestion(text)
+    if (!question) return
+    try {
+      const res = await callFn<{ ok: boolean; answer?: string }>('ask', { question })
+      const answer = res?.ok ? (res.answer || '').trim() : ''
+      if (answer) await insertBody(encodeTkoBot(answer))
+    } catch {
+      /* ask failed — stay silent, never break the chat */
+    }
+  }
+
+  async function sendMessage(body: string): Promise<void> {
+    // Strip any leading control markers the user typed (anti-spoof), then post.
+    const clean = stripLeadingMarkers(body)
+    if (!clean.trim()) return
+    await insertBody(clean)
+    void maybeAnswerTko(clean)
+  }
+
   return (
     <>
       <div className="p-4 border-b border-dark-border flex items-center gap-2">
@@ -590,25 +636,41 @@ function ChannelView({
         {messages.length === 0 ? (
           <p className="text-gray-500 text-sm text-center py-8">Be the first to say something.</p>
         ) : (
-          messages.map((m) => (
-            <div key={m.id} className="flex gap-3">
-              <Avatar src={m.avatarUrl} name={m.username} seed={m.user_id} size={32} />
-              <div className="min-w-0">
-                <span className="text-accent text-sm font-medium inline-flex items-center gap-1.5">
-                  {m.user_id ? (
-                    <Link to={`/profile/${m.user_id}`} className="hover:underline">
-                      {m.username ?? 'someone'}
-                    </Link>
-                  ) : (
-                    <span className="text-gray-500">deleted</span>
-                  )}
-                  <TagBadge artifactText={m.equippedTagText} rarity={m.equippedTagRarity} />
-                </span>
-                <span className="text-gray-500 text-xs ml-2">{fmtTime(m.created_at)}</span>
-                <ChatMessageContent body={m.body} userId={userId} />
+          messages.map((m) => {
+            const botAnswer = parseTkoBot(m.body)
+            if (botAnswer) {
+              return (
+                <div key={m.id} className="flex gap-3">
+                  <span className="mt-0.5 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-accent text-dark text-[10px] font-black">
+                    TKO
+                  </span>
+                  <div className="min-w-0 rounded-lg border border-accent/40 bg-accent/5 px-3 py-2">
+                    <span className="text-accent text-sm font-semibold">TKO</span>
+                    <p className="mt-0.5 break-words text-gray-100">{botAnswer}</p>
+                  </div>
+                </div>
+              )
+            }
+            return (
+              <div key={m.id} className="flex gap-3">
+                <Avatar src={m.avatarUrl} name={m.username} seed={m.user_id} size={32} />
+                <div className="min-w-0">
+                  <span className="text-accent text-sm font-medium inline-flex items-center gap-1.5">
+                    {m.user_id ? (
+                      <Link to={`/profile/${m.user_id}`} className="hover:underline">
+                        {m.username ?? 'someone'}
+                      </Link>
+                    ) : (
+                      <span className="text-gray-500">deleted</span>
+                    )}
+                    <TagBadge artifactText={m.equippedTagText} rarity={m.equippedTagRarity} />
+                  </span>
+                  <span className="text-gray-500 text-xs ml-2">{fmtTime(m.created_at)}</span>
+                  <ChatMessageContent body={m.body} userId={userId} />
+                </div>
               </div>
-            </div>
-          ))
+            )
+          })
         )}
       </div>
 

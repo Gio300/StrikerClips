@@ -102,6 +102,8 @@ export interface LiveStream {
   youtube_url: string
   title: string | null
   is_live: boolean
+  tournament_id?: string | null
+  show_bracket?: boolean | null
   created_at: string
 }
 
@@ -420,6 +422,8 @@ export interface TournamentBattle {
   /** Bracket round (1 = first round). Optional — the board derives it when
    *  absent, so pre-migration rows still render. See src/lib/tkoKing.ts. */
   round?: number | null
+  /** Stable zero-based position inside the round. */
+  bracket_slot?: number | null
   created_at: string
 }
 
@@ -776,6 +780,17 @@ type PendingUploadsRow = Cols<PendingUpload>
 type StreamMessagesRow = Cols<StreamMessage>
 type CreatorStripeAccountsRow = Cols<CreatorStripeAccount>
 type DonationsRow = Cols<Donation>
+
+// Creator/streamer dashboard goals (public-read; written via /api/fn/goal-*).
+type CreatorGoalsRow = {
+  id: string
+  user_id: string
+  kind: string
+  label: string
+  target: number
+  active: boolean
+  created_at: string | null
+}
 
 // Rows without a domain interface — columns from db/schema.sql / call sites.
 type UsersRow = {
@@ -1300,6 +1315,7 @@ export type Database = {
       tournament_messages: DbTable<TournamentMessagesRow>
       creator_stripe_accounts: DbTable<CreatorStripeAccountsRow>
       donations: DbTable<DonationsRow>
+      creator_goals: DbTable<CreatorGoalsRow>
     }
     // NB: these MUST use the `{ [_ in never]: never }` empty-shape, not
     // `Record<string, never>`. PostgREST's `.select('*')` type-transform flags a

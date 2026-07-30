@@ -3,8 +3,11 @@ import { Link, useParams, useSearchParams } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
 import { ShareButton } from '@/components/ShareButton'
 import { OracleVote } from '@/components/OracleVote'
+import { OracleBet } from '@/components/OracleBet'
 import { AdSlot } from '@/components/AdSlot'
 import { LiveControlLayout } from '@/components/LiveControlLayout'
+import { TournamentBracket } from '@/components/TournamentBracket'
+import type { LayoutPreset } from '@/components/LiveControlLayout'
 
 /**
  * LiveWatch — a single stream, playing inline, on its own shareable page.
@@ -16,7 +19,58 @@ import { LiveControlLayout } from '@/components/LiveControlLayout'
  *
  * The share link points at the TKO page so anyone can watch on the site.
  */
-type StreamRow = { id: string; youtube_url: string; title: string | null; user_id?: string }
+type StreamRow = {
+  id: string
+  youtube_url: string
+  title: string | null
+  user_id?: string
+  tournament_id?: string | null
+  show_bracket?: boolean | null
+  /** Stored placement preset from the go-live setup (feature: layout presets). */
+  layout?: LayoutPreset | null
+}
+
+/**
+ * CollapsibleOracle — keeps the Oracle call ALWAYS mounted on a live stream, but
+ * lets the viewer tuck it away with a small slide tab. The open/closed choice is
+ * remembered per stream for the session (sessionStorage), so it stays how they
+ * left it as they move around, then resets on a fresh visit.
+ */
+function CollapsibleOracle({ streamId, children }: { streamId: string; children: React.ReactNode }) {
+  const key = `tko_oracle_open:${streamId}`
+  const [open, setOpen] = useState<boolean>(() => {
+    try { return sessionStorage.getItem(key) !== '0' } catch { return true }
+  })
+  function toggle() {
+    setOpen((o) => {
+      const next = !o
+      try { sessionStorage.setItem(key, next ? '1' : '0') } catch { /* best-effort */ }
+      return next
+    })
+  }
+  return (
+    <div className="rounded-xl border border-purple-500/30 bg-purple-500/5 overflow-hidden">
+      <button
+        type="button"
+        onClick={toggle}
+        aria-expanded={open}
+        className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs font-bold uppercase tracking-wider text-purple-200 hover:bg-purple-500/10"
+      >
+        <svg viewBox="0 0 24 24" className={`h-4 w-4 transition-transform ${open ? '' : '-rotate-90'}`} fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
+          <path d="m6 9 6 6 6-6" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+        Oracle
+        <span className="ml-auto text-[10px] font-medium text-purple-300/70">{open ? 'Tap to hide' : 'Tap to call it'}</span>
+      </button>
+      <div
+        className="transition-all duration-300 ease-in-out"
+        style={{ maxHeight: open ? '520px' : '0px', opacity: open ? 1 : 0 }}
+      >
+        <div className="p-2">{children}</div>
+      </div>
+    </div>
+  )
+}
 
 export function LiveWatch() {
   const { id } = useParams()
@@ -95,18 +149,38 @@ export function LiveWatch() {
         title={stream.title}
         hostId={stream.user_id}
         enableChat={stream.id !== 'direct'}
+        layout={stream.layout ?? 'auto'}
         headerRight={
           <ShareButton url={shareUrl} title={stream.title ?? 'Live on TKO'} text="Watch this live on TKO" />
         }
+        underStage={
+          // Oracle call — a 30s LIVE prediction, mounted directly under the
+          // gameplay stage (not the page bottom). Only on a real live stream
+          // (never a direct/pre-recorded URL); the viewer can slide it closed.
+          stream.id !== 'direct' ? (
+            <div className="space-y-2">
+              {stream.show_bracket && stream.tournament_id && (
+                <details className="overflow-hidden rounded-md border border-accent/30 bg-accent/5" open>
+                  <summary className="cursor-pointer px-3 py-2 text-xs font-bold uppercase tracking-wider text-accent">
+                    Live tournament bracket
+                  </summary>
+                  <div className="border-t border-accent/20 p-3">
+                    <TournamentBracket tournamentId={stream.tournament_id} compact />
+                  </div>
+                </details>
+              )}
+              <CollapsibleOracle streamId={stream.id}>
+              <div className="space-y-2">
+                <OracleVote matchRef={`live:${stream.id}`} title="Call this match" />
+                {/* Oracle BET slip — self-hides unless the stream is genuinely
+                    LIVE and hosted by a host-tier user (server-verified). */}
+                <OracleBet streamId={stream.id} matchRef={`live:${stream.id}`} title="Bet this match" />
+              </div>
+              </CollapsibleOracle>
+            </div>
+          ) : null
+        }
       />
-
-      {/* Oracle call — a 30s live prediction on this stream. matchRef is derived
-          from the stream id (or the carried video url in direct mode). */}
-      {stream.id !== 'direct' && (
-        <div className="mt-4">
-          <OracleVote matchRef={`live:${stream.id}`} title="Call this match" />
-        </div>
-      )}
 
       {/* Ad below the stream — free viewers only (AdSlot self-hides for paid). */}
       <div className="mt-4">

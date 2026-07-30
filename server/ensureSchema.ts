@@ -85,6 +85,30 @@ create index if not exists idx_render_jobs_status on public.render_jobs(status, 
 
 alter table public.profiles add column if not exists auto_merge_opt_out boolean not null default false;
 
+-- APPROVED-GAME GATE: the game a live stream is playing. The public "who's live"
+-- read only features streams whose game is on the server's APPROVED_GAMES
+-- allowlist. Defaults to the one supported title so existing rows stay featured.
+alter table public.live_streams add column if not exists game text default 'Shinobi Striker';
+
+-- Go Live setup config (grouped dropdowns in the client). Additive + idempotent,
+-- safe defaults. price_cents is STORED only — no payment is collected here (Phase 2).
+alter table public.live_streams add column if not exists chat_enabled boolean not null default true;
+alter table public.live_streams add column if not exists is_paid boolean not null default false;
+alter table public.live_streams add column if not exists price_cents integer;
+alter table public.live_streams add column if not exists tournament_id uuid;
+alter table public.live_streams add column if not exists host_share text not null default 'both';
+alter table public.live_streams add column if not exists background_url text;
+alter table public.live_streams add column if not exists team_a text;
+alter table public.live_streams add column if not exists team_b text;
+alter table public.live_streams add column if not exists layout text not null default 'auto';
+alter table public.live_streams add column if not exists show_bracket boolean not null default false;
+
+alter table public.tournament_battles add column if not exists round integer;
+alter table public.tournament_battles add column if not exists bracket_slot integer;
+create unique index if not exists uq_tournament_battle_bracket_slot
+  on public.tournament_battles(tournament_id, round, bracket_slot)
+  where round is not null and bracket_slot is not null;
+
 create table if not exists public.match_versions (
   id               uuid primary key default uuid_generate_v4(),
   match_key        text not null,

@@ -86,12 +86,12 @@ export function Sidebar() {
 
       <nav className="flex-1 overflow-y-auto px-2 py-3">
         <NavLink
-          to="/highlight/create"
+          to="/create"
           className="mb-4 flex min-h-10 items-center justify-center gap-2 rounded-lg bg-kunai px-3 text-sm font-semibold text-white transition-colors hover:bg-kunai-dark md:justify-start"
-          title="Create reel"
+          title="Create"
         >
           <Plus size={19} />
-          <span className="hidden md:block">Create reel</span>
+          <span className="hidden md:block">Create</span>
         </NavLink>
 
         <NavGroup label="Play" items={PLAY_NAV} />

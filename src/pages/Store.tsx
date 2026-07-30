@@ -16,7 +16,7 @@ import {
 } from 'lucide-react'
 import { useAuth } from '@/hooks/useAuth'
 import { useWallet } from '@/hooks/useWallet'
-import { DAILY_BONUS_SWEEPS } from '@/lib/sweepstakes'
+import { DAILY_ORACLE_TICKETS } from '@/lib/sweepstakes'
 import { CollapsibleSection } from '@/components/CollapsibleSection'
 import { TOKEN_PACKS, type TokenPack } from '@/lib/tokenPacks'
 import {
@@ -154,8 +154,8 @@ export function Store() {
       const granted = await claimDaily()
       setCanClaim(false)
       showFlash(granted
-        ? `Claimed ${DAILY_BONUS_SWEEPS} free Give Points`
-        : "Today's free Give Points have already been claimed. Come back tomorrow.")
+        ? `Claimed ${DAILY_ORACLE_TICKETS} free Oracle tickets`
+        : "Today's free Oracle tickets have already been claimed. Come back tomorrow.")
     } finally {
       setClaiming(false)
     }
@@ -282,10 +282,10 @@ export function Store() {
       <div className="mb-6 rounded-lg border border-leaf/40 bg-leaf/5 p-5 flex flex-wrap items-center gap-4">
         <Gift size={24} className="shrink-0 text-leaf" />
         <div className="min-w-0">
-          <h2 className="font-semibold text-leaf">Claim daily Give Points</h2>
+          <h2 className="font-semibold text-leaf">Claim daily Oracle tickets</h2>
           <p className="text-sm text-gray-400 mt-0.5">
-            Get {DAILY_BONUS_SWEEPS} free points every day. Give them to clans, tournaments, and creators
-            to build your supporter prestige.
+            Get {DAILY_ORACLE_TICKETS} free Oracle tickets every day. Bet them on live host-tier matches —
+            they’re Oracle-use only and never cost a cent.
           </p>
         </div>
         <button
@@ -299,7 +299,7 @@ export function Store() {
         >
           {claiming
             ? 'Claiming…'
-            : canClaim ? `Claim ${DAILY_BONUS_SWEEPS} points` : 'Claimed today'}
+            : canClaim ? `Claim ${DAILY_ORACLE_TICKETS} tickets` : 'Claimed today'}
         </button>
       </div>
 

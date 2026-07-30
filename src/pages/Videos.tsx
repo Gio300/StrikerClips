@@ -1,14 +1,14 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { recentProducedVideos, type ProducedVideo } from '@/lib/producedVideos'
-import { ProducedVideoCard, ProducedVideoPlayers } from '@/components/ProducedVideoCard'
-import { LiveSessionsStrip } from '@/components/LiveSessionsStrip'
+import { ReelScrollFeed } from '@/components/ReelScrollFeed'
 
 /**
- * Recent videos — the feed of recently produced multi-angle match videos,
- * newest first. Each card carries a thumbnail, title, the players/angles in it,
- * a timestamp and a link to the YouTube video. The "Who's live" strip sits on
- * top so the live surface and the produced-video feed live in one place.
+ * Watch — a full-screen, TikTok-style VERTICAL scroll of produced match reels.
+ * Flick up/down to move between reels; the in-view one autoplays with the
+ * floating action rail (like/comment/share) on top. Replaces the old card grid
+ * so the Watch surface feels like the app you scroll, not a list you browse.
+ * "Make a clip" floats top-right; the app's bottom nav stays for navigation.
  */
 export function Videos() {
   const [videos, setVideos] = useState<ProducedVideo[]>([])
@@ -17,56 +17,31 @@ export function Videos() {
   useEffect(() => {
     let alive = true
     recentProducedVideos(48)
-      .then((v) => {
-        if (alive) setVideos(v)
-      })
+      .then((v) => alive && setVideos(v))
       .catch(() => {})
-      .finally(() => {
-        if (alive) setLoading(false)
-      })
+      .finally(() => alive && setLoading(false))
     return () => {
       alive = false
     }
   }, [])
 
-  return (
-    <div className="p-4 sm:p-6 lg:p-8 max-w-6xl mx-auto">
-      <div className="flex items-center justify-between mb-6 gap-3 flex-wrap">
-        <div>
-          <h1 className="text-2xl font-bold">Recent videos</h1>
-          <p className="text-sm text-gray-500 mt-1">
-            Freshly produced multi-angle match videos — every angle combined into one. Newest first.
-          </p>
-        </div>
-        <Link
-          to="/highlight/create"
-          className="px-4 py-2 rounded-lg bg-accent text-dark font-semibold hover:shadow-glow"
-        >
-          + Make a clip
-        </Link>
+  if (loading) {
+    return (
+      <div className="h-[100dvh] flex items-center justify-center bg-black text-accent animate-pulse">
+        Loading reels…
       </div>
+    )
+  }
 
-      <LiveSessionsStrip />
-
-      {loading ? (
-        <div className="py-16 text-center text-accent animate-pulse">Loading videos…</div>
-      ) : videos.length === 0 ? (
-        <div className="py-16 text-center text-gray-400">
-          <p>No produced videos yet.</p>
-          <p className="text-sm mt-1">
-            When several angles of one match are combined and posted, they show up here.
-          </p>
-        </div>
-      ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
-          {videos.map((v) => (
-            <div key={v.youtubeId}>
-              <ProducedVideoCard video={v} variant="grid" />
-              <ProducedVideoPlayers video={v} />
-            </div>
-          ))}
-        </div>
-      )}
+  return (
+    <div className="relative bg-black">
+      <ReelScrollFeed videos={videos} />
+      <Link
+        to="/highlight/create"
+        className="fixed top-3 right-3 z-[60] px-4 py-2 rounded-full bg-accent text-dark font-semibold text-sm shadow-glow"
+      >
+        + Clip
+      </Link>
     </div>
   )
 }

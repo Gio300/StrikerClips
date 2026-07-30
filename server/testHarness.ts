@@ -8,6 +8,7 @@
 import { newDb, DataType } from 'pg-mem'
 import { randomUUID } from 'node:crypto'
 import { createApp } from './app'
+import { PHYSICAL_MERCH_DDL } from './physicalMerchSchema'
 
 // Build the in-memory database and return a live pg Pool bound to it. Exposed
 // so the full-stack E2E server (server/e2eServer.ts) can serve the real built
@@ -145,6 +146,11 @@ export function makeDb() {
       id uuid primary key default gen_random_uuid(), tournament_id uuid not null, user_id uuid not null,
       created_at timestamptz default now()
     );
+    create table tournament_entrants (
+      id uuid primary key default gen_random_uuid(), tournament_id uuid not null, user_id uuid not null,
+      team_name text, team_server_id uuid, status text not null default 'pending',
+      agreed_to_rules_at timestamptz, invited_by uuid, created_at timestamptz default now()
+    );
     create table tournament_registrations (
       id uuid primary key default gen_random_uuid(), tournament_id uuid not null, user_id uuid not null,
       streamed boolean not null default false, no_mod_ack boolean not null default false,
@@ -153,9 +159,11 @@ export function makeDb() {
     create table tournament_battles (
       id uuid primary key default gen_random_uuid(), tournament_id uuid not null,
       player_a uuid not null, player_b uuid, scheduled_at timestamptz,
-      status text not null default 'scheduled', winner uuid, round integer,
+      status text not null default 'scheduled', winner uuid, round integer, bracket_slot integer,
       created_at timestamptz default now()
     );
+    create unique index uq_tournament_battle_bracket_slot
+      on tournament_battles(tournament_id, round, bracket_slot);
     create table battle_meetups (
       id uuid primary key default gen_random_uuid(), battle_id uuid not null, user_id uuid not null,
       in_game_name text, platform text, lobby text, notes text, created_at timestamptz default now()
@@ -185,6 +193,11 @@ export function makeDb() {
       recipe_code text, forge_tier text, power_payload jsonb not null default '[]',
       power_score integer not null default 0, slot_cost integer not null default 0,
       official_override boolean not null default false, clan_id uuid,
+      -- Provenance of the artifact. Only 'forge' (paid-to-create) and 'purchase'
+      -- are BETTABLE in the Oracle economy; 'free'/'seed'/'reward'/'prize' are
+      -- earned/granted items and are NEVER stakeable (Oracle Rule 3). Defaults to
+      -- 'forge' so existing forged (Legend monthly) artifacts stay bettable.
+      origin text not null default 'forge',
       used_at timestamptz, created_at timestamptz default now()
     );
     create table territories (
@@ -263,6 +276,10 @@ export function makeDb() {
     create table wallets (
       user_id uuid primary key, tokens integer not null default 0, sweeps integer not null default 0,
       paid_sweeps_cents integer not null default 0,
+      -- ORACLE-USE-ONLY tickets. The repurposed daily free grant credits these
+      -- (default 3/day). They are BETTABLE in the Oracle economy but contribute
+      -- $0 to any streamer payout — they are NEVER part of the money ($) flow.
+      oracle_tickets integer not null default 0,
       daily_sweeps_claimed_on date,
       updated_at timestamptz, created_at timestamptz default now()
     );
@@ -367,7 +384,32 @@ export function makeDb() {
     create table live_streams (
       id uuid primary key default gen_random_uuid(), user_id uuid not null,
       youtube_url text not null, title text, is_live boolean default true,
-      placement text not null default 'profile', created_at timestamptz default now()
+      placement text not null default 'profile',
+      game text default 'Shinobi Striker',
+      chat_enabled boolean not null default true,
+      is_paid boolean not null default false,
+      price_cents integer,
+      tournament_id uuid,
+      show_bracket boolean not null default false,
+      host_share text not null default 'both',
+      background_url text,
+      team_a text,
+      team_b text,
+      layout text not null default 'auto',
+      updated_at timestamptz default now(), created_at timestamptz default now()
+    );
+    create table live_stream_angles (
+      id uuid primary key default gen_random_uuid(),
+      live_stream_id uuid not null, user_id uuid,
+      label text, youtube_url text, created_at timestamptz default now()
+    );
+    create table live_stream_invites (
+      id uuid primary key default gen_random_uuid(),
+      live_stream_id uuid not null,
+      inviter_id uuid not null, invitee_id uuid not null,
+      role text, status text not null default 'pending',
+      created_at timestamptz default now(),
+      unique (live_stream_id, invitee_id)
     );
     create table stream_messages (
       id uuid primary key default gen_random_uuid(),
@@ -500,8 +542,56 @@ export function makeDb() {
       status text not null default 'active', payout integer not null default 0,
       created_at timestamptz not null default now(), unique (pool_id, user_id)
     );
+    create table creator_goals (
+      id uuid primary key default gen_random_uuid(),
+      user_id uuid not null, kind text not null default 'custom',
+      label text not null default '', target integer not null default 0,
+      active boolean not null default true, created_at timestamptz default now()
+    );
+    -- ---- ORACLE BETTING ECONOMY (live-only, host-tier-only, money-safe) ----
+    -- A bet stakes ONE of: oracle tickets (stake_cents=0, no $), PAID sweeps
+    -- (stake_cents = the real-cent value, the ONLY thing that drives the streamer
+    -- share), or a FORGED/PURCHASED artifact (stake_cents=0). One bet per game.
+    create table oracle_bets (
+      id uuid primary key default gen_random_uuid(),
+      match_ref text not null, stream_id uuid,
+      user_id uuid not null, choice text not null,
+      stake_kind text not null,            -- 'ticket' | 'sweeps' | 'artifact'
+      stake_amount integer not null default 0,
+      stake_cents integer not null default 0,
+      artifact_id uuid,
+      status text not null default 'active',  -- active | won | lost | refunded
+      payout integer not null default 0,
+      payout_cents integer not null default 0,
+      created_at timestamptz not null default now(),
+      unique (match_ref, user_id)
+    );
+    -- Per-stream minimum bet the streamer/organizer sets in their control room.
+    create table oracle_stream_config (
+      stream_id uuid primary key,
+      min_bet integer not null default 1,
+      min_stake_kind text not null default 'ticket',
+      updated_at timestamptz default now()
+    );
+    -- Per-stream running tally that ENFORCES the profit cap: cumulative streamer
+    -- payout can never exceed 25% of the real sweeps-cents ever bet on the stream.
+    create table oracle_stream_tally (
+      stream_id uuid primary key,
+      sweeps_cents_in integer not null default 0,
+      streamer_cents_paid integer not null default 0,
+      updated_at timestamptz default now()
+    );
+    -- One settlement row per resolved match — the idempotent claim for resolve.
+    create table oracle_bet_settlements (
+      match_ref text primary key,
+      stream_id uuid, winning_choice text,
+      sweeps_cents_in integer not null default 0,
+      streamer_cents_paid integer not null default 0,
+      resolved_at timestamptz not null default now()
+    );
     insert into redeem_codes (code, tier, months, max_uses) values ('KILLCAM-TEST-CODE','pro',1,1);
   `)
+  db.public.none(PHYSICAL_MERCH_DDL)
   const pg = (db.adapters as any).createPg()
   return new pg.Pool()
 }

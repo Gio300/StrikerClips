@@ -10,6 +10,7 @@ import { PitMeetup } from '@/components/PitMeetup'
 import { KingLadderPanel } from '@/components/KingLadderPanel'
 import { isYouTubeLinked } from '@/lib/youtubeLink'
 import { notify } from '@/lib/notifications'
+import { IS_MOBILE_STORE_BUILD } from '@/lib/storeBuild'
 import { startTrialMeta, TRIAL_DAYS } from '@/lib/trial'
 import { ensureKing } from '@/lib/kingTournament'
 import {
@@ -625,7 +626,14 @@ function BattlesSection({
       }
       if (grant && !grant.alreadyOwned) {
         const copy = prizeNotification(grant.asset)
-        notify({ userId: winner, kind: 'generic', title: copy.title, body: copy.body, link: '/shop', relatedId: tournament.id })
+        notify({
+          userId: winner,
+          kind: 'generic',
+          title: copy.title,
+          body: copy.body,
+          link: IS_MOBILE_STORE_BUILD ? '/profile' : '/shop',
+          relatedId: tournament.id,
+        })
       }
     }
   }

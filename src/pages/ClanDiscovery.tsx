@@ -12,6 +12,7 @@ import {
   payClanFee,
 } from '@/lib/clans'
 import { clanLabel } from '@/lib/identity'
+import { IS_MOBILE_STORE_BUILD } from '@/lib/storeBuild'
 import type { Server } from '@/types/database'
 
 /**
@@ -81,6 +82,10 @@ export function ClanDiscovery() {
     if (myClanIds.has(clan.id)) return
     const memberCount = counts[clan.id] ?? 0
     const fee = clan.join_fee_tokens ?? 0
+    if (IS_MOBILE_STORE_BUILD && fee > 0) {
+      showFlash(clan.id, 'Paid clan joining is unavailable in this version.', false)
+      return
+    }
     const check = canJoin(
       { maxMembers: clan.max_members ?? undefined, isRecruiting: !!clan.is_recruiting, joinFeeTokens: fee },
       memberCount,
@@ -132,7 +137,20 @@ export function ClanDiscovery() {
     )
   }
 
-  const discoverable = clans.filter((c) => isDiscoverable({ maxMembers: c.max_members ?? undefined, isRecruiting: !!c.is_recruiting, joinFeeTokens: c.join_fee_tokens ?? 0 }, counts[c.id] ?? 0))
+  const discoverable = clans.filter((c) => {
+    const joinFeeTokens = c.join_fee_tokens ?? 0
+    return (
+      (!IS_MOBILE_STORE_BUILD || joinFeeTokens <= 0) &&
+      isDiscoverable(
+        {
+          maxMembers: c.max_members ?? undefined,
+          isRecruiting: !!c.is_recruiting,
+          joinFeeTokens,
+        },
+        counts[c.id] ?? 0,
+      )
+    )
+  })
 
   return (
     <div className="p-4 sm:p-6 lg:p-8 max-w-3xl mx-auto">
@@ -141,23 +159,29 @@ export function ClanDiscovery() {
           <h1 className="text-2xl font-bold">Find a clan</h1>
           <p className="text-sm text-gray-500 mt-1">Clans recruiting right now. Tap one to join.</p>
         </div>
-        <div className="flex items-center gap-3">
-          <div className="rounded-lg border border-dark-border bg-dark-card px-4 py-2 text-center">
-            <div className="text-lg font-bold text-accent">{tokens.toLocaleString()}</div>
-            <div className="text-[11px] uppercase tracking-wide text-gray-500">Your Tokens</div>
+        {!IS_MOBILE_STORE_BUILD && (
+          <div className="flex items-center gap-3">
+            <div className="rounded-lg border border-dark-border bg-dark-card px-4 py-2 text-center">
+              <div className="text-lg font-bold text-accent">{tokens.toLocaleString()}</div>
+              <div className="text-[11px] uppercase tracking-wide text-gray-500">Your Tokens</div>
+            </div>
+            <Link
+              to="/store"
+              className="px-3 py-2 rounded-lg border border-dark-border bg-dark-card text-sm text-accent hover:border-accent/50 transition-colors"
+            >
+              Get more
+            </Link>
           </div>
-          <Link
-            to="/store"
-            className="px-3 py-2 rounded-lg border border-dark-border bg-dark-card text-sm text-accent hover:border-accent/50 transition-colors"
-          >
-            Get more
-          </Link>
-        </div>
+        )}
       </div>
 
       {discoverable.length === 0 ? (
         <div className="text-center py-16 text-gray-400">
-          <p className="mb-4">No clans are recruiting right now.</p>
+          <p className="mb-4">
+            {IS_MOBILE_STORE_BUILD
+              ? 'No free clans are recruiting right now.'
+              : 'No clans are recruiting right now.'}
+          </p>
           <Link to="/boards/create" className="px-4 py-2 rounded-lg bg-accent text-dark font-semibold">
             Start your own clan
           </Link>
@@ -205,7 +229,7 @@ export function ClanDiscovery() {
                 {isFlash && (
                   <p className={`mt-1 px-1 text-xs ${flash!.ok ? 'text-leaf' : 'text-red-400'}`}>
                     {flash!.msg}
-                    {!flash!.ok && flash!.msg.includes('Tokens') && (
+                    {!IS_MOBILE_STORE_BUILD && !flash!.ok && flash!.msg.includes('Tokens') && (
                       <Link to="/store" className="ml-1 underline text-accent">
                         Buy Tokens
                       </Link>
@@ -218,10 +242,12 @@ export function ClanDiscovery() {
         </div>
       )}
 
-      <p className="mt-8 text-xs text-gray-500 text-center">
-        Join fees are paid in Tokens and split 80% to the clan treasury, 20% platform fee.
-        Tokens have no cash value.
-      </p>
+      {!IS_MOBILE_STORE_BUILD && (
+        <p className="mt-8 text-xs text-gray-500 text-center">
+          Join fees are paid in Tokens and split 80% to the clan treasury, 20% platform fee.
+          Tokens have no cash value.
+        </p>
+      )}
     </div>
   )
 }

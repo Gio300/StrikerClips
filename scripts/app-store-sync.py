@@ -22,7 +22,6 @@ ROOT = Path(__file__).resolve().parents[1]
 API_ROOT = "https://api.appstoreconnect.apple.com"
 APP_ID = "6795941498"
 VERSION_ID = "de84f629-17cf-4556-a3bc-bd884437cc20"
-BUILD_ID = "abe637a9-d159-43ce-80b7-38b594bcd47a"
 ISSUER_ID = "c9709465-2503-4b4d-9ec0-bbc5a7d75b23"
 KEY_ID = "BSQT6HB6B7"
 PRIVATE_KEY_PATH = Path(
@@ -41,6 +40,7 @@ Core features:
 • Join competitive ladders, tournaments, and clan activity
 • Follow rankings and submit match results
 • Make free, cosmetic-only predictions with no cash prizes or wagering
+• Design and order made-to-order physical shirts through Physical Forge
 • Control your profile, privacy, blocks, and account deletion from the app
 
 TKO.cam is a community platform for user-submitted gaming footage. Community content is subject to moderation, reporting, blocking, and the TKO.cam Terms of Service. TKO.cam is not affiliated with or endorsed by any game publisher."""
@@ -51,14 +51,16 @@ PROMOTIONAL_TEXT = (
 )
 
 WHATS_NEW = (
-    "Welcome to TKO.cam on mobile. Create multi-angle highlights, discover "
-    "competitive reels, follow ladders and rankings, join community activity, "
-    "and manage your profile from one app."
+    "Create multi-angle highlights, discover competitive reels, follow ladders "
+    "and rankings, and use the new Physical Forge to design made-to-order "
+    "merchandise without leaving TKO.cam."
 )
 
 REVIEW_NOTES = """TKO.cam is a user-generated competitive gaming highlights platform.
 
 The mobile store build does not sell digital tokens, subscriptions, tips, or digital marketplace items. Existing account entitlements remain usable after sign-in.
+
+Physical Forge checkout is limited to tangible, made-to-order merchandise such as shirts. Stripe processes payment for the physical order, which is sent to the fulfillment provider for manufacturing and shipment. A physical purchase grants no digital content, feature, token, or entitlement.
 
 Oracle predictions are free, cosmetic-only, and never award cash or cash-equivalent value. Wagering endpoints are retired and fail closed.
 
@@ -194,7 +196,7 @@ def sync_localizations(api: AppStoreConnect) -> str:
     return localization_id
 
 
-def sync_version_and_build(api: AppStoreConnect) -> None:
+def sync_version_and_build(api: AppStoreConnect, build_id: str) -> None:
     api.request(
         "PATCH",
         f"/v1/appStoreVersions/{VERSION_ID}",
@@ -206,7 +208,7 @@ def sync_version_and_build(api: AppStoreConnect) -> None:
     )
     build = api.request(
         "GET",
-        f"/v1/builds/{BUILD_ID}?fields[builds]=version,processingState,expired,usesNonExemptEncryption",
+        f"/v1/builds/{build_id}?fields[builds]=version,processingState,expired,usesNonExemptEncryption",
     )["data"]
     attrs = build["attributes"]
     if attrs.get("processingState") != "VALID" or attrs.get("expired"):
@@ -214,7 +216,7 @@ def sync_version_and_build(api: AppStoreConnect) -> None:
     api.request(
         "PATCH",
         f"/v1/appStoreVersions/{VERSION_ID}/relationships/build",
-        json={"data": {"type": "builds", "id": BUILD_ID}},
+        json={"data": {"type": "builds", "id": build_id}},
     )
 
 
@@ -411,11 +413,17 @@ def main() -> None:
     parser.add_argument(
         "--skip-screenshots", action="store_true", help="Only update metadata/build"
     )
+    parser.add_argument(
+        "--build-id",
+        default=os.getenv("TKO_APP_STORE_BUILD_ID"),
+        required=os.getenv("TKO_APP_STORE_BUILD_ID") is None,
+        help="Processed App Store Connect build resource ID (or set TKO_APP_STORE_BUILD_ID)",
+    )
     args = parser.parse_args()
 
     api = AppStoreConnect()
     localization_id = sync_localizations(api)
-    sync_version_and_build(api)
+    sync_version_and_build(api, args.build_id)
     if not args.skip_screenshots:
         sync_screenshots(api, localization_id)
     sync_review_details(api)

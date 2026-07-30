@@ -81,6 +81,43 @@ describe('artifact tags', () => {
     expect(prof.body.data.equipped_tag_id).toBe(tagId)
   })
 
+  it('a profiles select that EXPLICITLY lists the synthetic tag columns succeeds (Wall/feed crash)', async () => {
+    // The Wall + News Feed (and chat/rankings/DMs) request the equipped tag
+    // fields by name: .select('id, username, avatar_url, power_level,
+    // equipped_tag_text, equipped_tag_rarity'). Those are NOT real columns on
+    // profiles — they're re-added by the decoration. Before the fix the column
+    // list reached Postgres and the read crashed ("column ... does not exist").
+    const create = await fn(app, leader.token, 'artifact-tag-create', { clanId: serverId, tagText: 'Akatsuki', price: 0 })
+    const tagId = create.body.tag.id
+    await fn(app, member.token, 'artifact-tag-buy', { tagId }) // free buy grants + equips
+
+    const feedCols = 'id, username, avatar_url, power_level, equipped_tag_text, equipped_tag_rarity'
+
+    // Single row (a profile card): must succeed and carry the decorated tag.
+    const one = await db(app, null, {
+      table: 'profiles', action: 'select', single: true, columns: feedCols,
+      filters: [{ col: 'id', op: 'eq', val: member.id }],
+    })
+    expect(one.status).toBe(200)
+    expect(one.body.error).toBeNull()
+    expect(one.body.data.equipped_tag_text).toBe('Akatsuki')
+    expect(one.body.data.equipped_tag_rarity).toBe('common')
+
+    // Array (a feed of many profiles): must also succeed; the leader has no
+    // equipped tag, so the synthetic field is present and null (not a crash).
+    const many = await db(app, null, {
+      table: 'profiles', action: 'select', columns: feedCols,
+    })
+    expect(many.status).toBe(200)
+    expect(many.body.error).toBeNull()
+    const leaderRow = many.body.data.find((r: any) => r.id === leader.id)
+    expect(leaderRow).toBeTruthy()
+    expect(leaderRow).toHaveProperty('equipped_tag_text')
+    expect(leaderRow.equipped_tag_text).toBeNull()
+    const memberRow = many.body.data.find((r: any) => r.id === member.id)
+    expect(memberRow.equipped_tag_text).toBe('Akatsuki')
+  })
+
   it('a non-leader cannot create (and therefore cannot charge) a tag', async () => {
     const r = await fn(app, member.token, 'artifact-tag-create', { clanId: serverId, tagText: 'Sneaky', price: 999 })
     expect(r.status).toBe(403)

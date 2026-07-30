@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Heart,
   MessageCircle,
@@ -8,7 +8,10 @@ import {
 } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { Avatar } from '@/components/ui'
+import { ShareButton } from '@/components/ShareButton'
 import { TagBadge } from '@/components/TagBadge'
+import { ExternalVideoPreview } from '@/components/social/ExternalVideoPreview'
+import { searchPeople, type PersonHit } from '@/lib/liveAngles'
 import {
   MAX_COMMENT_LENGTH,
   MAX_POST_LENGTH,
@@ -36,6 +39,18 @@ function formatDate(value: string | null): string {
   })
 }
 
+// The @mention token being typed right before the caret, if any. Matches a
+// word of letters/digits/underscore that follows an "@" at a word boundary — the
+// same shape the rest of the app renders as a handle. Returns the search query
+// (without the "@") and the index of the "@" so we can splice the pick back in.
+function activeMentionAt(text: string, caret: number): { query: string; start: number } | null {
+  const before = text.slice(0, caret)
+  const match = before.match(/(?:^|\s)@([\w]{1,30})$/)
+  if (!match) return null
+  const query = match[1]
+  return { query, start: caret - query.length - 1 }
+}
+
 function PostComposer({
   userId,
   profile,
@@ -49,6 +64,68 @@ function PostComposer({
   const [posting, setPosting] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  // @mention autocomplete: reuses the same partial `ilike '%q%'` username search
+  // that powers Discover / the go-live people search (searchPeople). When the
+  // caret sits on an "@handle" token we show a small dropdown and insert
+  // `@username` on pick.
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null)
+  const [mention, setMention] = useState<{ query: string; start: number } | null>(null)
+  const [hits, setHits] = useState<PersonHit[]>([])
+  const [activeIdx, setActiveIdx] = useState(0)
+
+  // Debounced search whenever the active @token changes.
+  useEffect(() => {
+    const q = mention?.query ?? ''
+    if (!q) { setHits([]); return }
+    let cancelled = false
+    const t = window.setTimeout(async () => {
+      const people = await searchPeople(q, userId)
+      if (!cancelled) { setHits(people.slice(0, 6)); setActiveIdx(0) }
+    }, 150)
+    return () => { cancelled = true; window.clearTimeout(t) }
+  }, [mention?.query, userId])
+
+  const showMenu = Boolean(mention) && hits.length > 0
+
+  function syncMention(text: string, caret: number) {
+    setMention(activeMentionAt(text, caret))
+  }
+
+  function pick(person: PersonHit) {
+    const username = person.username
+    if (!username || !mention) return
+    const caret = textareaRef.current?.selectionStart ?? body.length
+    const next = `${body.slice(0, mention.start)}@${username} ${body.slice(caret)}`
+    setBody(next)
+    setMention(null)
+    setHits([])
+    // Restore focus and drop the caret right after the inserted handle.
+    const pos = mention.start + username.length + 2
+    window.requestAnimationFrame(() => {
+      const el = textareaRef.current
+      if (!el) return
+      el.focus()
+      el.setSelectionRange(pos, pos)
+    })
+  }
+
+  function onKeyDown(event: React.KeyboardEvent<HTMLTextAreaElement>) {
+    if (!showMenu) return
+    if (event.key === 'ArrowDown') {
+      event.preventDefault()
+      setActiveIdx((i) => (i + 1) % hits.length)
+    } else if (event.key === 'ArrowUp') {
+      event.preventDefault()
+      setActiveIdx((i) => (i - 1 + hits.length) % hits.length)
+    } else if (event.key === 'Enter' || event.key === 'Tab') {
+      event.preventDefault()
+      pick(hits[activeIdx])
+    } else if (event.key === 'Escape') {
+      event.preventDefault()
+      setMention(null)
+    }
+  }
+
   async function submit(event: React.FormEvent) {
     event.preventDefault()
     if (!body.trim() || posting) return
@@ -61,6 +138,8 @@ function PostComposer({
         author: post.author ?? profile,
       })
       setBody('')
+      setMention(null)
+      setHits([])
     } catch (postError) {
       setError(postError instanceof Error ? postError.message : 'Could not publish your post.')
     } finally {
@@ -77,14 +156,44 @@ function PostComposer({
           seed={profile?.id || userId}
           size={40}
         />
-        <textarea
-          value={body}
-          onChange={(event) => setBody(event.target.value)}
-          maxLength={MAX_POST_LENGTH}
-          rows={3}
-          placeholder="Share something with your wall"
-          className="min-w-0 flex-1 resize-none rounded-lg border border-dark-border bg-dark px-3 py-2 text-white placeholder-gray-500 focus:border-accent focus:outline-none"
-        />
+        <div className="relative min-w-0 flex-1">
+          <textarea
+            ref={textareaRef}
+            value={body}
+            onChange={(event) => {
+              setBody(event.target.value)
+              syncMention(event.target.value, event.target.selectionStart ?? event.target.value.length)
+            }}
+            onKeyDown={onKeyDown}
+            onClick={(event) => syncMention(body, event.currentTarget.selectionStart ?? body.length)}
+            onBlur={() => window.setTimeout(() => setMention(null), 120)}
+            maxLength={MAX_POST_LENGTH}
+            rows={3}
+            placeholder="Share something with your wall — @mention a player"
+            className="min-w-0 w-full resize-none rounded-lg border border-dark-border bg-dark px-3 py-2 text-white placeholder-gray-500 focus:border-accent focus:outline-none"
+          />
+          {showMenu && (
+            <ul className="absolute z-20 mt-1 max-h-60 w-full overflow-y-auto rounded-lg border border-dark-border bg-dark-card py-1 shadow-2xl">
+              {hits.map((person, index) => (
+                <li key={person.id}>
+                  <button
+                    type="button"
+                    // onMouseDown (not onClick) so the pick fires before the
+                    // textarea's onBlur closes the menu.
+                    onMouseDown={(event) => { event.preventDefault(); pick(person) }}
+                    onMouseEnter={() => setActiveIdx(index)}
+                    className={`flex w-full items-center gap-2 px-3 py-2 text-left text-sm ${
+                      index === activeIdx ? 'bg-dark-elevated text-white' : 'text-gray-300 hover:bg-dark-elevated'
+                    }`}
+                  >
+                    <Avatar src={person.avatar_url} name={person.username} seed={person.id} size={24} />
+                    <span className="truncate">@{person.username || 'player'}</span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
       </div>
       <div className="mt-3 flex items-center justify-end gap-3">
         {error && <p role="alert" className="mr-auto text-xs text-kunai">{error}</p>}
@@ -206,6 +315,7 @@ function PostCard({
       </header>
 
       <p className="whitespace-pre-wrap break-words px-4 py-4 text-gray-200">{post.body}</p>
+      <ExternalVideoPreview text={post.body} />
 
       <div className="flex items-center gap-1 border-t border-dark-border px-3 py-2">
         <button
@@ -224,6 +334,15 @@ function PostCard({
           <MessageCircle className="h-4 w-4" aria-hidden />
           {post.comments.length}
         </span>
+        {/* Share: native sheet when available, else copies the link. Posts have no
+            dedicated route yet, so we deep-link to the author's wall with a
+            ?post=<id> param. TODO: a real /post/:id page once posts are routable. */}
+        <ShareButton
+          url={`https://tko.cam/profile/${post.user_id}?tab=wall&post=${post.id}`}
+          title={`${post.author?.username || 'A player'} on TKO`}
+          text={post.body?.slice(0, 140)}
+          className="ml-auto inline-flex h-9 items-center gap-1.5 rounded-lg px-3 text-sm text-gray-400 hover:text-white"
+        />
       </div>
 
       {(visibleComments.length > 0 || viewerId) && (

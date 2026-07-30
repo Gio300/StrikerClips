@@ -35,6 +35,7 @@ Core features:
 - Join competitive ladders, tournaments, and clan activity
 - Follow rankings and submit match results
 - Make free, cosmetic-only predictions with no cash prizes or wagering
+- Design and order made-to-order physical shirts through Physical Forge
 - Control your profile, privacy, blocks, and account deletion from the app
 
 TKO.cam is a community platform for user-submitted gaming footage. Community content is subject to moderation, reporting, blocking, and the TKO.cam Terms of Service. TKO.cam is not affiliated with or endorsed by any game publisher.
@@ -45,7 +46,7 @@ gaming,highlights,esports,tournaments,clips,streaming,clans,rankings,reels,creat
 
 ## Version 1.0 Release Notes
 
-Welcome to TKO.cam on mobile. Create multi-angle highlights, discover competitive reels, follow ladders and rankings, join community activity, and manage your profile from one app.
+Create multi-angle highlights, discover competitive reels, follow ladders and rankings, and use the new Physical Forge to design made-to-order merchandise without leaving TKO.cam.
 
 ## Review Notes
 
@@ -54,6 +55,8 @@ TKO.cam is a user-generated competitive gaming highlights platform.
 - A dedicated demo account is provided in App Review Information.
 - The mobile store build does not sell digital tokens, subscriptions, tips, or digital marketplace items.
 - Existing account entitlements remain usable after sign-in.
+- Physical Forge checkout is limited to tangible, made-to-order merchandise such as shirts. Stripe processes payment for the physical order, which is sent to the fulfillment provider for manufacturing and shipment.
+- A physical purchase grants no digital content, feature, token, or entitlement.
 - Oracle predictions are free, cosmetic-only, and never award cash or cash-equivalent value.
 - Wagering endpoints are retired and fail closed.
 - Users can report or block community content and delete their account in the app.

@@ -1,6 +1,17 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { App as CapacitorApp } from '@capacitor/app'
+import { Browser as CapacitorBrowser } from '@capacitor/browser'
+import { Capacitor } from '@capacitor/core'
 import { parseVersionPayload, shouldPromptUpdate, versionUrl } from '@/lib/appVersion'
 import { APP_BASE, RUNNING_VERSION } from '@/lib/buildInfo'
+import {
+  parseNativeBuild,
+  parseNativeVersionManifest,
+  resolveMobileVersionUrl,
+  shouldPromptNativeUpdate,
+  shouldUseAndroidSideloadUpdates,
+  type NativeVersionManifest,
+} from '@/lib/nativeUpdate'
 import { activateUpdateAndReload, canUseServiceWorker, hardResetAndReload, registerServiceWorker } from '@/lib/swClient'
 
 /**
@@ -34,9 +45,11 @@ import { activateUpdateAndReload, canUseServiceWorker, hardResetAndReload, regis
  *   build equals the served one, so nothing is flagged as new in the first place.
  */
 
-const POLL_INTERVAL_MS = 60 * 1000
-/** Don't hammer the origin when a user flicks between tabs. */
-const MIN_POLL_GAP_MS = 15 * 1000
+/** Poll for a new build at most every few minutes — enough to pick up a deploy
+ *  without the page feeling like it is "constantly updating". */
+const POLL_INTERVAL_MS = 5 * 60 * 1000
+/** Don't hammer the origin when a user flicks between tabs / regains focus. */
+const MIN_POLL_GAP_MS = 60 * 1000
 const DISMISS_KEY = 'tko_update_dismissed_build'
 /** Build ids we have already auto-reloaded onto this session — the loop guard. */
 const RELOADED_KEY = 'tko_update_reloaded_builds'
@@ -44,28 +57,41 @@ const RELOADED_KEY = 'tko_update_reloaded_builds'
  *  once per stale build and can never loop. Persisted across reloads. */
 const HARDRESET_KEY = 'tko_update_hardreset_builds'
 
+/**
+ * IN-MEMORY loop guard. Every build id this tab has already auto-reloaded onto,
+ * kept in module memory so it works even when sessionStorage is unavailable
+ * (private mode). Combined with the sessionStorage record below, this guarantees
+ * the SAME build is never auto-reloaded twice — so a stale edge that keeps
+ * serving an id we already jumped to can never turn into a reload loop.
+ */
+const reloadedInMemory = new Set<string>()
+
 function reloadedBuilds(): Set<string> {
+  const seen = new Set(reloadedInMemory)
   try {
     const raw = sessionStorage.getItem(RELOADED_KEY)
-    return new Set(raw ? raw.split(',').filter(Boolean) : [])
+    for (const id of raw ? raw.split(',').filter(Boolean) : []) seen.add(id)
   } catch {
-    return new Set()
+    /* private mode — fall back to the in-memory set alone. */
   }
+  return seen
 }
 
 function rememberReloaded(id: string): void {
+  reloadedInMemory.add(id)
   try {
     const seen = reloadedBuilds()
-    seen.add(id)
     sessionStorage.setItem(RELOADED_KEY, Array.from(seen).join(','))
   } catch {
-    /* private mode — the in-memory ref still prevents a double reload this life. */
+    /* private mode — the in-memory set still prevents a double reload this life. */
   }
 }
 
 export interface AppUpdateState {
   /** A different build is being served — show the banner. */
   updateReady: boolean
+  /** Native APKs download an installer; PWAs activate a service worker. */
+  nativeUpdate: boolean
   /** Activate the waiting worker (if any) and reload onto the new build. */
   applyUpdate: () => void
   /** Hide the banner for this build only; a later build shows it again. */
@@ -81,8 +107,15 @@ function readDismissed(): string | null {
 }
 
 export function useAppUpdate(): AppUpdateState {
+  const platform = Capacitor.getPlatform()
+  const nativeUpdate = shouldUseAndroidSideloadUpdates(
+    platform,
+    import.meta.env.VITE_ANDROID_SIDELOAD_UPDATES,
+  )
+  const webUpdate = platform === 'web'
   const [available, setAvailable] = useState(false)
   const [servedBuildId, setServedBuildId] = useState<string | null>(null)
+  const [nativeManifest, setNativeManifest] = useState<NativeVersionManifest | null>(null)
   const [dismissedBuildId, setDismissedBuildId] = useState<string | null>(() => readDismissed())
   const lastPollRef = useRef(0)
   /** True once we have kicked off a reload this page life — never do it twice. */
@@ -118,8 +151,27 @@ export function useAppUpdate(): AppUpdateState {
       if (!force && now - lastPollRef.current < MIN_POLL_GAP_MS) return
       lastPollRef.current = now
       try {
-        const res = await fetch(versionUrl(APP_BASE), { cache: 'no-store', credentials: 'omit' })
+        const targetUrl = nativeUpdate
+          ? import.meta.env.VITE_MOBILE_VERSION_URL ||
+            resolveMobileVersionUrl(import.meta.env.VITE_API_BASE)
+          : versionUrl(APP_BASE)
+        const res = await fetch(targetUrl, { cache: 'no-store', credentials: 'omit' })
         if (!res.ok) return
+        if (nativeUpdate) {
+          const release = parseNativeVersionManifest(await res.json())
+          if (!release) return
+          const appInfo = await CapacitorApp.getInfo()
+          const runningVersionCode = parseNativeBuild(appInfo.build)
+          if (shouldPromptNativeUpdate(runningVersionCode, release)) {
+            setNativeManifest(release)
+            setServedBuildId(release.buildId)
+            setAvailable(true)
+          } else {
+            setNativeManifest(null)
+            setAvailable(false)
+          }
+          return
+        }
         const served = parseVersionPayload(await res.json())
         if (!served) return
         if (shouldPromptUpdate(RUNNING_VERSION, served)) {
@@ -132,11 +184,12 @@ export function useAppUpdate(): AppUpdateState {
         /* offline / SPA fallback returned HTML — nothing to do. */
       }
     },
-    [maybeAutoReload],
+    [maybeAutoReload, nativeUpdate],
   )
 
   // --- source 1: the service worker -------------------------------------
   useEffect(() => {
+    if (!webUpdate) return
     if (!canUseServiceWorker()) return
     let cancelled = false
     let interval: number | undefined
@@ -172,11 +225,12 @@ export function useAppUpdate(): AppUpdateState {
       cancelled = true
       if (interval) window.clearInterval(interval)
     }
-  }, [])
+  }, [webUpdate])
 
   // --- source 2: the /version.json poll ---------------------------------
   useEffect(() => {
     if (!import.meta.env.PROD) return
+    if (!webUpdate && !nativeUpdate) return
     void poll(true)
     const interval = window.setInterval(() => void poll(), POLL_INTERVAL_MS)
     const onFocus = () => void poll()
@@ -190,7 +244,7 @@ export function useAppUpdate(): AppUpdateState {
       window.removeEventListener('focus', onFocus)
       document.removeEventListener('visibilitychange', onVisible)
     }
-  }, [poll])
+  }, [nativeUpdate, poll, webUpdate])
 
   // What the banner is currently offering. Starts as the opaque 'sw' marker
   // when the service worker spotted it first, and sharpens to the real build id
@@ -208,8 +262,19 @@ export function useAppUpdate(): AppUpdateState {
   }, [targetId])
 
   const applyUpdate = useCallback(() => {
+    if (nativeUpdate && nativeManifest) {
+      void CapacitorBrowser.open({ url: nativeManifest.apkUrl }).catch(() => {
+        window.location.assign(nativeManifest.apkUrl)
+      })
+      return
+    }
     void activateUpdateAndReload()
-  }, [])
+  }, [nativeManifest, nativeUpdate])
 
-  return { updateReady: available && dismissedBuildId !== targetId, applyUpdate, dismiss }
+  return {
+    updateReady: available && dismissedBuildId !== targetId,
+    nativeUpdate,
+    applyUpdate,
+    dismiss,
+  }
 }

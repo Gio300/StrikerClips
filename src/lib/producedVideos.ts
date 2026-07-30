@@ -120,6 +120,37 @@ export function latestProducedVersions(rows: MatchVersionRow[]): ProducedVideo[]
     })
 }
 
+const producedAt = (video: ProducedVideo): number => {
+  const parsed = new Date(video.createdAt ?? 0).getTime()
+  return Number.isFinite(parsed) ? parsed : 0
+}
+
+/**
+ * Combine canonical match versions with legacy clip records without allowing a
+ * stale canonical table to hide newer completed renders. The newest upload wins
+ * when both sources identify the same match, and a YouTube upload is shown only
+ * once even when both tables reference it.
+ */
+export function mergeProducedVideoSources(
+  canonical: ProducedVideo[],
+  legacy: ProducedVideo[],
+): ProducedVideo[] {
+  const merged = [...canonical, ...legacy].sort((a, b) => producedAt(b) - producedAt(a))
+  const seenYoutubeIds = new Set<string>()
+  const seenMatchIds = new Set<string>()
+
+  return merged.filter((video) => {
+    const youtubeId = t(video.youtubeId)
+    const matchId = t(video.matchId)
+    if (!youtubeId || seenYoutubeIds.has(youtubeId)) return false
+    if (matchId && seenMatchIds.has(matchId)) return false
+
+    seenYoutubeIds.add(youtubeId)
+    if (matchId) seenMatchIds.add(matchId)
+    return true
+  })
+}
+
 const SELECT_COLS =
   'composite_youtube_id, youtube_id, player_id, player_handle, map, mode, category, match_id, recorded_at, created_at'
 
@@ -130,17 +161,17 @@ export async function recentProducedVideos(limit = 24): Promise<ProducedVideo[]>
     .order('created_at', { ascending: false })
     .limit(Math.max(limit, 1) * 8)
   const canonical = latestProducedVersions((versions ?? []) as MatchVersionRow[])
-  if (canonical.length) return canonical.slice(0, limit)
 
-  // Legacy fallback until an older installation receives its first canonical
-  // render. Never surface arbitrary uploads from the TKO YouTube channel.
+  // Keep reading legacy rows while older pipeline/server revisions are still
+  // being drained. Only produced composite ids are eligible, never arbitrary
+  // uploads from a user's YouTube channel.
   const { data } = await supabase
     .from('clip_records')
     .select(SELECT_COLS)
     .order('created_at', { ascending: false })
     .limit(Math.max(limit, 1) * 8)
   const rows = ((data ?? []) as ClipRecordLite[]).filter((row) => t(row.composite_youtube_id))
-  return dedupeProducedVideos(rows).slice(0, limit)
+  return mergeProducedVideoSources(canonical, dedupeProducedVideos(rows)).slice(0, limit)
 }
 
 export async function producedVideosForPlayer(
@@ -157,7 +188,6 @@ export async function producedVideosForPlayer(
   const canonical = latestProducedVersions(
     ((versions ?? []) as MatchVersionRow[]).filter((row) => row.participant_ids?.includes(playerId)),
   )
-  if (canonical.length) return canonical.slice(0, limit)
 
   const { data: mine } = await supabase
     .from('clip_records')
@@ -170,11 +200,12 @@ export async function producedVideosForPlayer(
         .filter(Boolean),
     ),
   ]
-  if (ids.length === 0) return []
-  const { data } = await supabase
-    .from('clip_records')
-    .select(SELECT_COLS)
-    .in('composite_youtube_id', ids)
+  const { data } = ids.length
+    ? await supabase
+        .from('clip_records')
+        .select(SELECT_COLS)
+        .in('composite_youtube_id', ids)
+    : { data: [] }
   const rows = ((data ?? []) as ClipRecordLite[]).filter((row) => t(row.composite_youtube_id))
-  return dedupeProducedVideos(rows).slice(0, limit)
+  return mergeProducedVideoSources(canonical, dedupeProducedVideos(rows)).slice(0, limit)
 }

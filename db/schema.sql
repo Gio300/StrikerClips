@@ -208,14 +208,37 @@ create table if not exists public.live_streams (
   -- streams to the tournament the user is in. Defaults to 'profile'.
   placement text not null default 'profile'
     check (placement in ('profile','clan','front_page','tournament')),
+  -- Heartbeat: bumped while the host is live (see /api/fn/live-heartbeat). A row
+  -- still is_live=true whose updated_at (else created_at) is older than the TTL
+  -- is treated as NOT live — it stops blocking new go-lives and drops off the
+  -- public "who is live now" reads. See STALE_LIVE_STREAM_TTL_MINUTES.
+  updated_at timestamptz default now(),
   created_at timestamptz default now()
 );
 -- backfill (pre-existing DBs)
 alter table public.live_streams add column if not exists placement text not null default 'profile';
+alter table public.live_streams add column if not exists updated_at timestamptz default now();
+alter table public.live_streams add column if not exists tournament_id uuid;
+alter table public.live_streams add column if not exists show_bracket boolean not null default false;
 do $$ begin
   alter table public.live_streams add constraint live_streams_placement_check
     check (placement in ('profile','clan','front_page','tournament'));
 exception when duplicate_object then null; end $$;
+-- Host-curated ANGLES of a single live_streams "show": the host's own stream is
+-- angle 1; added players are further angles (their linked YouTube live or a
+-- pasted url). Public to read (viewers switch between angles); written only by
+-- the trusted /api/fn/live-angle-* handlers after checking the caller owns the
+-- parent stream.
+create table if not exists public.live_stream_angles (
+  id uuid primary key default uuid_generate_v4(),
+  live_stream_id uuid not null references public.live_streams(id) on delete cascade,
+  user_id uuid references public.profiles(id) on delete set null,
+  label text,
+  youtube_url text,
+  created_at timestamptz default now()
+);
+create index if not exists idx_live_stream_angles_stream
+  on public.live_stream_angles(live_stream_id, created_at);
 create table if not exists public.stream_messages (
   id uuid primary key default uuid_generate_v4(),
   stream_id uuid not null references public.live_streams(id) on delete cascade,
@@ -959,6 +982,10 @@ create index if not exists idx_tournament_battles_tournament on public.tournamen
 -- Bracket round (1 = first round). Optional: the board derives a round when
 -- this is null, so older rows keep rendering. See src/lib/tkoKing.ts.
 alter table public.tournament_battles add column if not exists round integer;
+alter table public.tournament_battles add column if not exists bracket_slot integer;
+create unique index if not exists uq_tournament_battle_bracket_slot
+  on public.tournament_battles(tournament_id, round, bracket_slot)
+  where round is not null and bracket_slot is not null;
 
 -- PIT MEET-UP: the private per-battle info exchange between the two fighters.
 -- Each fighter posts one card (in-game name / platform / lobby / notes); both
@@ -1230,6 +1257,10 @@ create table if not exists public.wallets (
 -- Additive for existing databases (the create-table above only runs on a fresh DB).
 alter table public.wallets add column if not exists daily_sweeps_claimed_on date;
 alter table public.wallets add column if not exists paid_sweeps_cents integer not null default 0;
+-- ORACLE-USE-ONLY tickets. The repurposed daily free grant credits these (default
+-- 3/day). Bettable in the Oracle economy, but they contribute $0 to any streamer
+-- payout — they are NEVER part of the money ($) flow.
+alter table public.wallets add column if not exists oracle_tickets integer not null default 0 check (oracle_tickets >= 0);
 
 -- Every balance movement AND every settled prize/prediction, in one append-only
 -- table. The token/sweeps columns cover src/lib/wallet.ts; the event/result/
@@ -1618,6 +1649,9 @@ create table if not exists public.clan_battles (
 
 alter table public.artifacts add column if not exists recipe_code text;
 alter table public.artifacts add column if not exists forge_tier text;
+-- Provenance. Only 'forge' (paid-to-create) and 'purchase' are BETTABLE in the
+-- Oracle economy; 'free'/'seed'/'reward'/'prize' are never stakeable (Rule 3).
+alter table public.artifacts add column if not exists origin text not null default 'forge';
 alter table public.artifacts add column if not exists power_payload jsonb not null default '[]'::jsonb;
 alter table public.artifacts add column if not exists power_score integer not null default 0;
 alter table public.artifacts add column if not exists slot_cost integer not null default 0;
@@ -1626,6 +1660,61 @@ alter table public.artifacts add column if not exists clan_id uuid references pu
 alter table public.artifacts add column if not exists used_at timestamptz;
 create index if not exists artifacts_recipe_idx
   on public.artifacts(owner_id, recipe_code, created_at);
+
+-- ===========================================================================
+-- ORACLE BETTING ECONOMY — live-only, host-tier-only, money-safe.
+--
+-- A bet stakes exactly ONE of: oracle tickets (no $), PAID sweeps (stake_cents =
+-- real-cent value — the ONLY thing that drives the streamer share), or a
+-- FORGED/PURCHASED artifact (no $). One bet per game. Winners split the pot,
+-- conserved; the streamer earns a HARD-CAPPED 25% of the real sweeps-cents bet,
+-- paid from the platform's cut (see server/app.ts oracle-bet-resolve).
+-- ===========================================================================
+create table if not exists public.oracle_bets (
+  id uuid primary key default uuid_generate_v4(),
+  match_ref text not null,
+  stream_id uuid,
+  user_id uuid not null references public.profiles(id) on delete cascade,
+  choice text not null,
+  stake_kind text not null check (stake_kind in ('ticket','sweeps','artifact')),
+  stake_amount integer not null default 0 check (stake_amount >= 0),
+  stake_cents integer not null default 0 check (stake_cents >= 0),
+  artifact_id uuid,
+  status text not null default 'active' check (status in ('active','won','lost','refunded')),
+  payout integer not null default 0,
+  payout_cents integer not null default 0,
+  created_at timestamptz not null default now(),
+  unique (match_ref, user_id)
+);
+create index if not exists oracle_bets_match_idx on public.oracle_bets(match_ref, status);
+create index if not exists oracle_bets_stream_idx on public.oracle_bets(stream_id);
+
+-- Per-stream minimum bet the streamer sets in their live setup / control room.
+create table if not exists public.oracle_stream_config (
+  stream_id uuid primary key,
+  min_bet integer not null default 1 check (min_bet >= 0),
+  min_stake_kind text not null default 'ticket',
+  updated_at timestamptz default now()
+);
+
+-- Per-stream running tally that ENFORCES the profit cap: cumulative streamer
+-- payout can never exceed 25% of the real sweeps-cents ever bet on the stream.
+create table if not exists public.oracle_stream_tally (
+  stream_id uuid primary key,
+  sweeps_cents_in integer not null default 0 check (sweeps_cents_in >= 0),
+  streamer_cents_paid integer not null default 0 check (streamer_cents_paid >= 0),
+  updated_at timestamptz default now()
+);
+
+-- One settlement row per resolved match — the idempotent claim for resolve.
+create table if not exists public.oracle_bet_settlements (
+  match_ref text primary key,
+  stream_id uuid,
+  winning_choice text,
+  sweeps_cents_in integer not null default 0,
+  streamer_cents_paid integer not null default 0,
+  resolved_at timestamptz not null default now()
+);
 
 alter table public.territories add column if not exists protected_until timestamptz;
 alter table public.territories add column if not exists protected_by_artifact_id uuid;
@@ -1679,3 +1768,154 @@ create table if not exists public.clan_basic_pass_entitlements (
 );
 create index if not exists clan_pass_entitlements_user_idx
   on public.clan_basic_pass_entitlements(user_id, clan_id, expires_at);
+
+-- ---- STRIPE-FIRST PHYSICAL MERCHANDISE ----------------------------------
+-- TKO owns the catalogue, orders and earnings. Shopify is an unpublished
+-- operations mirror; print-provider orders stay drafts until separately
+-- released. The same DDL is also used by production boot and pg-mem tests.
+create table if not exists public.physical_merch_products (
+  id uuid primary key default gen_random_uuid(),
+  artifact_id uuid not null references public.artifacts(id) on delete restrict,
+  seller_user_id uuid not null references public.profiles(id) on delete restrict,
+  seller_type text not null default 'creator',
+  clan_id uuid,
+  title text not null,
+  description text not null default '',
+  product_type text not null default 'tshirt',
+  artwork_url text not null,
+  ai_brief jsonb not null default '{}',
+  print_specs jsonb not null default '{}',
+  status text not null default 'pending_review',
+  shopify_shop_domain text,
+  shopify_product_gid text unique,
+  fulfillment_provider text not null default 'printful',
+  provider_template_id text,
+  sale_price_cents integer not null,
+  manufacturing_cents integer not null default 1200,
+  shipping_cents integer not null default 499,
+  payment_fee_cents integer not null default 150,
+  refund_reserve_cents integer not null default 200,
+  creator_share_percent integer not null default 50,
+  last_error text,
+  ip_attested_at timestamptz not null,
+  approved_by uuid,
+  approved_at timestamptz,
+  synced_at timestamptz,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (artifact_id, product_type)
+);
+create index if not exists physical_merch_products_seller_idx
+  on public.physical_merch_products(seller_user_id, status, created_at desc);
+
+create table if not exists public.physical_merch_variants (
+  id uuid primary key default gen_random_uuid(),
+  physical_product_id uuid not null references public.physical_merch_products(id) on delete cascade,
+  size text not null,
+  color text not null default 'Black',
+  sku text not null unique,
+  shopify_variant_gid text unique,
+  provider_variant_id text,
+  active boolean not null default true,
+  created_at timestamptz not null default now(),
+  unique (physical_product_id, size, color)
+);
+
+create table if not exists public.physical_merch_orders (
+  id uuid primary key default gen_random_uuid(),
+  buyer_id uuid not null references public.profiles(id) on delete restrict,
+  status text not null default 'checkout_pending',
+  currency text not null default 'usd',
+  item_subtotal_cents integer not null,
+  shipping_charge_cents integer not null default 0,
+  tax_cents integer not null default 0,
+  total_cents integer not null,
+  refunded_cents integer not null default 0,
+  shipping_name text,
+  shipping_email text,
+  shipping_address jsonb not null default '{}',
+  stripe_customer_id text,
+  stripe_checkout_session_id text unique,
+  stripe_payment_intent_id text unique,
+  stripe_charge_id text,
+  shopify_order_gid text unique,
+  shopify_order_name text,
+  provider text not null default 'printful',
+  provider_order_id text unique,
+  provider_status text,
+  provider_cost_cents integer,
+  provider_confirmed_at timestamptz,
+  tracking_company text,
+  tracking_number text,
+  tracking_url text,
+  idempotency_key text not null unique,
+  dry_run boolean not null default false,
+  hold_reason text,
+  last_error text,
+  paid_at timestamptz,
+  shipped_at timestamptz,
+  delivered_at timestamptz,
+  cancelled_at timestamptz,
+  refunded_at timestamptz,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create index if not exists physical_merch_orders_buyer_idx
+  on public.physical_merch_orders(buyer_id, created_at desc);
+create index if not exists physical_merch_orders_status_idx
+  on public.physical_merch_orders(status, updated_at);
+
+create table if not exists public.physical_merch_order_items (
+  id uuid primary key default gen_random_uuid(),
+  order_id uuid not null references public.physical_merch_orders(id) on delete cascade,
+  physical_product_id uuid not null references public.physical_merch_products(id) on delete restrict,
+  variant_id uuid not null references public.physical_merch_variants(id) on delete restrict,
+  seller_user_id uuid not null references public.profiles(id) on delete restrict,
+  quantity integer not null default 1,
+  unit_price_cents integer not null,
+  manufacturing_cents integer not null default 0,
+  provider_shipping_cents integer not null default 0,
+  payment_fee_cents integer not null default 0,
+  refund_reserve_cents integer not null default 0,
+  creator_share_percent integer not null,
+  creator_share_cents integer not null default 0,
+  platform_share_cents integer not null default 0,
+  shopify_line_item_gid text unique,
+  created_at timestamptz not null default now(),
+  unique (order_id, variant_id)
+);
+
+create table if not exists public.physical_merch_events (
+  id uuid primary key default gen_random_uuid(),
+  provider text not null,
+  topic text not null,
+  provider_event_id text not null,
+  order_id uuid references public.physical_merch_orders(id) on delete set null,
+  payload jsonb not null default '{}',
+  status text not null default 'pending',
+  attempts integer not null default 0,
+  next_attempt_at timestamptz,
+  locked_at timestamptz,
+  processed_at timestamptz,
+  error text,
+  received_at timestamptz not null default now(),
+  unique (provider, provider_event_id)
+);
+create index if not exists physical_merch_events_pending_idx
+  on public.physical_merch_events(status, next_attempt_at, received_at);
+
+create table if not exists public.physical_merch_earnings (
+  id uuid primary key default gen_random_uuid(),
+  order_item_id uuid not null unique references public.physical_merch_order_items(id) on delete restrict,
+  seller_user_id uuid not null references public.profiles(id) on delete restrict,
+  amount_cents integer not null,
+  status text not null default 'held',
+  available_at timestamptz,
+  stripe_transfer_id text unique,
+  transferred_at timestamptz,
+  reversed_at timestamptz,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create index if not exists physical_merch_earnings_seller_idx
+  on public.physical_merch_earnings(seller_user_id, status, available_at);

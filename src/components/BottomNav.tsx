@@ -8,7 +8,6 @@ import {
   Crown,
   Download,
   FileText,
-  Film,
   Gem,
   Hammer,
   HelpCircle,
@@ -18,10 +17,8 @@ import {
   LogOut,
   Menu,
   MessageCircleMore,
-  PenLine,
   Plus,
   Radio,
-  RadioTower,
   Search,
   Shirt,
   ShoppingBag,
@@ -38,6 +35,7 @@ import { useAuth } from '@/hooks/useAuth'
 import { supabase } from '@/lib/supabase'
 import { useUnreadNotifications } from '@/hooks/useUnreadNotifications'
 import { InstallAppButton } from '@/components/InstallAppButton'
+import { CreateIntentPicker } from '@/components/CreateIntentPicker'
 import { IS_MOBILE_STORE_BUILD } from '@/lib/storeBuild'
 
 type PrimaryNavItem = {
@@ -51,7 +49,7 @@ type PrimaryNavItem = {
 const PRIMARY: readonly PrimaryNavItem[] = [
   { to: '/', label: 'Home', Icon: Home, end: true },
   { to: '/video', label: 'Watch', Icon: Clapperboard },
-  { to: '/highlight/create', label: 'Create', Icon: Plus, create: true },
+  { to: '/create', label: 'Create', Icon: Plus, create: true },
   { to: '/tournaments', label: 'Play', Icon: Trophy },
 ] as const
 
@@ -61,38 +59,6 @@ type SheetItem = {
   Icon: LucideIcon
   badge?: number
 }
-
-type CreateAction = {
-  to: string
-  label: string
-  description: string
-  Icon: LucideIcon
-  iconClassName: string
-}
-
-const CREATE_ACTIONS: readonly CreateAction[] = [
-  {
-    to: '/profile?tab=wall',
-    label: 'Post to Wall',
-    description: 'Share an update with your followers.',
-    Icon: PenLine,
-    iconClassName: 'bg-accent/10 text-accent',
-  },
-  {
-    to: '/highlight/create',
-    label: 'Build a Reel',
-    description: 'Turn your best clips into a highlight.',
-    Icon: Film,
-    iconClassName: 'bg-chakra/10 text-chakra',
-  },
-  {
-    to: '/go-live',
-    label: 'Go Live',
-    description: 'Start broadcasting to your audience.',
-    Icon: RadioTower,
-    iconClassName: 'bg-kunai/10 text-kunai',
-  },
-] as const
 
 export function BottomNav() {
   const { user } = useAuth()
@@ -137,7 +103,7 @@ export function BottomNav() {
     { to: '/chat', label: 'Connect (Chat)', Icon: MessageCircleMore },
     { to: '/clans', label: 'Clans & crews', Icon: UsersRound },
     { to: '/conquest', label: 'Conquest map', Icon: Swords },
-    { to: '/live', label: 'Broadcast studio', Icon: Radio },
+    { to: '/live', label: 'Live', Icon: Radio },
     { to: '/discover', label: 'Player search', Icon: Search },
     { to: '/rankings', label: 'Power rankings', Icon: Crown },
     { to: '/profile', label: 'My profile', Icon: UserRound },
@@ -325,8 +291,8 @@ function CreateActionMenu({ onClose }: { onClose: () => void }) {
         onClick={onClose}
         className="absolute inset-0 bg-black/70"
       />
-      <div className="absolute inset-x-0 bottom-0 animate-slide-up rounded-t-lg border-t border-dark-border bg-dark-card pb-[calc(1rem+env(safe-area-inset-bottom))] shadow-2xl">
-        <div className="flex items-start justify-between border-b border-dark-border px-4 py-4">
+      <div className="absolute inset-x-0 bottom-0 max-h-[86vh] animate-slide-up overflow-y-auto rounded-t-lg border-t border-dark-border bg-dark-card pb-[calc(1rem+env(safe-area-inset-bottom))] shadow-2xl">
+        <div className="sticky top-0 z-10 flex items-start justify-between border-b border-dark-border bg-dark-card px-4 py-4">
           <div>
             <h2 id="create-action-menu-title" className="font-semibold text-white">
               Create
@@ -344,25 +310,7 @@ function CreateActionMenu({ onClose }: { onClose: () => void }) {
         </div>
 
         <div className="px-3 py-3">
-          <div className="divide-y divide-dark-border overflow-hidden rounded-lg border border-dark-border bg-dark">
-            {CREATE_ACTIONS.map(({ to, label, description, Icon, iconClassName }) => (
-              <NavLink
-                key={to}
-                to={to}
-                onClick={onClose}
-                className="flex min-h-[4.75rem] items-center gap-3 px-3 py-3 transition-colors hover:bg-dark-elevated focus-visible:bg-dark-elevated focus-visible:outline-none"
-              >
-                <span className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-lg ${iconClassName}`}>
-                  <Icon size={21} strokeWidth={2} aria-hidden />
-                </span>
-                <span className="min-w-0">
-                  <span className="block text-sm font-semibold text-white">{label}</span>
-                  <span className="mt-0.5 block text-xs leading-5 text-gray-500">{description}</span>
-                </span>
-                <ChevronRight size={17} className="ml-auto shrink-0 text-gray-600" aria-hidden />
-              </NavLink>
-            ))}
-          </div>
+          <CreateIntentPicker onSelect={onClose} />
         </div>
       </div>
     </div>

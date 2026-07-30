@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { useLocation } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/hooks/useAuth'
 import { connectYouTube, fetchMyUploads, fetchUploadsByHandle, isYouTubeApiConfigured, isYouTubeConnectConfigured, saveLibrary, saveHandle } from '@/lib/youtubeConnect'
@@ -26,6 +27,7 @@ function normalizeHandle(raw: string): string | null {
 
 export default function ConnectYouTubePrompt() {
   const { user } = useAuth()
+  const location = useLocation()
   const [handle, setHandle] = useState('')
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
@@ -49,7 +51,12 @@ export default function ConnectYouTubePrompt() {
   }, [user?.id])
 
   const canOAuth = isYouTubeConnectConfigured()
-  const show = !!user && hasLink === false && !dismissed
+  // Connecting a video source is unrelated to buying or managing merchandise.
+  // Keep this app-level gate from obscuring those transactional screens.
+  const isCommerceRoute = ['/physical', '/forge/physical', '/shop', '/store'].some(
+    (path) => location.pathname === path || location.pathname.startsWith(`${path}/`),
+  )
+  const show = !!user && hasLink === false && !dismissed && !isCommerceRoute
 
   async function saveUrl(url: string) {
     if (!user) return

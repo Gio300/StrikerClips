@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import {
   Coins,
   Crown,
   Hammer,
   MapPinned,
   Shield,
+  Shirt,
   Store,
   Swords,
   Ticket,
@@ -31,6 +32,7 @@ import {
   conquestTierAllows,
   type ConquestArtifactRecipe,
 } from '@/lib/conquestArtifacts'
+import { IS_MOBILE_STORE_BUILD } from '@/lib/storeBuild'
 
 const RARITIES: Rarity[] = ['common', 'rare', 'epic', 'legendary', 'mythic']
 const CAPS: Capability[] = ['none', 'gift_starter', 'profile_flair', 'clan_tag', 'event_badge']
@@ -44,8 +46,13 @@ export function Forge() {
   const { user, profile } = useAuth()
   const ent = useEntitlements()
   const canvasRef = useRef<HTMLCanvasElement>(null)
+  const [searchParams, setSearchParams] = useSearchParams()
+  const guidedEntry = searchParams.get('create') === '1'
 
   const [purpose, setPurpose] = useState<'collectible' | 'conquest'>('collectible')
+  const [guideStep, setGuideStep] = useState<'target' | 'configure'>(
+    guidedEntry ? 'target' : 'configure',
+  )
   const [rarity, setRarity] = useState<Rarity>('rare')
   const [capability, setCapability] = useState<Capability>('none')
   const [recipeCode, setRecipeCode] = useState('scout-mark')
@@ -54,7 +61,7 @@ export function Forge() {
   const [imgSrc, setImgSrc] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [reveal, setReveal] = useState(false)
-  const [listForSale, setListForSale] = useState(true)
+  const [listForSale, setListForSale] = useState(!IS_MOBILE_STORE_BUILD)
   const [sellerType, setSellerType] = useState<Exclude<SellerType, 'official'>>('creator')
   const [managedClans, setManagedClans] = useState<{ id: string; name: string }[]>([])
   const [clanId, setClanId] = useState('')
@@ -65,6 +72,8 @@ export function Forge() {
     ?? CONQUEST_ARTIFACT_RECIPES[0]
   const effectiveRarity = purpose === 'conquest' ? selectedRecipe.rarity : rarity
   const accent = RARITY[effectiveRarity].accent
+  const marketplaceListing =
+    !IS_MOBILE_STORE_BUILD && purpose === 'collectible' && listForSale
 
   useEffect(() => {
     if (!user) return
@@ -95,6 +104,22 @@ export function Forge() {
     // renderArtifact reads the current visual recipe and rarity.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [imgSrc, purpose, recipeCode, rarity])
+
+  useEffect(() => {
+    if (guidedEntry) setGuideStep('target')
+  }, [guidedEntry])
+
+  function choosePurpose(nextPurpose: 'collectible' | 'conquest') {
+    setPurpose(nextPurpose)
+    setListForSale(!IS_MOBILE_STORE_BUILD && nextPurpose === 'collectible')
+    setForgedArtifactId(null)
+    setGuideStep('configure')
+    if (guidedEntry) {
+      const next = new URLSearchParams(searchParams)
+      next.delete('create')
+      setSearchParams(next, { replace: true })
+    }
+  }
 
   function onFile(event: React.ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0]
@@ -162,7 +187,7 @@ export function Forge() {
       setNote('Choose a clan you lead or manage.')
       return
     }
-    if (purpose === 'collectible' && listForSale && sellerType === 'clan' && !clanId) {
+    if (marketplaceListing && sellerType === 'clan' && !clanId) {
       setNote('Choose a clan storefront first.')
       return
     }
@@ -211,7 +236,7 @@ export function Forge() {
         price_cents: null,
         image_url: dataUrl,
       })
-      if (listForSale) {
+      if (marketplaceListing) {
         const clan = managedClans.find((item) => item.id === clanId)
         await addAsset({
           name: name || 'Forged Artifact',
@@ -226,7 +251,7 @@ export function Forge() {
           createdBy: user.id,
         })
       }
-      setNote(listForSale
+      setNote(marketplaceListing
         ? 'Collectible forged and listed in the marketplace.'
         : 'Collectible forged and added to your collection.')
       setReveal(true)
@@ -279,38 +304,129 @@ export function Forge() {
     <div className="p-4 sm:p-6 lg:p-8 max-w-4xl mx-auto">
       <h1 className="text-2xl font-bold">Forge an artifact</h1>
       <p className="mt-1 text-sm text-gray-400">
-        Make a collectible for the marketplace, or bind your art to a protected Conquest recipe.
-        Higher memberships unlock stronger clan powers.
+        {IS_MOBILE_STORE_BUILD
+          ? 'Make a collectible for your collection, forge a physical shirt, or bind your art to a protected Conquest recipe.'
+          : 'Make a collectible for the marketplace, or bind your art to a protected Conquest recipe.'}
+        {' '}Higher memberships unlock stronger clan powers.
       </p>
 
-      <div className="mt-5 grid grid-cols-2 gap-2 rounded-lg border border-dark-border bg-dark p-1">
-        <button
-          type="button"
-          onClick={() => { setPurpose('collectible'); setForgedArtifactId(null) }}
-          className={`flex min-h-11 items-center justify-center gap-2 rounded-md text-sm font-semibold ${
-            purpose === 'collectible' ? 'bg-white/10 text-white' : 'text-gray-400'
-          }`}
-        >
-          <Store size={17} />
-          Collectible
-        </button>
-        <button
-          type="button"
-          onClick={() => {
-            setPurpose('conquest')
-            setListForSale(false)
-            setForgedArtifactId(null)
-          }}
-          className={`flex min-h-11 items-center justify-center gap-2 rounded-md text-sm font-semibold ${
-            purpose === 'conquest' ? 'bg-accent/15 text-accent' : 'text-gray-400'
-          }`}
-        >
-          <MapPinned size={17} />
-          Conquest power
-        </button>
-      </div>
+      {guideStep === 'target' && (
+        <section className="mt-5 rounded-lg border border-dark-border bg-dark-card p-4">
+          <div aria-label="Step 1 of 2: Choose artifact type">
+            <div className="flex gap-1.5">
+              <span className="h-1.5 flex-1 rounded-full bg-kunai" />
+              <span className="h-1.5 flex-1 rounded-full bg-dark-elevated" />
+            </div>
+            <div className="mt-2 flex items-center justify-between text-xs">
+              <span className="font-semibold text-white">Step 1 of 2</span>
+              <span className="text-gray-500">Choose a purpose</span>
+            </div>
+          </div>
 
-      <div className="mt-6 grid gap-6 md:grid-cols-2">
+          <h2 className="mt-5 text-lg font-semibold text-white">What do you want to forge?</h2>
+          <p className="mt-1 text-sm text-gray-400">
+            Pick one. The next screen only shows the controls needed for it.
+          </p>
+
+          <div className="mt-4 grid gap-2">
+            <button
+              type="button"
+              onClick={() => choosePurpose('collectible')}
+              className="flex min-h-20 items-center gap-4 rounded-lg border border-dark-border px-4 py-3 text-left transition-colors hover:border-accent/60 hover:bg-dark-elevated"
+            >
+              <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-accent/10 text-accent">
+                <Store size={22} />
+              </span>
+              <span>
+                <span className="block font-semibold text-white">
+                  {IS_MOBILE_STORE_BUILD ? 'Collectible artifact' : 'Collectible or shop item'}
+                </span>
+                <span className="mt-0.5 block text-sm text-gray-400">
+                  {IS_MOBILE_STORE_BUILD
+                    ? 'Upload art, add a perk, and keep it in your collection.'
+                    : 'Upload art, add a perk, and keep it or list it for sale.'}
+                </span>
+              </span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => choosePurpose('conquest')}
+              className="flex min-h-20 items-center gap-4 rounded-lg border border-dark-border px-4 py-3 text-left transition-colors hover:border-trust/60 hover:bg-dark-elevated"
+            >
+              <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-trust/10 text-trust">
+                <MapPinned size={22} />
+              </span>
+              <span>
+                <span className="block font-semibold text-white">Shinobi Conquest power</span>
+                <span className="mt-0.5 block text-sm text-gray-400">
+                  Choose a protected recipe and bind its power to your clan.
+                </span>
+              </span>
+            </button>
+
+            <Link
+              to="/forge/physical"
+              className="flex min-h-20 items-center gap-4 rounded-lg border border-dark-border px-4 py-3 text-left transition-colors hover:border-kunai/60 hover:bg-dark-elevated"
+            >
+              <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-kunai/10 text-kunai">
+                <Shirt size={22} />
+              </span>
+              <span>
+                <span className="block font-semibold text-white">Physical shirt</span>
+                <span className="mt-0.5 block text-sm text-gray-400">
+                  Shop creator shirts or put one of your artifacts on a shirt.
+                </span>
+              </span>
+            </Link>
+          </div>
+        </section>
+      )}
+
+      {guideStep === 'configure' && (
+        <>
+          <div className="mt-5 grid grid-cols-3 gap-2 rounded-lg border border-dark-border bg-dark p-1">
+            <button
+              type="button"
+              onClick={() => choosePurpose('collectible')}
+              className={`flex min-h-11 items-center justify-center gap-2 rounded-md text-sm font-semibold ${
+                purpose === 'collectible' ? 'bg-white/10 text-white' : 'text-gray-400'
+              }`}
+            >
+              <Store size={17} />
+              Collectible
+            </button>
+            <button
+              type="button"
+              onClick={() => choosePurpose('conquest')}
+              className={`flex min-h-11 items-center justify-center gap-2 rounded-md text-sm font-semibold ${
+                purpose === 'conquest' ? 'bg-accent/15 text-accent' : 'text-gray-400'
+              }`}
+            >
+              <MapPinned size={17} />
+              Conquest power
+            </button>
+            <Link
+              to="/forge/physical"
+              className="flex min-h-11 items-center justify-center gap-2 rounded-md px-2 text-center text-sm font-semibold text-gray-400 transition-colors hover:bg-kunai/10 hover:text-kunai"
+            >
+              <Shirt size={17} />
+              Physical shirt
+            </Link>
+          </div>
+
+          <div className="mt-2 flex items-center justify-between text-xs">
+            <span className="font-semibold text-white">Step 2 of 2</span>
+            <button
+              type="button"
+              onClick={() => setGuideStep('target')}
+              className="text-accent hover:underline"
+            >
+              Change purpose
+            </button>
+          </div>
+
+          <div className="mt-6 grid gap-6 md:grid-cols-2">
         <div className="flex flex-col items-center">
           <div
             className="rounded-lg border border-dark-border bg-dark p-3"
@@ -371,78 +487,82 @@ export function Forge() {
                 </select>
               </div>
 
-              <label className="flex items-center justify-between gap-3 rounded-lg border border-dark-border px-3 py-3">
-                <span className="flex items-center gap-2 text-sm font-semibold text-white">
-                  <Store size={17} />
-                  List in marketplace
-                </span>
-                <input
-                  type="checkbox"
-                  checked={listForSale}
-                  onChange={(event) => setListForSale(event.target.checked)}
-                  className="h-4 w-4 accent-accent"
-                />
-              </label>
-
-              {listForSale && (
+              {!IS_MOBILE_STORE_BUILD && (
                 <>
-                  <div className="grid grid-cols-2 gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setSellerType('creator')}
-                      className={`flex min-h-11 items-center justify-center gap-2 rounded-lg border text-sm ${
-                        sellerType === 'creator'
-                          ? 'border-accent bg-accent/10 text-white'
-                          : 'border-dark-border text-gray-400'
-                      }`}
-                    >
-                      <UserRound size={17} />
-                      My shop
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => managedClans.length > 0 && setSellerType('clan')}
-                      disabled={managedClans.length === 0}
-                      className={`flex min-h-11 items-center justify-center gap-2 rounded-lg border text-sm ${
-                        sellerType === 'clan'
-                          ? 'border-trust bg-trust/10 text-white'
-                          : 'border-dark-border text-gray-400 disabled:opacity-40'
-                      }`}
-                    >
-                      <UsersRound size={17} />
-                      Clan shop
-                    </button>
-                  </div>
-
-                  {sellerType === 'clan' && (
-                    <select
-                      value={clanId}
-                      onChange={(event) => setClanId(event.target.value)}
-                      className="w-full rounded-lg border border-dark-border bg-dark px-3 py-2 text-white focus:border-accent focus:outline-none"
-                    >
-                      {managedClans.map((clan) => (
-                        <option key={clan.id} value={clan.id}>{clan.name}</option>
-                      ))}
-                    </select>
-                  )}
-
-                  <div>
-                    <label className="flex items-center gap-1.5 text-xs uppercase text-gray-500">
-                      <Coins size={14} />
-                      Utility Token price
-                    </label>
+                  <label className="flex items-center justify-between gap-3 rounded-lg border border-dark-border px-3 py-3">
+                    <span className="flex items-center gap-2 text-sm font-semibold text-white">
+                      <Store size={17} />
+                      List in marketplace
+                    </span>
                     <input
-                      type="number"
-                      min={0}
-                      step={10}
-                      value={priceTokens}
-                      onChange={(event) => setPriceTokens(event.target.value)}
-                      className="mt-1 w-full rounded-lg border border-dark-border bg-dark px-3 py-2 text-white focus:border-accent focus:outline-none"
+                      type="checkbox"
+                      checked={listForSale}
+                      onChange={(event) => setListForSale(event.target.checked)}
+                      className="h-4 w-4 accent-accent"
                     />
-                    <p className="mt-1 text-[11px] text-gray-500">
-                      Cash creator listings use the separate fixed-price seller flow.
-                    </p>
-                  </div>
+                  </label>
+
+                  {listForSale && (
+                    <>
+                      <div className="grid grid-cols-2 gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setSellerType('creator')}
+                          className={`flex min-h-11 items-center justify-center gap-2 rounded-lg border text-sm ${
+                            sellerType === 'creator'
+                              ? 'border-accent bg-accent/10 text-white'
+                              : 'border-dark-border text-gray-400'
+                          }`}
+                        >
+                          <UserRound size={17} />
+                          My shop
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => managedClans.length > 0 && setSellerType('clan')}
+                          disabled={managedClans.length === 0}
+                          className={`flex min-h-11 items-center justify-center gap-2 rounded-lg border text-sm ${
+                            sellerType === 'clan'
+                              ? 'border-trust bg-trust/10 text-white'
+                              : 'border-dark-border text-gray-400 disabled:opacity-40'
+                          }`}
+                        >
+                          <UsersRound size={17} />
+                          Clan shop
+                        </button>
+                      </div>
+
+                      {sellerType === 'clan' && (
+                        <select
+                          value={clanId}
+                          onChange={(event) => setClanId(event.target.value)}
+                          className="w-full rounded-lg border border-dark-border bg-dark px-3 py-2 text-white focus:border-accent focus:outline-none"
+                        >
+                          {managedClans.map((clan) => (
+                            <option key={clan.id} value={clan.id}>{clan.name}</option>
+                          ))}
+                        </select>
+                      )}
+
+                      <div>
+                        <label className="flex items-center gap-1.5 text-xs uppercase text-gray-500">
+                          <Coins size={14} />
+                          Utility Token price
+                        </label>
+                        <input
+                          type="number"
+                          min={0}
+                          step={10}
+                          value={priceTokens}
+                          onChange={(event) => setPriceTokens(event.target.value)}
+                          className="mt-1 w-full rounded-lg border border-dark-border bg-dark px-3 py-2 text-white focus:border-accent focus:outline-none"
+                        />
+                        <p className="mt-1 text-[11px] text-gray-500">
+                          Cash creator listings use the separate fixed-price seller flow.
+                        </p>
+                      </div>
+                    </>
+                  )}
                 </>
               )}
             </>
@@ -495,9 +615,11 @@ export function Forge() {
               <div className="rounded-lg border border-dark-border bg-black/20 p-3">
                 <div className="flex items-center justify-between gap-3">
                   <span className="text-sm font-semibold text-white">{selectedRecipe.name}</span>
-                  <span className="text-sm font-bold text-accent">
-                    ${(selectedRecipe.listPriceCents / 100).toFixed(2)} value
-                  </span>
+                  {!IS_MOBILE_STORE_BUILD && (
+                    <span className="text-sm font-bold text-accent">
+                      ${(selectedRecipe.listPriceCents / 100).toFixed(2)} value
+                    </span>
+                  )}
                 </div>
                 <p className="mt-1 text-xs leading-5 text-gray-400">
                   {selectedRecipe.description}
@@ -527,7 +649,7 @@ export function Forge() {
               ? 'Forging...'
               : purpose === 'conquest'
                 ? `Forge ${selectedRecipe.name}`
-                : listForSale ? 'Forge & list item' : 'Forge artifact'}
+                : marketplaceListing ? 'Forge & list item' : 'Forge artifact'}
           </button>
 
           {purpose === 'conquest' && forgedArtifactId && (
@@ -545,7 +667,9 @@ export function Forge() {
           {note && <p className="text-sm text-orange-300">{note}</p>}
           {!imgSrc && <p className="text-xs text-gray-500">Upload art to enable forging.</p>}
         </div>
-      </div>
+          </div>
+        </>
+      )}
 
       <UnlockReveal
         open={reveal}
@@ -554,7 +678,7 @@ export function Forge() {
         title="ARTIFACT FORGED"
         subtitle={purpose === 'conquest'
           ? `${selectedRecipe.name} is ready to activate.`
-          : listForSale
+          : marketplaceListing
             ? 'Your item is live in the marketplace.'
             : name ? `${name} is yours.` : 'Your artifact is ready.'}
         onClose={() => setReveal(false)}
@@ -601,9 +725,11 @@ function RecipeButton({
       <span className="min-w-0 flex-1">
         <span className="flex items-center justify-between gap-2">
           <span className="truncate text-sm font-semibold text-white">{recipe.name}</span>
-          <span className="shrink-0 text-xs font-bold text-gray-300">
-            ${(recipe.listPriceCents / 100).toFixed(2)}
-          </span>
+          {!IS_MOBILE_STORE_BUILD && (
+            <span className="shrink-0 text-xs font-bold text-gray-300">
+              ${(recipe.listPriceCents / 100).toFixed(2)}
+            </span>
+          )}
         </span>
         <span className="mt-0.5 block text-[11px] text-gray-500">
           {CONQUEST_TIER_LABEL[recipe.minimumTier]} / {recipe.slotCost}{' '}
