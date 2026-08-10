@@ -28,7 +28,7 @@ import { LiveSessionsStrip } from '@/components/LiveSessionsStrip'
 import type { NinjaIconName } from '@/components/ui/NinjaIcon'
 import { useEntitlements } from '@/hooks/useEntitlements'
 import { useInstallLabel } from '@/hooks/useInstallLabel'
-import { IS_MOBILE_STORE_BUILD } from '@/lib/storeBuild'
+import { CODE_REDEMPTION_ENABLED, IS_MOBILE_STORE_BUILD } from '@/lib/storeBuild'
 
 type Section = 'video' | 'clans' | 'tournaments' | 'live' | 'me'
 
@@ -235,6 +235,7 @@ export function HomeMenu({ initialSection }: { initialSection?: Section }) {
 
     const branded = items
       .filter((item) => !IS_MOBILE_STORE_BUILD || item.id !== INSTALL_ITEM_ID)
+      .filter((item) => CODE_REDEMPTION_ENABLED || item.id !== 'redeem')
       .map((item) =>
         item.id === INSTALL_ITEM_ID ? { ...item, sub: `${installLabel} on this device` } : item,
       )

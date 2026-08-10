@@ -76,6 +76,9 @@ export function rewriteVisibleBrandText(value: string, display: LeagueDisplayBra
     .replace(/https?:\/\/(?:www\.)?tko\.cam(?=\/|\b)/gi, SSL_PUBLIC_ORIGIN)
     .replace(/Ask TKO/g, display.assistantName)
     .replace(/TKO\.cam/g, display.productName)
+    // BRAND.domain is intentionally lowercase. On an SSL legal/support page it
+    // must resolve to the real public domain rather than leak the house URL.
+    .replace(/\btko\.cam\b/g, 'shinobistrikerleague.com')
     .replace(/\bTKO\b/g, display.productName)
     .split(ATTRIBUTION_TOKEN).join(ATTRIBUTION)
 }

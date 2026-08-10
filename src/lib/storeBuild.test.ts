@@ -23,6 +23,7 @@ describe('mobile store build policy', () => {
       thirdPartyAdTech: false,
       sideloadUpdates: false,
       webPushPrompts: false,
+      codeRedemption: false,
     })
   })
 
@@ -34,6 +35,7 @@ describe('mobile store build policy', () => {
       thirdPartyAdTech: true,
       sideloadUpdates: true,
       webPushPrompts: true,
+      codeRedemption: true,
     })
   })
 })
@@ -45,6 +47,19 @@ describe('store policy integration guards', () => {
       expect(app, path).toMatch(new RegExp(`path=["']/?${path}["'][\\s\\S]{0,180}StoreUnavailable`))
     }
     expect(read('pages/StoreUnavailable.tsx')).toContain('to="/rewards"')
+  })
+
+  it('removes entitlement-code redemption from store builds', () => {
+    expect(read('App.tsx')).toMatch(/path=["']redeem["'][\s\S]{0,180}StoreUnavailable/)
+    for (const relative of [
+      'components/BottomNav.tsx',
+      'components/Sidebar.tsx',
+      'pages/HomeMenu.tsx',
+      'pages/Help.tsx',
+      'pages/Rewards.tsx',
+    ]) {
+      expect(read(relative), relative).toContain('CODE_REDEMPTION_ENABLED')
+    }
   })
 
   it('guards tips, tournament perk checkout, and every wagering surface', () => {

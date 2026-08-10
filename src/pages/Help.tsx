@@ -3,6 +3,7 @@ import { SUPPORT } from '@/lib/brand'
 import { NinjaIcon } from '@/components/ui'
 import { useAskTko } from '@/components/AskTkoContext'
 import { useLeagueTheme } from '@/components/LeagueThemeProvider'
+import { CODE_REDEMPTION_ENABLED, IS_MOBILE_STORE_BUILD } from '@/lib/storeBuild'
 
 /**
  * Get help — the customer-service entry point.
@@ -104,12 +105,16 @@ export function Help() {
               Check a missing clip or power change
             </button>
           </li>
-          <li>
-            <Link to="/upgrade" className="text-accent hover:underline">Membership, billing and what each tier unlocks</Link>
-          </li>
-          <li>
-            <Link to="/redeem" className="text-accent hover:underline">Redeem a code</Link>
-          </li>
+          {!IS_MOBILE_STORE_BUILD && (
+            <li>
+              <Link to="/upgrade" className="text-accent hover:underline">Membership, billing and what each tier unlocks</Link>
+            </li>
+          )}
+          {CODE_REDEMPTION_ENABLED && (
+            <li>
+              <Link to="/redeem" className="text-accent hover:underline">Redeem a code</Link>
+            </li>
+          )}
           <li>
             <Link to="/data-deletion" className="text-accent hover:underline">Delete my account or request my data</Link>
           </li>

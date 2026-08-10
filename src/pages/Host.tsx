@@ -8,6 +8,7 @@ import { createHostCommentary, hostSourceLabel, type HostSource } from '@/lib/ho
 import { OBSPanel } from '@/components/OBSPanel'
 import { CollapsibleSection } from '@/components/CollapsibleSection'
 import type { Match } from '@/types/database'
+import { CODE_REDEMPTION_ENABLED } from '@/lib/storeBuild'
 
 /**
  * Host.tsx — the HOST LANE (docs/TKO-BUILD-PLAN.md §4).
@@ -54,8 +55,12 @@ export function Host() {
     return (
       <Gate
         title="Host access required"
-        body="Watching is open to everyone — but hosting the mic is gated. Unlock the live-commentary lane by going Legend (our top membership), or by redeeming a founder HOST code."
-        cta={{ to: '/upgrade', label: 'Go Legend or redeem a code' }}
+        body={CODE_REDEMPTION_ENABLED
+          ? 'Watching is open to everyone — but hosting the mic is gated. Unlock the live-commentary lane by going Legend (our top membership), or by redeeming a founder HOST code.'
+          : 'Watching is open to everyone, but hosting the mic is available only to accounts that already have host access.'}
+        cta={CODE_REDEMPTION_ENABLED
+          ? { to: '/upgrade', label: 'Go Legend or redeem a code' }
+          : { to: '/', label: 'Back to home' }}
       />
     )
   }

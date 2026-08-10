@@ -23,6 +23,6 @@ export const SUPPORT = {
   facebookHandle: 'tkocam',
   facebookUrl: 'https://facebook.com/tkocam',
   /** Shown as the link text — no scheme, it reads better on a phone. */
-  facebookLabel: 'facebook.com/tkocam',
+  facebookLabel: 'Facebook support',
   email: 'awakengiovanni3000@gmail.com',
 } as const

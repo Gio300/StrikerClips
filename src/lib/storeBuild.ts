@@ -19,6 +19,7 @@ export function storeBuildPolicy(value: unknown) {
     thirdPartyAdTech: !mobileStoreBuild,
     sideloadUpdates: !mobileStoreBuild,
     webPushPrompts: !mobileStoreBuild,
+    codeRedemption: !mobileStoreBuild,
   } as const
 }
 
@@ -30,3 +31,4 @@ export const WAGERING_UI_ENABLED = POLICY.wageringUi
 export const THIRD_PARTY_AD_TECH_ENABLED = POLICY.thirdPartyAdTech
 export const SIDELOAD_UPDATES_ENABLED = POLICY.sideloadUpdates
 export const WEB_PUSH_PROMPTS_ENABLED = POLICY.webPushPrompts
+export const CODE_REDEMPTION_ENABLED = POLICY.codeRedemption

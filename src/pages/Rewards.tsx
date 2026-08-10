@@ -14,6 +14,7 @@ import {
 import {
   normalizeOwnedArtifacts, ownedArtifactDef, type OwnedArtifact,
 } from '@/lib/ownedArtifacts'
+import { CODE_REDEMPTION_ENABLED } from '@/lib/storeBuild'
 
 const TRACK_LABEL: Record<EarnKind, string> = {
   uploads: 'Clips uploaded',
@@ -90,8 +91,9 @@ export function Rewards() {
       <div>
         <h1 className="text-2xl font-bold">Artifacts</h1>
         <p className="text-sm text-gray-400 mt-1">
-          Earn artifacts by playing and building the community. Some are pure flex; the rare ones let you
-          gift a starter pass to a friend.
+          {CODE_REDEMPTION_ENABLED
+            ? 'Earn artifacts by playing and building the community. Some are pure flex; the rare ones let you gift a starter pass to a friend.'
+            : 'Earn artifacts by playing and building the community, then display them in your collection.'}
         </p>
       </div>
 
@@ -190,8 +192,9 @@ export function Rewards() {
         </div>
       </div>
 
-      {/* Legend crafting: gift a sub */}
-      <div className="rounded-xl border p-5" style={{ borderColor: '#ff8a1e55', background: '#ff8a1e0d' }}>
+      {/* Store builds keep the earned collection, but never create or expose
+          codes that unlock a digital entitlement. */}
+      {CODE_REDEMPTION_ENABLED && <div className="rounded-xl border p-5" style={{ borderColor: '#ff8a1e55', background: '#ff8a1e0d' }}>
         <h2 className="text-lg font-semibold">Craft an artifact {isLegend ? '' : '(Legend only)'}</h2>
         <p className="mt-1 text-sm text-gray-400">
           Legends craft up to {LEGEND_MONTHLY_CRAFTS} artifacts a month. Gift a starter pass to a friend —
@@ -217,16 +220,18 @@ export function Rewards() {
             <div className="mt-1 select-all font-mono text-lg tracking-widest text-accent">{gift}</div>
           </div>
         )}
-      </div>
+      </div>}
 
-      <UnlockReveal
-        open={reveal}
-        emoji="🎟️"
-        accent="#ff8a1e"
-        title="ARTIFACT CRAFTED"
-        subtitle="Share it with a friend — they redeem the code to unlock a starter pass."
-        onClose={() => setReveal(false)}
-      />
+      {CODE_REDEMPTION_ENABLED && (
+        <UnlockReveal
+          open={reveal}
+          emoji="🎟️"
+          accent="#ff8a1e"
+          title="ARTIFACT CRAFTED"
+          subtitle="Share it with a friend — they redeem the code to unlock a starter pass."
+          onClose={() => setReveal(false)}
+        />
+      )}
     </div>
   )
 }

@@ -49,6 +49,13 @@ describe('league-aware visible branding', () => {
     )).toBe('Powered by TKO.cam · https://shinobistrikerleague.com/help')
   })
 
+  it('rewrites the lowercase domain used by legal and deletion pages', () => {
+    expect(rewriteVisibleBrandText(
+      'TKO (tko.cam) support',
+      SSL_DISPLAY_BRAND,
+    )).toBe('SSL (shinobistrikerleague.com) support')
+  })
+
   it('reserves SSL attribution for the global bottom line without changing other entitlement behavior', () => {
     expect(shouldShowInlineTkoAttribution(SSL_DISPLAY_BRAND, true)).toBe(false)
     expect(shouldShowInlineTkoAttribution(SSL_DISPLAY_BRAND, false)).toBe(false)

@@ -80,7 +80,7 @@ import { RosterInvite } from '@/pages/RosterInvite'
 import { ClanManager } from '@/pages/ClanManager'
 import { VillageDashboard } from '@/pages/VillageDashboard'
 import { Setup } from '@/pages/Setup'
-import { IS_MOBILE_STORE_BUILD } from '@/lib/storeBuild'
+import { CODE_REDEMPTION_ENABLED, IS_MOBILE_STORE_BUILD } from '@/lib/storeBuild'
 
 // ALL leagues live on the TKO.cam app (wire-in plan Step 1):
 //   • Signed-out visitors at `/` on tko.cam/localhost are sent to the league
@@ -236,7 +236,10 @@ export default function App() {
         <Route path="live-invites" element={<AuthGuard><LiveInvites /></AuthGuard>} />
         <Route path="dashboard" element={<AuthGuard><Dashboard /></AuthGuard>} />
         <Route path="creator" element={<AuthGuard><CreatorDashboard /></AuthGuard>} />
-        <Route path="redeem" element={<AuthGuard><Redeem /></AuthGuard>} />
+        <Route
+          path="redeem"
+          element={CODE_REDEMPTION_ENABLED ? <AuthGuard><Redeem /></AuthGuard> : <StoreUnavailable />}
+        />
         <Route path="rewards" element={<AuthGuard><Rewards /></AuthGuard>} />
         <Route path="forge" element={<AuthGuard><Forge /></AuthGuard>} />
         <Route path="conquest" element={<ConquestMap />} />

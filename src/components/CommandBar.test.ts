@@ -20,4 +20,12 @@ describe('Ask TKO authentication guidance', () => {
     expect(answer).toContain('open Tournaments and tap Create')
     expect(answer).not.toContain('need to sign in')
   })
+
+  it('does not advertise entitlement-code redemption in a store build', () => {
+    const answer = answerFor('How do I share a starter pass code?', 200, true, 'SSL', false)
+
+    expect(answer).toContain('not available in this version')
+    expect(answer).not.toContain('redeem')
+    expect(answer).not.toContain('starter pass')
+  })
 })

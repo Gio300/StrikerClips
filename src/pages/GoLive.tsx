@@ -38,6 +38,7 @@ import {
   PLACEMENT_MIN_LEVEL,
   type Placement,
 } from '@/lib/tiers'
+import { CODE_REDEMPTION_ENABLED } from '@/lib/storeBuild'
 
 /**
  * Go Live — the MERGED host/solo setup.
@@ -314,15 +315,18 @@ export function GoLive() {
           <div className="text-3xl mb-2">🔴</div>
           <h2 className="text-lg font-semibold text-white">Live streaming is for members</h2>
           <p className="text-gray-300 mt-2">
-            Going live — on your profile, your clan page, or the front page — is a paid perk.
-            Redeem a pass or upgrade to unlock it.
+            {CODE_REDEMPTION_ENABLED
+              ? 'Going live — on your profile, your clan page, or the front page — is a paid perk. Redeem a pass or upgrade to unlock it.'
+              : 'Going live — on your profile, your clan page, or the front page — is available to eligible members. Existing membership access works automatically in this version.'}
           </p>
-          <Link
-            to="/redeem"
-            className="inline-block mt-5 px-5 py-2.5 rounded-lg bg-accent text-dark font-semibold hover:shadow-glow"
-          >
-            Redeem a pass / upgrade
-          </Link>
+          {CODE_REDEMPTION_ENABLED && (
+            <Link
+              to="/redeem"
+              className="inline-block mt-5 px-5 py-2.5 rounded-lg bg-accent text-dark font-semibold hover:shadow-glow"
+            >
+              Redeem a pass / upgrade
+            </Link>
+          )}
         </div>
       </div>
     )
@@ -922,8 +926,8 @@ export function GoLive() {
           </div>
           <p className="mt-3 text-xs text-gray-500">
             Tier: <span className="text-accent font-medium">{LEVEL_TIER_NAME[Math.max(1, tierLevel(tier))] ?? 'Pro'}</span>.
-            Higher placements need a higher tier.{' '}
-            <Link to="/redeem" className="text-accent hover:underline">Upgrade →</Link>
+            Higher placements need a higher tier.
+            {CODE_REDEMPTION_ENABLED && <>{' '}<Link to="/redeem" className="text-accent hover:underline">Upgrade →</Link></>}
           </p>
         </Section>
 

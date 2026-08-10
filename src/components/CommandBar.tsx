@@ -7,6 +7,7 @@ import { ChatFab } from './ChatFab'
 import { bankAnswer } from '@/lib/answerBank'
 import { NinjaIcon, type NinjaIconName } from '@/components/ui/NinjaIcon'
 import { useLeagueTheme } from '@/components/LeagueThemeProvider'
+import { CODE_REDEMPTION_ENABLED } from '@/lib/storeBuild'
 import {
   GUIDES,
   getGuide,
@@ -43,7 +44,7 @@ import {
 
 type QA = {
   test: RegExp
-  answer: (ctx: { power: number; signedIn: boolean; brandName: string }) => string
+  answer: (ctx: { power: number; signedIn: boolean; brandName: string; codeRedemptionEnabled: boolean }) => string
 }
 type ReplySource = 'gemini' | 'offline' | null
 
@@ -106,8 +107,9 @@ const KB: QA[] = [
   },
   {
     test: /\b(artifacts?|rewards?|collectibl|badges?)\b/,
-    answer: () =>
-      'Artifacts are collectible rewards. You earn them by using the app — uploading clips (1, 5, 15, 40, 100) and recruiting friends (1, 3, 7, 15) — and see your collection and progress under Artifacts (🏆 in the menu). The rare ones let you gift a starter pass to a friend.',
+    answer: ({ codeRedemptionEnabled }) => codeRedemptionEnabled
+      ? 'Artifacts are collectible rewards. You earn them by using the app — uploading clips (1, 5, 15, 40, 100) and recruiting friends (1, 3, 7, 15) — and see your collection and progress under Artifacts (🏆 in the menu). The rare ones let you gift a starter pass to a friend.'
+      : 'Artifacts are collectible rewards. You earn them by using the app — uploading clips and recruiting friends — and see your collection and progress under Artifacts in the menu.',
   },
   {
     test: /\b(forge|make an artifact|upload.*art|my art|create an artifact)\b/,
@@ -116,8 +118,9 @@ const KB: QA[] = [
   },
   {
     test: /\b(gift|starter pass|gift a sub|share.*code)\b/,
-    answer: () =>
-      'Legend players craft up to 3 artifacts a month that gift a starter pass (an ad-free month — not full Pro, on purpose). You share the artifact’s code; a friend redeems it in Redeem and it unlocks with an animation. Each gift works once, and you can’t gift the same person twice.',
+    answer: ({ codeRedemptionEnabled }) => codeRedemptionEnabled
+      ? 'Legend players craft up to 3 artifacts a month that gift a starter pass (an ad-free month — not full Pro, on purpose). You share the artifact’s code; a friend redeems it in Redeem and it unlocks with an animation. Each gift works once, and you can’t gift the same person twice.'
+      : 'Artifact gifting is not available in this version. You can still earn and display artifacts in your collection.',
   },
   {
     test: /\b(host|commentary|commentate|add my angle|i was in|re-?render|join.*match)\b/,
@@ -131,10 +134,16 @@ const KB: QA[] = [
   },
 ]
 
-export function answerFor(text: string, power: number, signedIn: boolean, brandName = 'TKO'): string {
+export function answerFor(
+  text: string,
+  power: number,
+  signedIn: boolean,
+  brandName = 'TKO',
+  codeRedemptionEnabled = CODE_REDEMPTION_ENABLED,
+): string {
   const t = text.toLowerCase().trim()
   const hit = KB.find((q) => q.test.test(t))
-  if (hit) return hit.answer({ power, signedIn, brandName })
+  if (hit) return hit.answer({ power, signedIn, brandName, codeRedemptionEnabled })
   // SECOND PASS, not a replacement. The table above stays authoritative for
   // everything it already answers; src/lib/answerBank.ts covers what it does
   // not — the walkthroughs generated from guides.ts, the tier feature lists

@@ -39,7 +39,7 @@ import { useUnreadNotifications } from '@/hooks/useUnreadNotifications'
 import { useInstallLabel } from '@/hooks/useInstallLabel'
 import { InstallAppButton } from '@/components/InstallAppButton'
 import { useLeagueTheme } from '@/components/LeagueThemeProvider'
-import { IS_MOBILE_STORE_BUILD } from '@/lib/storeBuild'
+import { CODE_REDEMPTION_ENABLED, IS_MOBILE_STORE_BUILD } from '@/lib/storeBuild'
 
 type NavItem = {
   to: string
@@ -173,7 +173,7 @@ export function Sidebar() {
 
       <div className="border-t border-dark-border p-2">
         {!IS_MOBILE_STORE_BUILD && <NavRow to="/upgrade" label="Membership" Icon={Sparkles} />}
-        <NavRow to="/redeem" label="Redeem pass" Icon={Ticket} />
+        {CODE_REDEMPTION_ENABLED && <NavRow to="/redeem" label="Redeem pass" Icon={Ticket} />}
         {/* THE INSTALL IS THE INSTALL, not a trip to the pitch page. Operator
             2026-08-07: "shouldn't be taken to TKO.cam to download app.. should
             just be able to download right from the more link.. that should

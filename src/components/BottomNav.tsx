@@ -36,7 +36,7 @@ import { useAuth } from '@/hooks/useAuth'
 import { supabase } from '@/lib/supabase'
 import { useUnreadNotifications } from '@/hooks/useUnreadNotifications'
 import { InstallAppButton } from '@/components/InstallAppButton'
-import { IS_MOBILE_STORE_BUILD } from '@/lib/storeBuild'
+import { CODE_REDEMPTION_ENABLED, IS_MOBILE_STORE_BUILD } from '@/lib/storeBuild'
 import { CreateIntentPicker } from '@/components/CreateIntentPicker'
 import { useLeagueTheme } from '@/components/LeagueThemeProvider'
 
@@ -137,7 +137,9 @@ export function BottomNav() {
         ]
       : []),
     { to: '/oracle', label: 'Oracle calls', Icon: Bot },
-    { to: '/redeem', label: 'Redeem pass', Icon: Ticket },
+    ...(CODE_REDEMPTION_ENABLED
+      ? [{ to: '/redeem', label: 'Redeem pass', Icon: Ticket }]
+      : []),
     // NO INSTALL ROW HERE. Operator 2026-08-07: "shouldn't be taken to TKO.cam
     // to download app.. should just be able to download right from the more
     // link.. that should start the download."
