@@ -32,7 +32,12 @@ workflows:
         script: npm ci
 
       - name: Run unit and integration tests
-        script: npm test -- --testTimeout=15000
+        script: |
+          # Keep generic host/API fixtures deterministic during tests. The SSL
+          # native slug and production API base remain set for the build steps.
+          VITE_NATIVE_LEAGUE_SLUG="" \
+          VITE_API_BASE="" \
+          npm test -- --testTimeout=15000
 
       - name: Build the SSL web application
         script: npm run build
