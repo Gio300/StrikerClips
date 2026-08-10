@@ -18,6 +18,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useAuth } from '@/hooks/useAuth'
 import { useWallet } from '@/hooks/useWallet'
 import { callFn } from '@/lib/backend'
+import { WAGERING_UI_ENABLED } from '@/lib/storeBuild'
 
 export interface OracleBetChoice {
   key: string
@@ -47,14 +48,28 @@ type BettableArtifact = { id: string; name: string; rarity: string; origin: stri
 type Config = {
   eligible: boolean
   reason?: string
-  min_bet: number
-  min_stake_kind: StakeKind
-  oracle_tickets: number
-  existing_bet: { choice: string; stake_kind: string; stake_amount: number; status: string } | null
+  min_bet?: number
+  min_stake_kind?: StakeKind
+  oracle_tickets?: number
+  existing_bet?: { choice: string; stake_kind: string; stake_amount: number; status: string } | null
   artifacts?: BettableArtifact[]
+  match_ref?: string | null
+  match_state?: {
+    phase?: 'waiting' | 'active' | 'result_pending' | 'finished' | 'uncertain'
+    match_ref?: string | null
+    started_at?: string | null
+    ended_at?: string | null
+    last_clock_seconds?: number | null
+    confidence?: number | null
+  } | null
 }
 
-export function OracleBet({ streamId, matchRef, choices, title = 'Oracle bet', className = '' }: OracleBetProps) {
+export function OracleBet(props: OracleBetProps) {
+  if (!WAGERING_UI_ENABLED) return null
+  return <OracleBetEnabled {...props} />
+}
+
+function OracleBetEnabled({ streamId, matchRef, choices, title = 'Oracle bet', className = '' }: OracleBetProps) {
   const { user } = useAuth()
   const wallet = useWallet()
   const opts = choices && choices.length >= 2 ? choices : DEFAULT_CHOICES
@@ -73,10 +88,8 @@ export function OracleBet({ streamId, matchRef, choices, title = 'Oracle bet', c
   // Ask the server whether a bet is legal HERE, plus the minimum + my tickets.
   useEffect(() => {
     let cancelled = false
-    async function load() {
-      setLoading(true)
-      setLocked(false)
-      setNote(null)
+    async function load(initial = false) {
+      if (initial) setLoading(true)
       const res = await callFn<Config & { ok: boolean }>('oracle-bet-config', { streamId, matchRef })
       if (cancelled) return
       if (res && res.eligible) {
@@ -92,8 +105,9 @@ export function OracleBet({ streamId, matchRef, choices, title = 'Oracle bet', c
       }
       setLoading(false)
     }
-    load()
-    return () => { cancelled = true }
+    void load(true)
+    const timer = window.setInterval(() => { void load(false) }, 8_000)
+    return () => { cancelled = true; window.clearInterval(timer) }
   }, [streamId, matchRef])
 
   const minBet = config?.min_bet ?? 1
@@ -109,7 +123,12 @@ export function OracleBet({ streamId, matchRef, choices, title = 'Oracle bet', c
     if (!canBet || !choice) return
     setBusy(true)
     setNote(null)
-    const payload: Record<string, unknown> = { matchRef, streamId, choice, stakeKind }
+    const payload: Record<string, unknown> = {
+      matchRef: config?.match_ref || config?.match_state?.match_ref || matchRef,
+      streamId,
+      choice,
+      stakeKind,
+    }
     if (stakeKind === 'artifact') payload.artifactId = artifactId
     else payload.amount = amount
     const res = await callFn<{ ok: boolean; reason?: string; oracle_tickets?: number }>('oracle-bet', payload)
@@ -130,7 +149,29 @@ export function OracleBet({ streamId, matchRef, choices, title = 'Oracle bet', c
 
   // Non-eligible streams show nothing at all (bet is live-host only).
   if (loading) return null
-  if (!config || !config.eligible) return null
+  if (!config) return null
+  if (!config.eligible) {
+    const visibleReasons = new Set([
+      'match-state-unavailable',
+      'match-state-uncertain',
+      'match-underway',
+      'result-pending',
+      'match-finished',
+    ])
+    if (!visibleReasons.has(String(config.reason || ''))) return null
+    return (
+      <div className={`rounded-xl border border-amber-500/30 bg-amber-500/5 p-4 ${className}`}>
+        <div className="flex items-center gap-2">
+          <CoinIcon />
+          <h3 className="text-sm font-bold text-amber-200">Oracle match status</h3>
+        </div>
+        <p className="mt-2 text-sm text-gray-300">{reasonText(config.reason)}</p>
+        {config.match_state?.last_clock_seconds != null && (
+          <p className="mt-1 text-xs text-gray-500">Detected match clock: {formatClock(config.match_state.last_clock_seconds)}</p>
+        )}
+      </div>
+    )
+  }
 
   return (
     <div className={`rounded-xl border border-amber-500/40 bg-amber-500/5 p-4 ${className}`}>
@@ -262,8 +303,19 @@ function reasonText(reason?: string): string {
     case 'artifact-in-use': return 'That artifact is already staked in a live bet.'
     case 'not-live': case 'no-stream': return 'Betting is only open on a live, host-tier stream.'
     case 'not-host-tier': return 'Betting is available on host-tier streams only.'
+    case 'match-state-unavailable': return 'Oracle is waiting for the match detector to confirm the game state.'
+    case 'match-state-uncertain': return 'Oracle cannot verify the match state yet. Betting stays locked for safety.'
+    case 'match-underway': return 'The match has started. New bets are closed.'
+    case 'result-pending': return 'The match ended and Oracle is checking the result.'
+    case 'match-finished': return 'This match is finished. Oracle has closed betting.'
+    case 'stale-match': return 'A new match was detected. Refresh before placing a bet.'
     default: return 'That bet couldn’t be placed.'
   }
+}
+
+function formatClock(totalSeconds: number): string {
+  const safe = Math.max(0, Math.floor(totalSeconds))
+  return `${Math.floor(safe / 60)}:${String(safe % 60).padStart(2, '0')}`
 }
 
 function CoinIcon() {

@@ -80,6 +80,44 @@ describe('POST /api/internal/credit-produced canonical feed writes', () => {
     expect(versions.rows[1].participant_ids).toEqual(expect.arrayContaining(players))
   })
 
+  // The chips under a produced video read player_handle off clip_records
+  // through the PUBLIC /api/db select. The route used to drop the handle the
+  // pipeline sent, so every chip rendered the placeholder "player".
+  it('stores the gamertag each angle was sent with, publicly readable', async () => {
+    const pool = makeDb()
+    const app = createApp(pool)
+    const hammy = await signUp(app, 'hammyroutecredit')
+    const jerry = await signUp(app, 'jerryroutecredit')
+
+    const response = await request(app)
+      .post('/api/internal/credit-produced')
+      .set('x-tko-service', SERVICE_KEY)
+      .send({
+        composite_youtube_id: 'produced-handles',
+        match_key: 'match-handles',
+        angles: [
+          { user_id: hammy, handle: '@Hammy', source_youtube_id: 'raw-1' },
+          { user_id: jerry, handle: 'MrJerrySS', source_youtube_id: 'raw-2' },
+        ],
+      })
+    expect(response.status).toBe(200)
+    expect(response.body.credited.map((c: any) => c.player_handle).sort()).toEqual(['Hammy', 'MrJerrySS'])
+
+    // Exactly the read the app makes, with NO auth header at all.
+    const read = await request(app).post('/api/db').send({
+      table: 'clip_records',
+      action: 'select',
+      columns: 'composite_youtube_id, player_id, player_handle',
+      filters: [{ col: 'composite_youtube_id', op: 'eq', val: 'produced-handles' }],
+    })
+    expect(read.status).toBe(200)
+    const byPlayer = Object.fromEntries(
+      read.body.data.map((row: any) => [row.player_id, row.player_handle]),
+    )
+    expect(byPlayer[hammy]).toBe('Hammy')
+    expect(byPlayer[jerry]).toBe('MrJerrySS')
+  })
+
   it('fails closed without the service key', async () => {
     const app = createApp(makeDb())
     const response = await request(app)

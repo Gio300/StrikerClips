@@ -2,12 +2,17 @@ import { useEffect, useState } from 'react'
 import { Avatar } from '@/components/ui'
 import { supabase } from '@/lib/supabase'
 import { useEntitlements } from '@/hooks/useEntitlements'
-import { tierLevel, LEVEL_TIER_NAME } from '@/lib/tiers'
+import { tierLevel, LEVEL_TIER_NAME, isTopTierKey } from '@/lib/tiers'
 import { extractYouTubeId } from '@/lib/youtubeApi'
 import {
   addAngle,
   loadAngles,
   removeAngle,
+  stopAngle,
+  restartAngle,
+  refreshLiveAngles,
+  setHostFeed,
+  assembleTeam,
   searchPeople,
   inviteToCoStream,
   loadStreamInvites,
@@ -59,6 +64,29 @@ function UserPlusIcon({ className = '' }: { className?: string }) {
     </svg>
   )
 }
+function StopIcon({ className = '' }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="currentColor" className={className} aria-hidden>
+      <rect x="6" y="6" width="12" height="12" rx="1.5" />
+    </svg>
+  )
+}
+function PlayIcon({ className = '' }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="currentColor" className={className} aria-hidden>
+      <path d="M8 5v14l11-7z" />
+    </svg>
+  )
+}
+function UsersIcon({ className = '' }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden>
+      <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
+      <circle cx="9" cy="7" r="4" />
+      <path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75" />
+    </svg>
+  )
+}
 
 type Props = {
   liveStreamId: string
@@ -70,6 +98,11 @@ export function HostAnglePanel({ liveStreamId, onChanged }: Props) {
   const { tier } = useEntitlements()
   const myLevel = tierLevel(tier)
   const myTierName = LEVEL_TIER_NAME[Math.max(1, myLevel)] ?? 'Pro'
+  const isTopTier = isTopTierKey(tier)
+
+  // The host's OWN feed (angle 1) status — stopping it never ends the session.
+  const [hostFeedStatus, setHostFeedStatus] = useState<'live' | 'stopped'>('live')
+  const [teamNote, setTeamNote] = useState('')
 
   const [angles, setAngles] = useState<LiveAngleRow[]>([])
   const [query, setQuery] = useState('')
@@ -91,6 +124,15 @@ export function HostAnglePanel({ liveStreamId, onChanged }: Props) {
 
   async function refresh() {
     setAngles(await loadAngles(liveStreamId))
+    try {
+      const { data } = await supabase
+        .from('live_streams')
+        .select('host_feed_status')
+        .eq('id', liveStreamId)
+        .maybeSingle()
+      const s = (data as { host_feed_status?: string } | null)?.host_feed_status
+      setHostFeedStatus(s === 'stopped' ? 'stopped' : 'live')
+    } catch { /* best-effort */ }
     const rows = await loadStreamInvites(liveStreamId)
     setInvites(rows)
     const ids = Array.from(new Set(rows.map((r) => r.invitee_id)))
@@ -188,6 +230,72 @@ export function HostAnglePanel({ liveStreamId, onChanged }: Props) {
     if (ok) { await refresh(); onChanged?.() }
   }
 
+  // Stop a participant's feed but KEEP the slot (re-startable), then restart it.
+  async function stopOne(angleId: string) {
+    setBusyId(angleId)
+    const res = await stopAngle(angleId)
+    setBusyId(null)
+    if (res.ok) { await refresh(); onChanged?.() }
+    else setError(res.error || 'Could not stop that feed.')
+  }
+  async function restartOne(angleId: string) {
+    setBusyId(angleId)
+    const res = await restartAngle(angleId)
+    setBusyId(null)
+    if (res.ok) { await refresh(); onChanged?.() }
+    else setError(res.error || 'Could not restart that feed.')
+  }
+
+  async function refreshAllFeeds() {
+    setError('')
+    setBusyId('feeds-refresh')
+    const res = await refreshLiveAngles(liveStreamId)
+    setBusyId(null)
+    if (!res.ok) {
+      setError(res.error || 'Could not refresh camera feeds.')
+      return
+    }
+    setAngles(res.angles)
+    setTeamNote(res.waiting > 0
+      ? `${res.updated} feed${res.updated === 1 ? '' : 's'} ready; ${res.waiting} still waiting to go live.`
+      : `All ${res.updated} camera feed${res.updated === 1 ? '' : 's'} ready.`)
+    onChanged?.()
+  }
+
+  // Stop / start the host's OWN feed (angle 1) without ending the session.
+  async function toggleHostFeed() {
+    const action = hostFeedStatus === 'live' ? 'stop' : 'start'
+    setBusyId('host-feed')
+    const res = await setHostFeed(liveStreamId, action)
+    setBusyId(null)
+    if (res.ok) { await refresh(); onChanged?.() }
+    else setError(res.error || 'Could not update your feed.')
+  }
+
+  // Re-resolve the host's concrete active broadcast without stopping the show.
+  async function refreshHostFeed() {
+    setBusyId('host-refresh')
+    const res = await setHostFeed(liveStreamId, 'start')
+    setBusyId(null)
+    if (res.ok) { await refresh(); onChanged?.() }
+    else setError(res.error || 'Could not refresh your live feed.')
+  }
+
+  // TOP TIER: auto-detect live teammates and add them all as angles at once.
+  async function assemble() {
+    setTeamNote('')
+    setBusyId('assemble')
+    const res = await assembleTeam(liveStreamId)
+    setBusyId(null)
+    if (res.ok) {
+      setTeamNote(res.added > 0 ? `Added ${res.added} live teammate${res.added === 1 ? '' : 's'}.` : 'No teammates are live right now.')
+      await refresh()
+      onChanged?.()
+    } else {
+      setTeamNote(res.error || 'Could not assemble your team.')
+    }
+  }
+
   return (
     <div className="rounded-xl border border-dark-border bg-dark-card overflow-hidden">
       <div className="px-3 py-2 border-b border-dark-border flex items-center gap-1.5 text-xs uppercase tracking-wider text-gray-400">
@@ -280,39 +388,126 @@ export function HostAnglePanel({ liveStreamId, onChanged }: Props) {
           </button>
         )}
 
-        {/* Current added angles */}
-        {angles.length > 0 && (
+        {/* Current angles + their live/stopped/reconnecting state. The host's own
+            feed (angle 1) can be stopped/started here WITHOUT ending the show. */}
+        {(angles.length > 0 || hostFeedStatus === 'stopped') && (
           <div className="pt-1">
-            <p className="text-[11px] uppercase tracking-wider text-gray-500 mb-1.5">
-              Angles on this show ({angles.length + 1})
-            </p>
+            <div className="mb-1.5 flex items-center justify-between gap-2">
+              <p className="text-[11px] uppercase tracking-wider text-gray-500">
+                Angles on this show ({angles.length + 1})
+              </p>
+              {angles.length > 0 && (
+                <button
+                  type="button"
+                  onClick={refreshAllFeeds}
+                  disabled={busyId === 'feeds-refresh'}
+                  className="rounded-md border border-dark-border px-2 py-1 text-[11px] font-semibold text-accent hover:border-accent disabled:opacity-50"
+                >
+                  {busyId === 'feeds-refresh' ? 'Checking...' : 'Refresh feeds'}
+                </button>
+              )}
+            </div>
             <ul className="space-y-1.5">
-              <li className="flex items-center gap-2 text-sm text-gray-300">
-                <span className="inline-block w-2 h-2 rounded-full bg-kunai animate-pulse" />
-                You (angle 1)
+              <li className="flex items-center justify-between gap-2 text-sm text-gray-300">
+                <span className="min-w-0 flex items-center gap-2">
+                  <span className={`inline-block w-2 h-2 rounded-full ${hostFeedStatus === 'stopped' ? 'bg-gray-600' : 'bg-kunai animate-pulse'}`} />
+                  <span className="truncate">You (angle 1)</span>
+                  {hostFeedStatus === 'stopped' && <span className="text-[10px] uppercase tracking-wider text-gray-500">stopped</span>}
+                </span>
+                <span className="shrink-0 inline-flex items-center gap-1">
+                  {hostFeedStatus === 'live' && (
+                    <button
+                      type="button"
+                      onClick={refreshHostFeed}
+                      disabled={busyId === 'host-refresh'}
+                      title="Find my current broadcast again"
+                      className="rounded-md border border-dark-border px-2 py-1 text-[11px] font-semibold text-accent hover:border-accent disabled:opacity-50"
+                    >
+                      Refresh live
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={toggleHostFeed}
+                    disabled={busyId === 'host-feed'}
+                    title={hostFeedStatus === 'live' ? 'Stop my feed (keeps the show live)' : 'Restart my feed'}
+                    className="inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[11px] font-semibold disabled:opacity-50 border-dark-border text-gray-300 hover:border-accent/60 hover:text-white"
+                  >
+                    {hostFeedStatus === 'live'
+                      ? <><StopIcon className="w-3 h-3" /> Stop</>
+                      : <><PlayIcon className="w-3 h-3" /> Restart</>}
+                  </button>
+                </span>
               </li>
               {angles.map((a, i) => {
                 const embeddable = !!extractYouTubeId(a.youtube_url ?? '')
+                const status = a.status ?? 'live'
+                const dotClass =
+                  status === 'reconnecting' || !embeddable ? 'bg-yellow-400 animate-pulse'
+                    : status === 'stopped' ? 'bg-gray-600'
+                    : 'bg-leaf'
                 return (
                   <li key={a.id} className="flex items-center justify-between gap-2">
                     <span className="min-w-0 flex items-center gap-2 text-sm text-gray-300">
+                      <span className={`inline-block w-2 h-2 rounded-full ${dotClass}`} />
                       <span className="text-gray-500">{i + 2}.</span>
                       <span className="truncate">{a.label || 'Added angle'}</span>
-                      {!embeddable && <span className="text-[10px] text-gray-500">(external)</span>}
+                      {status === 'reconnecting' && <span className="text-[10px] uppercase tracking-wider text-yellow-400">reconnecting…</span>}
+                      {status === 'stopped' && <span className="text-[10px] uppercase tracking-wider text-gray-500">stopped</span>}
+                      {!embeddable && status !== 'stopped' && <span className="text-[10px] text-yellow-400">finding live feed...</span>}
                     </span>
-                    <button
-                      type="button"
-                      onClick={() => drop(a.id)}
-                      disabled={busyId === a.id}
-                      title="Remove this angle"
-                      className="shrink-0 text-gray-500 hover:text-kunai disabled:opacity-50"
-                    >
-                      <TrashIcon className="w-4 h-4" />
-                    </button>
+                    <span className="shrink-0 flex items-center gap-1.5">
+                      {status === 'live' && embeddable ? (
+                        <button
+                          type="button"
+                          onClick={() => stopOne(a.id)}
+                          disabled={busyId === a.id}
+                          title="Stop this feed (keeps the slot)"
+                          className="text-gray-500 hover:text-white disabled:opacity-50"
+                        >
+                          <StopIcon className="w-4 h-4" />
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => restartOne(a.id)}
+                          disabled={busyId === a.id}
+                          title="Restart this feed"
+                          className="text-gray-500 hover:text-accent disabled:opacity-50"
+                        >
+                          <PlayIcon className="w-4 h-4" />
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => drop(a.id)}
+                        disabled={busyId === a.id}
+                        title="Remove this angle"
+                        className="text-gray-500 hover:text-kunai disabled:opacity-50"
+                      >
+                        <TrashIcon className="w-4 h-4" />
+                      </button>
+                    </span>
                   </li>
                 )
               })}
             </ul>
+          </div>
+        )}
+
+        {/* TOP TIER: auto-assemble live teammates into the show in one tap. */}
+        {isTopTier && (
+          <div className="pt-1">
+            <button
+              type="button"
+              onClick={assemble}
+              disabled={busyId === 'assemble'}
+              className="inline-flex items-center gap-1.5 rounded-md border border-accent/50 px-3 py-1.5 text-xs font-semibold text-accent hover:bg-accent/10 disabled:opacity-50"
+            >
+              <UsersIcon className="w-3.5 h-3.5" />
+              {busyId === 'assemble' ? 'Assembling…' : 'Assemble live teammates'}
+            </button>
+            {teamNote && <p className="mt-1 text-[11px] text-gray-400">{teamNote}</p>}
           </div>
         )}
 

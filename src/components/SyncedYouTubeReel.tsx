@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { loadYouTubeApi, extractYouTubeId, CLEAN_PLAYER_VARS, type YTPlayer } from '@/lib/youtubeApi'
 import { fetchActionCurve, type ActionCurve } from '@/lib/youtubeActionCurve'
 import { CroppedFrame, TkoWatermark } from '@/components/CroppedFrame'
+import { LeagueWatermark } from '@/components/LeagueWatermark'
 import { StageChat } from '@/components/StageChat'
 import {
   initialState,
@@ -324,6 +325,7 @@ function ConcatPlayer({ clips }: { clips: Clip[] }) {
           <div ref={containerRef} className="w-full h-full" />
         </CroppedFrame>
         <TkoWatermark />
+        <LeagueWatermark />
         <CenterPlayOverlay visible={!playing} onPlay={startPlayback} />
       </div>
       <div className="px-3 py-2 border-t border-dark-border bg-dark-card flex items-center gap-2">
@@ -456,6 +458,7 @@ function SyncedGridPlayer({ clips, layout }: { clips: Clip[]; layout: 'grid' | '
         onTouchEnd={swipe.onTouchEnd}
       >
         <TkoWatermark />
+        <LeagueWatermark />
         {clips.map((c, idx) => {
           // In the phone fallback every player stays mounted (destroying and
           // rebuilding YT iframes on every tap would be slow and lose position);
@@ -1209,6 +1212,7 @@ function DirectorPlayer({ clips, mode }: { clips: Clip[]; mode: DirectorMode }) 
 
         {/* TKO watermark stands in for the YouTube logo (stage-level, not per-pane) */}
         <TkoWatermark />
+        <LeagueWatermark />
 
         {/* HUD */}
         {shot && (

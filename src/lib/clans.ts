@@ -106,6 +106,19 @@ export function can(role: ClanRole, action: ClanAction): boolean {
   return CLAN_RANK_PERMS[role]?.has(action) ?? false
 }
 
+/** The dedicated management dashboard is intentionally limited to these ranks. */
+export function isClanManagerRole(role: ClanRole | null | undefined): boolean {
+  return role === 'leader' || role === 'officer'
+}
+
+/**
+ * Members may remove their own membership row. The leader must keep the clan
+ * anchored to an owner, so the UI never offers leader self-removal.
+ */
+export function canLeaveClan(role: ClanRole | null | undefined): boolean {
+  return role != null && role !== 'leader'
+}
+
 /** Numeric authority level for rank-relative comparisons (higher = stronger). */
 export function rankLevel(role: ClanRole): number {
   switch (role) {

@@ -28,7 +28,7 @@ export const FREE_FEATURES: Feature[] = ['watch', 'basic_reel', 'clans_chat', 'b
 
 export const FEATURE_LABELS: Record<Feature, string> = {
   watch: 'Watch reels & streams',
-  basic_reel: 'Single-angle reels',
+  basic_reel: 'Manual single-angle reel editor',
   clans_chat: 'Clans & live chat',
   browser: 'In-app browser',
   redeem: 'Redeem passes',
@@ -39,7 +39,7 @@ export const FEATURE_LABELS: Record<Feature, string> = {
   music_library: 'Licensed music library',
   no_ad_gate: 'Skip the create-gate ad wait',
   live_studio: 'Live studio (run a stream link)',
-  ai_commentary: 'AI play-by-play voiceover',
+  ai_commentary: 'Coach Dee strategy voiceover',
 }
 
 export function isFree(feature: Feature): boolean {
@@ -47,14 +47,41 @@ export function isFree(feature: Feature): boolean {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-//  AD-FREE TIER — a low, $1.99/mo tier whose ONLY perk is "no ads".
+//  AD-FREE TIER — RETIRED 2026-08. NO LONGER SOLD, STILL HONOURED.
+//  DO NOT DELETE THIS KEY.
 //
-//  `ad_free` is a recognized tier key but is deliberately NOT part of the
-//  streaming ladder below (it never appears in TIER_LEVEL), so adding it can't
-//  shift any placement gate. It grants no streaming perks — just hides ads.
+//  `ad_free` was a $1.99/mo tier whose ONLY perk is "no ads". It is deliberately
+//  NOT part of the streaming ladder below (it never appears in TIER_LEVEL), so
+//  it can't shift any placement gate. It grants no streaming perks — just hides
+//  ads.
+//
+//  WHY IT WAS RETIRED — the flat fee, not the percentage. Stripe takes
+//  2.9% + $0.30 on a US card. At $1.99 that is $0.3577, i.e. 18.0% of the sale,
+//  and the FLAT $0.30 alone is 15.1 of those 18.0 points. Any SKU priced under
+//  $4.23 pays Stripe more than 10% (0.029p + 0.30 = 0.10p => p = $4.225), so
+//  $1.99 was structurally the worst price on the ladder. $4.99 `pro` pays 8.9%,
+//  is now the entry paid tier, and already includes no ads.
+//
+//  WHY THE KEY STAYS. Retiring a SKU cancels no Stripe subscription — those
+//  cards keep being charged until the operator or the customer stops them. And
+//  people still ARRIVE on this tier without paying: COMPETITOR_TIER in
+//  src/lib/tkoKing.ts grants it to every tournament registrant, GIFT_TIER in
+//  src/lib/artifacts.ts is a gift rather than a sale, and a `redeem_codes` row
+//  can carry it. So every reader of the string must keep working: hidesAds()
+//  below, ART_UPLOAD_LIMIT / PREDICTION_QUOTA, RERENDER_BUDGET, autoReelPolicy,
+//  TIER_LABELS, and FREE_TIERS in the Loras factory.
+//
+//  THE SHOP IS ELSEWHERE: PURCHASABLE_TIERS in server/app.ts and the TIERS array
+//  in src/pages/Upgrade.tsx. That is where the retirement belongs and where it
+//  was done. Retiring it HERE instead would have stopped renewals while Stripe
+//  kept charging.
+//
+//  Note the shape of hidesAds() below — a DENYLIST (`t !== '' && t !== 'free'`)
+//  rather than an allowlist of known keys. That is why retiring a SKU cannot
+//  accidentally un-hide ads for someone still holding it. Keep it that way.
 // ─────────────────────────────────────────────────────────────────────────
 
-/** All recognized non-free tier keys (streaming ladder + the ad-free tier). */
+/** All recognized non-free tier keys (streaming ladder + the retired ad-free tier). */
 export type TierKey = '' | 'ad_free' | 'pro' | 'supporter' | 'creator'
 
 /**
@@ -72,8 +99,14 @@ export function isTopTierKey(tier: string | undefined | null): boolean {
 
 /**
  * True if a user on this tier should have ads hidden. Any non-free tier hides
- * ads: the dedicated `ad_free` tier plus every streaming tier (pro / supporter
- * / creator). Free ('' or 'free') still sees ads.
+ * ads: the retired-but-honoured `ad_free` tier plus every streaming tier (pro /
+ * supporter / creator). Free ('' or 'free') still sees ads.
+ *
+ * DENYLIST ON PURPOSE. This answers a question about a string that OUTLIVES the
+ * catalogue — a tier can stop being sold while thousands of rows still carry it
+ * — so it asks "is this not free?" rather than matching a list of current SKUs.
+ * An allowlist here would have turned the ad_free retirement into ads reappearing
+ * for people Stripe is still charging.
  */
 export function hidesAds(tier: string | undefined | null): boolean {
   const t = tier ?? ''

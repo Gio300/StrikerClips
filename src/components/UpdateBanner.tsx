@@ -16,10 +16,9 @@ import { useAppUpdate } from '@/hooks/useAppUpdate'
  * the new build already signed in.
  *
  * PLACEMENT (phone-first): docks above BOTH the fixed <BottomNav/> (z-65, ~3.5rem
- * tall) and the "Ask TKO" command FAB (which sits at 4.75rem + safe-area). At
- * `sm` and up the bottom nav is gone and the FAB tucks to bottom-5, so the toast
- * moves to the bottom-right above it. z-[68] keeps it under the More sheet
- * (z-70) and the Ask-TKO panel (z-75), which are modal.
+ * tall) and the global chat button. It does not guess that height:
+ * `--tko-chat-fab-clear` is the first free line above the button. z-[68] keeps it under
+ * the More sheet (z-70) and the Ask-TKO panel (z-75), which are modal.
  */
 export function UpdateBanner() {
   const { updateReady, nativeUpdate, applyUpdate, dismiss } = useAppUpdate()
@@ -29,7 +28,7 @@ export function UpdateBanner() {
     <div
       role="status"
       aria-live="polite"
-      className="fixed z-[68] left-3 right-3 bottom-[calc(8.5rem+env(safe-area-inset-bottom))] sm:left-auto sm:right-4 sm:bottom-20 sm:w-[23rem] animate-slide-up"
+      className="fixed z-[68] left-3 right-3 bottom-[var(--tko-chat-fab-clear)] sm:left-auto sm:right-4 sm:w-[23rem] animate-slide-up"
     >
       <div className="flex items-center gap-3 rounded-xl border border-kunai/40 bg-dark-card/95 backdrop-blur px-3.5 py-3 shadow-2xl">
         <span className="relative flex h-2.5 w-2.5 shrink-0" aria-hidden>

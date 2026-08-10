@@ -19,6 +19,10 @@
 
 import type { LibraryVideo } from './describeClip'
 import { extractYouTubeId } from './youtubeApi'
+import {
+  normalizeConnectedYouTubeChannelUrl,
+  youtubeHandleFromChannelUrl,
+} from './signupYouTube'
 
 const CLIENT_ID = import.meta.env.VITE_YT_CLIENT_ID as string | undefined
 const API_KEY = import.meta.env.VITE_YT_API_KEY as string | undefined
@@ -380,4 +384,27 @@ export function loadLibrary(userId: string): LibraryVideo[] {
 
 export function clearLibrary(userId: string): void {
   try { localStorage.removeItem(cacheKey(userId)) } catch { /* ignore */ }
+}
+
+/** Replace only the cached channel identity, preserving freshly loaded clips. */
+export function rememberYouTubeChannel(userId: string, rawUrl: string): void {
+  const normalized = normalizeConnectedYouTubeChannelUrl(rawUrl)
+  if (!normalized) return
+  try {
+    localStorage.removeItem(handleKey(userId))
+    localStorage.removeItem(channelKey(userId))
+  } catch { /* ignore */ }
+  const handle = youtubeHandleFromChannelUrl(normalized)
+  if (handle) saveHandle(userId, handle)
+  const parts = new URL(normalized).pathname.split('/').filter(Boolean)
+  if (parts[0] === 'channel' && parts[1]) saveChannelId(userId, parts[1])
+}
+
+/** Remove every device-local trace of the old connected account. */
+export function clearYouTubeConnection(userId: string): void {
+  clearLibrary(userId)
+  try {
+    localStorage.removeItem(handleKey(userId))
+    localStorage.removeItem(channelKey(userId))
+  } catch { /* ignore */ }
 }

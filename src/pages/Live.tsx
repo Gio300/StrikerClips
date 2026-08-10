@@ -22,6 +22,7 @@ import { StatCheckQueue } from '@/components/StatCheckQueue'
 import { InviteMenu } from '@/components/InviteMenu'
 import { StreamChat } from '@/components/StreamChat'
 import { ShareButton } from '@/components/ShareButton'
+import { canonicalShareUrl } from '@/lib/canonicalUrl'
 import { CroppedFrame, TkoWatermark } from '@/components/CroppedFrame'
 import { extractYouTubeId, CLEAN_EMBED_PARAMS } from '@/lib/youtubeApi'
 import type { LiveGroup } from '@/types/database'
@@ -720,7 +721,7 @@ function StreamsTab() {
                   <>
                     <div className="relative aspect-video">
                       {videoId && (
-                        <CroppedFrame>
+                        <CroppedFrame overscan={1}>
                           <iframe
                             key={`focus-${focused.id}-${focusedUnmuted ? 'on' : 'off'}`}
                             src={ytEmbedSrc(videoId, focusedUnmuted)}
@@ -782,7 +783,7 @@ function StreamsTab() {
                 >
                   <div className="aspect-video relative">
                     {videoId && (
-                      <CroppedFrame>
+                      <CroppedFrame overscan={1}>
                         <iframe
                           key={`thumb-${stream.id}-${unmuted ? 'on' : 'off'}`}
                           src={ytEmbedSrc(videoId, unmuted)}
@@ -836,7 +837,7 @@ function StreamsTab() {
                     <div className="p-4 flex items-center justify-between gap-2">
                       <h3 className="font-medium truncate">{stream.title ?? 'Stream'}</h3>
                       <ShareButton
-                        url={`https://tko.cam/watch/${stream.id}?u=${encodeURIComponent(stream.youtube_url)}${stream.title ? `&t=${encodeURIComponent(stream.title)}` : ''}`}
+                        url={canonicalShareUrl(`/watch/${stream.id}?u=${encodeURIComponent(stream.youtube_url)}${stream.title ? `&t=${encodeURIComponent(stream.title)}` : ''}`)}
                         title={stream.title ?? 'Live on TKO'}
                         text="Watch this live on TKO"
                       />

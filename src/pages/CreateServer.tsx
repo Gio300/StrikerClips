@@ -21,7 +21,7 @@ type ClanWizardStep = 'target' | 'configure' | 'review'
 const CLAN_PURPOSES = {
   competitive: {
     title: 'Competitive',
-    description: 'Build a roster for battles, rankings, and Conquest.',
+    description: 'Build reusable lineups for battles, tournaments, and Conquest.',
     Icon: Swords,
   },
   creator: {
@@ -82,13 +82,17 @@ export function CreateServer() {
       return
     }
 
+    if (!user) {
+      setError('Sign in before creating a clan.')
+      return
+    }
     setLoading(true)
     const { data: server, error: serverErr } = await supabase
       .from('servers')
       .insert({
         name: nameCheck.value,
         clan_tag: tagCheck.value || null,
-        owner_id: user?.id,
+        owner_id: user.id,
         kind: 'clan',
         max_members: 100,
         is_recruiting: isRecruiting,
@@ -107,13 +111,28 @@ export function CreateServer() {
       return
     }
 
-    await supabase.from('channels').insert({ server_id: server.id, name: 'general', type: 'text' })
-    await supabase
+    const { error: channelError } = await supabase
+      .from('channels')
+      .insert({ server_id: server.id, name: 'general', type: 'text' })
+    const { error: boardMemberError } = await supabase
       .from('server_members')
-      .insert({ server_id: server.id, user_id: user?.id, role: 'owner' })
-    await supabase
+      .insert({ server_id: server.id, user_id: user.id, role: 'owner' })
+    const { error: clanMemberError } = await supabase
       .from('clan_members')
-      .insert({ server_id: server.id, user_id: user?.id, role: 'leader' })
+      .insert({ server_id: server.id, user_id: user.id, role: 'leader' })
+
+    if (channelError || boardMemberError || clanMemberError) {
+      // Never strand the player with a half-created clan and a blank board.
+      // Explicit child cleanup also keeps the in-memory/mobile test backend,
+      // which has no FK cascades, aligned with production Postgres.
+      await supabase.from('channels').delete().eq('server_id', server.id)
+      await supabase.from('server_members').delete().eq('server_id', server.id)
+      await supabase.from('clan_members').delete().eq('server_id', server.id)
+      await supabase.from('servers').delete().eq('id', server.id)
+      setError('The clan could not finish setting up. Nothing was saved; please try again.')
+      setLoading(false)
+      return
+    }
     navigate(`/boards/${server.id}`)
     setLoading(false)
   }
@@ -128,6 +147,13 @@ export function CreateServer() {
 
       {step === 'target' && (
         <section className="mt-6">
+          <button
+            type="button"
+            onClick={() => navigate('/boards')}
+            className="mb-4 inline-flex min-h-10 items-center gap-2 text-sm text-gray-400 hover:text-white"
+          >
+            <ChevronLeft size={18} /> Back to clans
+          </button>
           <div className="flex items-center gap-3">
             <span className="flex h-11 w-11 items-center justify-center rounded-lg bg-dark-elevated text-kunai">
               <Shield size={22} />

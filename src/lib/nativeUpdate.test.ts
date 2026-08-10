@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   DEFAULT_ANDROID_APK_URL,
+  androidInstallUrl,
   parseNativeBuild,
   parseNativeVersionManifest,
   resolveMobileVersionUrl,
@@ -10,6 +11,17 @@ import {
 } from './nativeUpdate'
 
 describe('native Android updates', () => {
+  it('never gives a white-label league the shared TKO APK', () => {
+    expect(androidInstallUrl(true, 'Shinobi Striker League')).toBeNull()
+    expect(androidInstallUrl(true, null)).toBe(DEFAULT_ANDROID_APK_URL)
+    expect(androidInstallUrl(false, null)).toBeNull()
+  })
+
+  it('allows a league deploy to name its own Android binary explicitly', () => {
+    const sslApk = 'https://downloads.example/ssl.apk'
+    expect(androidInstallUrl(true, 'Shinobi Striker League', sslApk)).toBe(sslApk)
+  })
+
   it('parses the release manifest and supplies the default APK', () => {
     expect(
       parseNativeVersionManifest({

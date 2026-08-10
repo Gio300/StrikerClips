@@ -5,12 +5,12 @@ import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/hooks/useAuth'
 import { useEntitlements } from '@/hooks/useEntitlements'
 import { useWallet } from '@/hooks/useWallet'
-import { BRAND } from '@/lib/brand'
 import { prettyClip } from '@/lib/clipLabel'
 import { InviteMenu } from '@/components/InviteMenu'
 import { DonateButton } from '@/components/DonateButton'
 import { FollowControl } from '@/components/FollowControl'
 import { BlockControl } from '@/components/BlockControl'
+import { ProfileReportControl } from '@/components/ProfileReportControl'
 import { LiveLinkSettings } from '@/components/LiveLinkSettings'
 import { WinningsLedger } from '@/components/WinningsLedger'
 import { LiveSessionsStrip } from '@/components/LiveSessionsStrip'
@@ -19,16 +19,19 @@ import { AutoMergeStatus } from '@/components/AutoMergeStatus'
 import { CollapsibleSection } from '@/components/CollapsibleSection'
 import { ProfileTagBadge } from '@/components/TagBadge'
 import { ArtifactTagsPanel } from '@/components/ArtifactTagsPanel'
+import { MyClanRostersPanel } from '@/components/MyClanRostersPanel'
 import { UpgradeNudge } from '@/components/UpgradeNudge'
 import { DeleteAccountPanel } from '@/components/DeleteAccountPanel'
+import { ManageSubscriptionPanel } from '@/components/ManageSubscriptionPanel'
 import { DirectMessages } from '@/components/social/DirectMessages'
 import { ProfileCreatorTab } from '@/components/ProfileCreatorTab'
 import { SocialFeed } from '@/components/social/SocialFeed'
 import { AvailabilityHint, Avatar } from '@/components/ui'
 import { AvatarPicker } from '@/components/AvatarPicker'
 import { useIdentityAvailability } from '@/hooks/useIdentityAvailability'
-import { buildTrophyCloset, trophyCountLabel, type ShinobiDefeatRow } from '@/lib/tkoKing'
 import { IS_MOBILE_STORE_BUILD } from '@/lib/storeBuild'
+import { buildTrophyCloset, trophyCountLabel, type ShinobiDefeatRow } from '@/lib/tkoKing'
+import { appendUniqueById, splitExtraRowPage } from '@/lib/paging'
 import type {
   Reel,
   UserYoutubeLink,
@@ -36,8 +39,25 @@ import type {
 } from '@/types/database'
 
 const EMOJI_PICKER = ['👍', '❤️', '😂', '🔥', '👏', '💯', '🎉', '😮']
+const PROFILE_REEL_PAGE_SIZE = 24
 
-type ProfileSection = 'wall' | 'feed' | 'messages' | 'about' | 'stats'
+// 'clips' is its own tab (operator 2026-08-07: "under the me/profile they need
+// to have their clips there.. so they can look up their clips more easily").
+// It existed already, but only inside 'about' -- below Live settings and above
+// Billing on an 800-line page, which is not somewhere anyone goes looking for
+// their own videos. A person's clips are the thing they open their profile FOR.
+type ProfileSection = 'wall' | 'clips' | 'feed' | 'messages' | 'about' | 'stats'
+
+export function profileSectionLabel(section: ProfileSection): string {
+  switch (section) {
+    case 'wall': return 'Wall'
+    case 'clips': return 'Clips'
+    case 'feed': return 'News Feed'
+    case 'messages': return 'Messages'
+    case 'about': return 'About'
+    case 'stats': return 'Stats'
+  }
+}
 
 function profileSectionFromParam(value: string | null, isOwnProfile: boolean): ProfileSection {
   const normalized: ProfileSection =
@@ -45,6 +65,8 @@ function profileSectionFromParam(value: string | null, isOwnProfile: boolean): P
       ? 'messages'
       : value === 'feed' || value === 'activity'
         ? 'feed'
+        : value === 'clips' || value === 'videos' || value === 'reels'
+          ? 'clips'
         : value === 'about' || value === 'polls' || value === 'profile'
           ? 'about'
           : value === 'stats' || value === 'creator'
@@ -106,6 +128,8 @@ function ProfileContent() {
     setSearchParams(next, { replace: true })
   }
   const [reels, setReels] = useState<Reel[]>([])
+  const [hasMoreReels, setHasMoreReels] = useState(false)
+  const [loadingMoreReels, setLoadingMoreReels] = useState(false)
   const [youtubeLinks, setYoutubeLinks] = useState<UserYoutubeLink[]>([])
   const [editing, setEditing] = useState(false)
   const [username, setUsername] = useState('')
@@ -148,6 +172,8 @@ function ProfileContent() {
     async function load() {
       setNotFound(false)
       setProfileLoaded(false)
+      setReels([])
+      setHasMoreReels(false)
       try {
         if (isOwnProfile) {
           setUsername(profile?.username ?? '')
@@ -161,13 +187,20 @@ function ProfileContent() {
           setBio(data?.bio ?? '')
         }
         const [reelsRes, linksRes, followersRes, followingRes, followRes] = await Promise.all([
-          supabase.from('reels').select('*').eq('user_id', targetUserId!).order('created_at', { ascending: false }),
+          supabase
+            .from('reels')
+            .select('*')
+            .eq('user_id', targetUserId!)
+            .order('created_at', { ascending: false })
+            .range(0, PROFILE_REEL_PAGE_SIZE),
           isOwnProfile ? supabase.from('user_youtube_links').select('*').eq('user_id', targetUserId!).order('created_at', { ascending: false }) : { data: [] },
           supabase.from('follows').select('*', { count: 'exact', head: true }).eq('following_id', targetUserId!),
           supabase.from('follows').select('*', { count: 'exact', head: true }).eq('follower_id', targetUserId!),
           user ? supabase.from('follows').select('id').eq('follower_id', user.id).eq('following_id', targetUserId!).maybeSingle() : { data: null },
         ])
-        setReels(reelsRes.data ?? [])
+        const reelPage = splitExtraRowPage((reelsRes.data ?? []) as Reel[], PROFILE_REEL_PAGE_SIZE)
+        setReels(reelPage.items)
+        setHasMoreReels(reelPage.hasMore)
         if (isOwnProfile) setYoutubeLinks((linksRes as { data?: UserYoutubeLink[] }).data ?? [])
         setFollowersCount((followersRes as { count?: number }).count ?? 0)
         setFollowingCount((followingRes as { count?: number }).count ?? 0)
@@ -181,6 +214,22 @@ function ProfileContent() {
     }
     load()
   }, [targetUserId, isOwnProfile, user?.id, profile])
+
+  async function loadMoreReels() {
+    if (!targetUserId || loadingMoreReels || !hasMoreReels) return
+    setLoadingMoreReels(true)
+    const offset = reels.length
+    const { data } = await supabase
+      .from('reels')
+      .select('*')
+      .eq('user_id', targetUserId)
+      .order('created_at', { ascending: false })
+      .range(offset, offset + PROFILE_REEL_PAGE_SIZE)
+    const page = splitExtraRowPage((data ?? []) as Reel[], PROFILE_REEL_PAGE_SIZE)
+    setReels((current) => appendUniqueById(current, page.items))
+    setHasMoreReels(page.hasMore)
+    setLoadingMoreReels(false)
+  }
 
   // FollowControl owns the `follows` write + notification + prefs; we just
   // sync local UI state (button label + follower count) from its callback.
@@ -224,7 +273,11 @@ function ProfileContent() {
     navigate('/')
   }
 
-  if (notFound || (profileLoaded && !viewProfile && targetUserId)) {
+  // A signed-in user's profile hydrates just after the session does (and power
+  // sync can make that read take a moment). Never flash "User not found" for
+  // the account that just finished signup; only a resolved *other-user* lookup
+  // can establish that the target does not exist.
+  if (notFound || (!isOwnProfile && profileLoaded && !viewProfile && targetUserId)) {
     return (
       <div className="p-8 flex flex-col items-center justify-center text-center gap-3 py-20">
         <p className="text-gray-300">User not found.</p>
@@ -328,7 +381,13 @@ function ProfileContent() {
                 {viewProfile?.power_level != null && viewProfile.power_level > 0 && (
                   <p className="text-accent text-sm mt-1">PL {viewProfile.power_level}</p>
                 )}
-                {bio && <p className="text-gray-400 mt-2">{bio}</p>}
+                {viewProfile?.game_tag && (
+                  <p className="mt-1 text-sm text-gray-300">
+                    <span className="text-gray-500">Gamer tag</span>{' '}
+                    <span className="font-medium text-white">{viewProfile.game_tag}</span>
+                  </p>
+                )}
+                {bio && <p data-user-content className="text-gray-400 mt-2">{bio}</p>}
                 <div className="flex items-center gap-4 mt-2 text-sm text-gray-400">
                   <span>{followersCount} followers</span>
                   <span>{followingCount} following</span>
@@ -344,6 +403,16 @@ function ProfileContent() {
                   )}
                   {isOwnProfile ? (
                     <>
+                      {/* The upgrade path must be findable from the profile
+                          (operator 2026-08-02) — a real button, not a nudge. */}
+                      {!IS_MOBILE_STORE_BUILD && (
+                        <Link
+                          to="/upgrade"
+                          className="px-4 py-2 rounded-lg bg-accent text-dark text-sm font-bold hover:shadow-glow"
+                        >
+                          Upgrade account
+                        </Link>
+                      )}
                       <button
                         onClick={() => setEditing(true)}
                         className="text-accent hover:underline text-sm"
@@ -390,6 +459,13 @@ function ProfileContent() {
                           label="Invite"
                         />
                       )}
+                      {/* Direct reporting stays beside the other profile safety control. */}
+                      {user && targetUserId && (
+                        <ProfileReportControl
+                          viewerId={user.id}
+                          profileId={targetUserId}
+                        />
+                      )}
                       {/* Unfollow-first, then a block that says what it costs. */}
                       {user && targetUserId && (
                         <BlockControl
@@ -414,8 +490,8 @@ function ProfileContent() {
 
       <div className="mb-6 flex gap-1 overflow-x-auto border-b border-dark-border">
           {(isOwnProfile
-            ? (['wall', 'feed', 'messages', 'about', 'stats'] as const)
-            : (['wall', 'about', 'stats'] as const)
+            ? (['wall', 'clips', 'feed', 'messages', 'about', 'stats'] as const)
+            : (['wall', 'clips', 'about', 'stats'] as const)
           ).map((tab) => (
             <button
               key={tab}
@@ -424,7 +500,7 @@ function ProfileContent() {
                 activeTab === tab ? 'bg-accent/10 text-accent border-b-2 border-accent' : 'text-gray-400 hover:text-white'
               }`}
             >
-              {tab === 'wall' ? 'Wall' : tab === 'feed' ? 'News Feed' : tab === 'messages' ? 'Messages' : tab === 'stats' ? 'Stats' : 'About'}
+              {profileSectionLabel(tab)}
             </button>
           ))}
       </div>
@@ -443,11 +519,12 @@ function ProfileContent() {
           userId={targetUserId}
           isOwnProfile={isOwnProfile}
           isPremium={isPremium}
+          powerLevel={viewProfile?.power_level ?? 0}
         />
       )}
 
       {activeTab === 'feed' && isOwnProfile && user && (
-        <SocialFeed mode="feed" viewerId={user.id} />
+        <SocialFeed mode="feed" viewerId={user.id} composerProfile={viewProfile} />
       )}
 
       {activeTab === 'messages' && isOwnProfile && user && (
@@ -466,17 +543,22 @@ function ProfileContent() {
         <UpgradeNudge
           className="mb-6"
           title="Go Pro"
-          message="Multi-angle director cuts, the live studio, no ads, and more — starting at $1.99/mo."
+          message="Multi-angle director cuts, the live studio, no ads, and more — starting at $4.99/mo."
           cta="See tiers"
         />
       )}
 
-      {activeTab === 'about' && isOwnProfile && !IS_MOBILE_STORE_BUILD && <WalletChip />}
+      {activeTab === 'about' && isOwnProfile && <WalletChip />}
 
       {activeTab === 'about' && isOwnProfile && user && <WinningsLedger userId={user.id} />}
 
       {/* Artifact tags — buy / equip the pill you show off next to your name. */}
-      {activeTab === 'about' && isOwnProfile && <ArtifactTagsPanel />}
+      {activeTab === 'about' && isOwnProfile && (
+        <>
+          <MyClanRostersPanel />
+          <ArtifactTagsPanel />
+        </>
+      )}
 
       {activeTab === 'about' && (
         <AboutTab
@@ -488,6 +570,9 @@ function ProfileContent() {
           addYoutubeLink={addYoutubeLink}
           removeYoutubeLink={removeYoutubeLink}
           addingLink={addingLink}
+          hasMoreReels={hasMoreReels}
+          loadingMoreReels={loadingMoreReels}
+          loadMoreReels={loadMoreReels}
         />
       )}
 
@@ -499,7 +584,7 @@ function ProfileContent() {
 
       {/* "My Clips" — produced multi-angle videos this player appears in
           (clip_records with a youtube_id). Public, so it shows on any profile. */}
-      {activeTab === 'about' && targetUserId && (
+      {activeTab === 'clips' && targetUserId && (
         <PlayerProducedVideos playerId={targetUserId} isOwn={isOwnProfile} />
       )}
 
@@ -508,6 +593,17 @@ function ProfileContent() {
         <div id="live-link-settings" className="mt-10 pt-6 border-t border-dark-border">
           <h2 className="text-lg font-bold mb-3">Live settings</h2>
           <LiveLinkSettings userId={user.id} />
+        </div>
+      )}
+
+      {/* Billing — the paid subscriber's way OUT, in the account area where a
+          person actually looks for it. Cancelling has to be as easy as
+          subscribing was (FTC negative-option rule / state ARL statutes), so it
+          lives here as well as on /upgrade. */}
+      {!IS_MOBILE_STORE_BUILD && isOwnProfile && activeTab === 'about' && (
+        <div id="subscription" className="mt-10 pt-6 border-t border-dark-border">
+          <h2 className="text-lg font-bold mb-3">Billing</h2>
+          <ManageSubscriptionPanel returnTo="/profile" />
         </div>
       )}
 
@@ -530,6 +626,9 @@ function AboutTab({
   addYoutubeLink,
   removeYoutubeLink,
   addingLink,
+  hasMoreReels,
+  loadingMoreReels,
+  loadMoreReels,
 }: {
   isOwnProfile: boolean
   reels: Reel[]
@@ -539,6 +638,9 @@ function AboutTab({
   addYoutubeLink: (e: React.FormEvent) => void
   removeYoutubeLink: (id: string) => void
   addingLink: boolean
+  hasMoreReels: boolean
+  loadingMoreReels: boolean
+  loadMoreReels: () => void
 }) {
   return (
     <div>
@@ -564,11 +666,12 @@ function AboutTab({
         <div className="mb-8">
           <CollapsibleSection id="profile-sources" label="Sources" count={youtubeLinks.length}>
           <p className="rounded-lg border border-chakra/20 bg-dark-card/50 p-3 text-sm text-gray-400 mb-4">
-            <span className="text-chakra/90 font-medium">Next:</span> connect your YouTube account so {BRAND.name} can
-            use the official API to work with <em>only your uploads</em> (no link scraping) for cloud renders and the
-            public channel. Rolling out with the desktop app; for now, paste links or save them below.
+            Your connected channel is managed in{' '}
+            <Link to="/settings#youtube" className="font-medium text-chakra/90 hover:underline">
+              YouTube settings
+            </Link>
+            . Save individual video links here only when you want them ready to quick-add to a reel.
           </p>
-          <p className="text-gray-400 text-sm mb-4">Save YouTube URLs to quick-add when you build a reel.</p>
           <form onSubmit={addYoutubeLink} className="flex gap-2 mb-4">
             <input
               type="url"
@@ -606,6 +709,16 @@ function AboutTab({
         ))}
       </div>
       {reels.length === 0 && <p className="text-gray-400">No reels yet.</p>}
+      {hasMoreReels && (
+        <button
+          type="button"
+          onClick={loadMoreReels}
+          disabled={loadingMoreReels}
+          className="mt-5 w-full rounded-lg border border-dark-border px-4 py-3 text-sm font-semibold text-gray-200 hover:border-accent/50 disabled:opacity-50"
+        >
+          {loadingMoreReels ? 'Loading more reels...' : 'Load more reels'}
+        </button>
+      )}
     </div>
   )
 }

@@ -34,4 +34,14 @@ describe('TKO video reaction bank', () => {
     expect(retry).toEqual(first)
     expect(other).not.toEqual(first)
   })
+
+  it('scales speech down for cheaper short-form cuts', () => {
+    expect(selectVideoReactions('match-42', 0)).toEqual([])
+    const quick = selectVideoReactions('match-42', 1)
+    expect(quick).toHaveLength(1)
+    expect(quick[0].reaction.tags.some((tag) => ['knockout', 'replay', 'hype'].includes(tag))).toBe(true)
+    const enhanced = selectVideoReactions('match-42', 2)
+    expect(enhanced).toHaveLength(2)
+    expect(enhanced[1].reaction.tags.some((tag) => ['victory', 'closing', 'mvp'].includes(tag))).toBe(true)
+  })
 })

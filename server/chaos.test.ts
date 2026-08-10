@@ -183,7 +183,7 @@ describe('TKO API — concurrent multi-user chaos (seed 1337)', () => {
       world.agents.push({ token: r.body.token, id: r.body.user.id, name: r.body.user.user_metadata?.username || r.body.user.id, triedEscalation: false })
     }
     expect(world.agents.length).toBe(N)
-  })
+  }, 30_000)
 
   it('runs everyone at once doing sensible + adversarial things', async () => {
     // Every agent runs concurrently; each does ~30 interleaved actions.
@@ -194,7 +194,16 @@ describe('TKO API — concurrent multi-user chaos (seed 1337)', () => {
       console.error('CRASHES:', JSON.stringify(world.crashes.slice(0, 8), null, 2))
     }
     expect(world.crashes).toEqual([])
-  }, 15_000)
+    // A WALL-CLOCK BUDGET, NOT A PERFORMANCE ASSERTION. This drives N agents x
+    // ~30 interleaved requests concurrently; alone the file finishes in ~20s,
+    // but under the full run it shares a machine with 170+ other test files and
+    // gets a fraction of the CPU. At 15s it timed out there and passed in
+    // isolation -- and because the `it` blocks below only assert on the `world`
+    // this one populates, a single slow machine turned into TWO red tests that
+    // had nothing to do with the code. A suite that fails randomly is a suite
+    // people stop reading. Budget for a saturated machine; a genuine hang still
+    // trips it.
+  }, 90_000)
 
   it('never accepted a cross-user forgery', () => {
     if (world.forgeriesAccepted.length) console.error('FORGERIES ACCEPTED:', JSON.stringify(world.forgeriesAccepted.slice(0, 10), null, 2))
@@ -210,7 +219,9 @@ describe('TKO API — concurrent multi-user chaos (seed 1337)', () => {
       expect(me.body.user.user_metadata.reelone_tier).toBe('')
       expect(me.body.user.user_metadata.tko_host).toBe(false)
     }
-  })
+    // One sequential /auth/me per escalating agent -- same saturated-machine
+    // reasoning as the budget above, and it was the second casualty of it.
+  }, 30_000)
 
   it('never drove any wallet negative', async () => {
     for (const a of world.agents) {
@@ -241,7 +252,7 @@ describe('TKO API — single-use redeem code under a concurrent stampede', () =>
       ),
     )
     for (const r of rs) { expect(r.status).toBe(200); users.push({ token: r.body.token, id: r.body.user.id }) }
-  })
+  }, 15_000)
 
   it('honors max_uses=1 even when 20 redeem at the exact same moment', async () => {
     // KILLCAM-TEST-CODE is seeded with tier=pro, months=1, max_uses=1.

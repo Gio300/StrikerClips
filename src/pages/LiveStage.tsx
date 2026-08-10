@@ -13,6 +13,7 @@ import { useAuth } from '@/hooks/useAuth'
 import { CroppedFrame, TkoWatermark } from '@/components/CroppedFrame'
 import { MergedStreamChat } from '@/components/MergedStreamChat'
 import { ShareButton } from '@/components/ShareButton'
+import { canonicalShareUrl } from '@/lib/canonicalUrl'
 import { LiveLinkOptOut } from '@/components/LiveLinkOptOut'
 import { CLEAN_EMBED_PARAMS } from '@/lib/youtubeApi'
 import { handleOf, reasonLabel, type LiveLinkReason } from '@/lib/liveLink'
@@ -249,8 +250,8 @@ export function LiveStage() {
   const canDirect = cards.length >= 2
   const canEnd = !!user && !!state.groupId && !state.endedAt && !ended
   const shareUrl = state.groupId
-    ? `https://tko.cam/live-stage/${state.groupId}`
-    : `https://tko.cam/live-stage/new?s=${encodeURIComponent(cards.map((card) => card.streamId).join(','))}`
+    ? canonicalShareUrl(`/live-stage/${state.groupId}`)
+    : canonicalShareUrl(`/live-stage/new?s=${encodeURIComponent(cards.map((card) => card.streamId).join(','))}`)
 
   function pickAngle(index: number) {
     setAuto(false)
@@ -424,7 +425,7 @@ export function LiveStage() {
                   className="relative min-h-0 min-w-0 overflow-hidden border border-black/60 bg-black"
                 >
                   {card.videoId ? (
-                    <CroppedFrame>
+                    <CroppedFrame overscan={1}>
                       <iframe
                         key={`air-frame-${card.streamId}-${unmuted ? 'on' : 'off'}`}
                         src={ytEmbedSrc(card.videoId, unmuted)}

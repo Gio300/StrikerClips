@@ -21,13 +21,45 @@ export interface LiveAngleRow {
   user_id: string | null
   label: string | null
   youtube_url: string | null
+  /** Per-angle lifecycle: 'live' (on air), 'stopped' (host paused, slot kept),
+   *  'reconnecting' (feed dropped, slot reserved, auto-reconnecting). */
+  status?: 'live' | 'stopped' | 'reconnecting' | null
+  /** Action score 0-100 posted by the PC's HUD watcher (tko_live_director);
+   *  stale when action_at is old — AUTO ignores anything older than ~30s. */
+  action_level?: number | null
+  action_at?: string | null
   created_at?: string | null
+}
+
+export interface LiveSessionRow {
+  id: string
+  user_id: string
+  youtube_url: string
+  title: string | null
+  is_live: boolean
+  placement: string
+  host_feed_status?: 'live' | 'stopped' | null
+  source?: string | null
+  external_stream_id?: string | null
+  /** The tournament this show is connected to (see attachTournamentToLive). */
+  tournament_id?: string | null
+  angle_count?: number
+  created_at?: string | null
+  updated_at?: string | null
 }
 
 export interface PersonHit {
   id: string
   username: string | null
   avatar_url: string | null
+}
+
+export interface LiveScoreboard {
+  team_a: string
+  team_b: string
+  score_a: number
+  score_b: number
+  score_revision: number
 }
 
 /** Read the extra angles a host has attached to their live show. */
@@ -92,7 +124,7 @@ export async function addAngle(input: AddAngleInput): Promise<{ ok: boolean; ang
   }
 }
 
-/** Remove one angle from the host's show. */
+/** Remove one angle from the host's show (a real leave — hard delete). */
 export async function removeAngle(angleId: string): Promise<boolean> {
   try {
     const { data, error } = await supabase.functions.invoke('live-angle-remove', { body: { angleId } })
@@ -100,6 +132,263 @@ export async function removeAngle(angleId: string): Promise<boolean> {
     return (data as any)?.ok !== false
   } catch {
     return false
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+//  STOP / RESTART / RECONNECT — retain a participant's SLOT across a stop or a
+//  dropped feed instead of tearing the multi-cam down. Stopping the host's own
+//  feed (setHostFeed) never ends the session (is_live stays true).
+// ─────────────────────────────────────────────────────────────────────────
+
+/** Stop one participant's feed but KEEP its slot (host only). */
+export async function stopAngle(angleId: string): Promise<{ ok: boolean; angle?: LiveAngleRow; error?: string }> {
+  try {
+    const { data, error } = await supabase.functions.invoke('live-angle-stop', { body: { angleId } })
+    if (error) return { ok: false, error: (error as any)?.message || 'Could not stop angle' }
+    const p = data as any
+    if (p?.ok === false) return { ok: false, error: p?.error || 'Could not stop angle' }
+    return { ok: true, angle: p?.angle }
+  } catch (e: any) {
+    return { ok: false, error: e?.message || 'Could not stop angle' }
+  }
+}
+
+/** Bring a stopped/reconnecting participant back on air, re-resolving their link (host only). */
+export async function restartAngle(angleId: string): Promise<{ ok: boolean; angle?: LiveAngleRow; error?: string }> {
+  try {
+    const { data, error } = await supabase.functions.invoke('live-angle-restart', { body: { angleId } })
+    if (error) return { ok: false, error: (error as any)?.message || 'Could not restart angle' }
+    const p = data as any
+    if (p?.ok === false) return { ok: false, error: p?.error || 'Could not restart angle' }
+    return { ok: true, angle: p?.angle }
+  } catch (e: any) {
+    return { ok: false, error: e?.message || 'Could not restart angle' }
+  }
+}
+
+/** Report that a participant's feed dropped — reserves the slot as 'reconnecting'. */
+export async function markAngleDropped(angleId: string): Promise<{ ok: boolean; angle?: LiveAngleRow }> {
+  try {
+    const { data, error } = await supabase.functions.invoke('live-angle-dropped', { body: { angleId } })
+    if (error) return { ok: false }
+    const p = data as any
+    return { ok: p?.ok !== false, angle: p?.angle }
+  } catch {
+    return { ok: false }
+  }
+}
+
+/**
+ * Attempt to reconnect a dropped feed by re-resolving the player's live link.
+ * `reconnected` is true when the slot flipped back to 'live'. Poll this while an
+ * angle is 'reconnecting'.
+ */
+export async function reconnectAngle(angleId: string): Promise<{ ok: boolean; reconnected: boolean; angle?: LiveAngleRow }> {
+  try {
+    const { data, error } = await supabase.functions.invoke('live-angle-reconnect', { body: { angleId } })
+    if (error) return { ok: false, reconnected: false }
+    const p = data as any
+    return { ok: p?.ok !== false, reconnected: p?.reconnected === true, angle: p?.angle }
+  } catch {
+    return { ok: false, reconnected: false }
+  }
+}
+
+/**
+ * Re-resolve every active camera slot in a show. The server performs the
+ * YouTube lookup once for the host; viewers only consume the repaired rows.
+ */
+export async function refreshLiveAngles(
+  liveStreamId: string,
+): Promise<{ ok: boolean; angles: LiveAngleRow[]; updated: number; waiting: number; error?: string }> {
+  try {
+    const { data, error } = await supabase.functions.invoke('live-angle-refresh-all', {
+      body: { liveStreamId },
+    })
+    if (error) {
+      return { ok: false, angles: [], updated: 0, waiting: 0, error: (error as any)?.message || 'Could not refresh feeds' }
+    }
+    const payload = data as any
+    if (payload?.ok === false) {
+      return { ok: false, angles: [], updated: 0, waiting: 0, error: payload?.error || 'Could not refresh feeds' }
+    }
+    return {
+      ok: true,
+      angles: Array.isArray(payload?.angles) ? payload.angles as LiveAngleRow[] : [],
+      updated: Number(payload?.updated || 0),
+      waiting: Number(payload?.waiting || 0),
+    }
+  } catch (e: any) {
+    return { ok: false, angles: [], updated: 0, waiting: 0, error: e?.message || 'Could not refresh feeds' }
+  }
+}
+
+/** Update the shared live scoreboard (host only): team names and/or absolute
+ *  scores. Every viewer's scorebug follows within one poll (~3s). */
+export async function updateLiveScoreboard(input: {
+  liveStreamId: string
+  teamA?: string
+  teamB?: string
+  scoreA?: number
+  scoreB?: number
+}): Promise<{ ok: boolean; scoreboard?: LiveScoreboard; error?: string }> {
+  try {
+    const { data, error } = await supabase.functions.invoke('live-scoreboard-update', {
+      body: {
+        streamId: input.liveStreamId,
+        teamA: input.teamA,
+        teamB: input.teamB,
+        scoreA: input.scoreA,
+        scoreB: input.scoreB,
+      },
+    })
+    if (error) return { ok: false, error: (error as any)?.message || 'Could not update the scoreboard' }
+    const payload = data as any
+    if (payload?.ok === false) return { ok: false, error: payload?.error || 'Could not update the scoreboard' }
+    return { ok: true, scoreboard: payload?.scoreboard as LiveScoreboard }
+  } catch (error: any) {
+    return { ok: false, error: error?.message || 'Could not update the scoreboard' }
+  }
+}
+
+/** The shot the host currently has on air; viewers on "Host's view" mirror it. */
+export interface HostView {
+  layout: 'solo' | 'duo' | 'grid' | 'pip'
+  /** Angle ids ('host' for angle 1, else live_stream_angles row ids), max 4. */
+  feeds: string[]
+  at?: string
+}
+
+/** Publish the host's on-air shot (host only, debounced by the caller). */
+export async function setHostView(
+  liveStreamId: string,
+  view: { layout: HostView['layout']; feeds: string[] },
+): Promise<boolean> {
+  try {
+    const { data, error } = await supabase.functions.invoke('live-host-view', {
+      body: { streamId: liveStreamId, layout: view.layout, feeds: view.feeds },
+    })
+    if (error) return false
+    return (data as any)?.ok !== false
+  } catch {
+    return false
+  }
+}
+
+/** Stop or restart the HOST'S OWN feed (angle 1) without ending the session. */
+export async function setHostFeed(
+  liveStreamId: string,
+  action: 'stop' | 'start',
+  youtubeUrl?: string,
+): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const { data, error } = await supabase.functions.invoke('live-host-feed', {
+      body: { liveStreamId, action, youtubeUrl: youtubeUrl?.trim() || undefined },
+    })
+    if (error) return { ok: false, error: (error as any)?.message || 'Could not update your feed' }
+    const p = data as any
+    if (p?.ok === false) return { ok: false, error: p?.error || 'Could not update your feed' }
+    return { ok: true }
+  } catch (e: any) {
+    return { ok: false, error: e?.message || 'Could not update your feed' }
+  }
+}
+
+/** Load the caller's active and recently-ended shows for cross-device recovery. */
+export async function listMyLiveSessions(): Promise<LiveSessionRow[]> {
+  try {
+    const { data, error } = await supabase.functions.invoke('live-session-list', { body: {} })
+    if (error) return []
+    const payload = data as any
+    return Array.isArray(payload?.streams) ? payload.streams as LiveSessionRow[] : []
+  } catch {
+    return []
+  }
+}
+
+/**
+ * Attach (or detach, with `tournamentId: null`) one of the host's OWN
+ * tournaments to a live show. The server verifies the caller owns the stream
+ * AND runs the tournament (creator / listed admin / global TKO host) and that
+ * the tournament isn't completed — see /api/fn/live-tournament-attach.
+ */
+export async function attachTournamentToLive(
+  liveStreamId: string,
+  tournamentId: string | null,
+): Promise<{ ok: boolean; stream?: LiveSessionRow; reason?: string; error?: string }> {
+  try {
+    const { data, error } = await supabase.functions.invoke('live-tournament-attach', {
+      body: { liveStreamId, tournamentId },
+    })
+    if (error) return { ok: false, error: (error as any)?.message || 'Could not connect the tournament' }
+    const payload = data as any
+    if (payload?.ok === false) {
+      return { ok: false, reason: payload?.reason, error: payload?.error || 'Could not connect the tournament' }
+    }
+    return { ok: true, stream: payload?.stream }
+  } catch (e: any) {
+    return { ok: false, error: e?.message || 'Could not connect the tournament' }
+  }
+}
+
+/** Resume an existing show or end it completely (all camera slots stop). */
+export async function controlLiveSession(
+  liveStreamId: string,
+  action: 'resume' | 'end',
+  youtubeUrl?: string,
+): Promise<{ ok: boolean; stream?: LiveSessionRow; error?: string }> {
+  try {
+    const { data, error } = await supabase.functions.invoke('live-session-control', {
+      body: { liveStreamId, action, youtubeUrl: youtubeUrl?.trim() || undefined },
+    })
+    if (error) return { ok: false, error: (error as any)?.message || 'Could not control this show' }
+    const payload = data as any
+    if (payload?.ok === false) return { ok: false, error: payload?.error || 'Could not control this show' }
+    return { ok: true, stream: payload?.stream }
+  } catch (e: any) {
+    return { ok: false, error: e?.message || 'Could not control this show' }
+  }
+}
+
+/**
+ * TOP-TIER auto live-detect: start a show from the host's CONNECTED channel with
+ * no manual link entry. The server resolves their linked YouTube live URL.
+ */
+export async function autostartLive(
+  placement?: string,
+  title?: string,
+): Promise<{ ok: boolean; streamId?: string; reason?: string; error?: string }> {
+  try {
+    const { data, error } = await supabase.functions.invoke('live-autostart', {
+      body: { placement, title },
+    })
+    if (error) return { ok: false, error: (error as any)?.message || 'Could not go live' }
+    const p = data as any
+    if (p?.ok === false) return { ok: false, reason: p?.reason, error: p?.error || 'Could not go live' }
+    return { ok: true, streamId: p?.stream?.id }
+  } catch (e: any) {
+    return { ok: false, error: e?.message || 'Could not go live' }
+  }
+}
+
+/**
+ * TOP-TIER team auto-assemble: detect which teammates are live and add them all
+ * as angles at once. Returns how many were added.
+ */
+export async function assembleTeam(
+  liveStreamId: string,
+): Promise<{ ok: boolean; added: number; reason?: string; error?: string }> {
+  try {
+    const { data, error } = await supabase.functions.invoke('live-team-assemble', {
+      body: { liveStreamId },
+    })
+    if (error) return { ok: false, added: 0, error: (error as any)?.message || 'Could not assemble team' }
+    const p = data as any
+    if (p?.ok === false) return { ok: false, added: 0, reason: p?.reason, error: p?.error || 'Could not assemble team' }
+    return { ok: true, added: Number(p?.added ?? 0) }
+  } catch (e: any) {
+    return { ok: false, added: 0, error: e?.message || 'Could not assemble team' }
   }
 }
 

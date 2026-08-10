@@ -129,6 +129,49 @@ export function saveTheme(
   return next
 }
 
+// ---------------------------------------------------------------------------
+// League kit adoption (white-label leagues)
+// ---------------------------------------------------------------------------
+
+/**
+ * The bits of a league config the broadcast theme can adopt. Structural on
+ * purpose (no import) so BOTH league config shapes fit: src/lib/leagueConfig.ts
+ * (`logoUrl`) and src/lib/leagueTheme.ts / the server row (`logo_url`).
+ */
+export type LeagueBrand = {
+  colors?: { primary?: string | null } | null
+  logoUrl?: string | null
+  logo_url?: string | null
+}
+
+/**
+ * Default the broadcast look from the host's LEAGUE kit — accent from the
+ * league's primary color, header banner/logo from the league logo — while
+ * keeping any explicit host overrides.
+ *
+ * Pure and display-time only: callers merge this over a loaded theme for
+ * rendering; nothing is written back to storage, so a host still edits and
+ * stores THEIR own values on /broadcast exactly as before.
+ *
+ * "Explicit override" rule: saveTheme() persists the full merged object, so a
+ * stored field that still equals the factory default (stock TKO orange accent,
+ * empty logo) is treated as "never customized" and adopts the league value.
+ */
+export function adoptLeagueKit(
+  theme: BroadcastTheme,
+  league: LeagueBrand | null | undefined,
+): BroadcastTheme {
+  if (!league) return theme
+  const next = { ...theme }
+  const primary = normalizeAccent(league.colors?.primary)
+  if (primary !== DEFAULT_THEME.accent && normalizeAccent(theme.accent) === DEFAULT_THEME.accent) {
+    next.accent = primary
+  }
+  const logo = (league.logoUrl ?? league.logo_url ?? '').trim()
+  if (logo && !theme.logoUrl) next.logoUrl = logo
+  return next
+}
+
 /** Subscribe a component to theme changes. Returns an unsubscribe fn. */
 export function subscribeTheme(cb: () => void): () => void {
   if (typeof window === 'undefined') return () => {}

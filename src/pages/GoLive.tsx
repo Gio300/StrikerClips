@@ -1,18 +1,30 @@
 import { useEffect, useState, type ReactNode } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/hooks/useAuth'
 import { useEntitlements } from '@/hooks/useEntitlements'
 import { extractYouTubeId } from '@/lib/youtubeApi'
 import { ConnectedBadge } from '@/components/ConnectedBadge'
 import { ShareButton } from '@/components/ShareButton'
+import { canonicalShareUrl } from '@/lib/canonicalUrl'
 import { useAskTko } from '@/components/AskTkoContext'
 import { loadLibrary, loadHandle, youtubeLiveUrl, loadChannelId, channelLiveUrl, resolveChannelId } from '@/lib/youtubeConnect'
 import { isYouTubeLinked } from '@/lib/youtubeLink'
 import { acceptProposedStage, autoLinkForStream, type AutoLinkOutcome } from '@/lib/liveLinkService'
 import { LiveLinkOptOut } from '@/components/LiveLinkOptOut'
 import { HostAnglePanel } from '@/components/HostAnglePanel'
-import { sendLiveHeartbeat, searchPeople, addAngle, type PersonHit } from '@/lib/liveAngles'
+import { LiveBannerEditor } from '@/components/LiveBannerEditor'
+import { normalizeLiveBannerUrl } from '@/lib/liveBanner'
+import {
+  sendLiveHeartbeat,
+  searchPeople,
+  addAngle,
+  listMyLiveSessions,
+  controlLiveSession,
+  attachTournamentToLive,
+  type LiveSessionRow,
+  type PersonHit,
+} from '@/lib/liveAngles'
 import { Avatar } from '@/components/ui'
 import { ActionCard } from '@/components/ui/ActionCard'
 import { ChipInput } from '@/components/ui/ChipInput'
@@ -83,6 +95,9 @@ export function GoLive() {
   const { user } = useAuth()
   const { isPremium, tier } = useEntitlements()
   const { open: openAskTko } = useAskTko()
+  // "Go live for this tournament" deep link (/live?do=golive&tournament=<id>).
+  const [searchParams] = useSearchParams()
+  const requestedTournamentId = searchParams.get('tournament') || ''
 
   const [url, setUrl] = useState('')
   const [title, setTitle] = useState('')
@@ -100,6 +115,12 @@ export function GoLive() {
   const [tournamentId, setTournamentId] = useState('') // '' = none
   const [showBracket, setShowBracket] = useState(true)
   const [tournaments, setTournaments] = useState<TournamentOpt[]>([])
+  // Tournament connection of the RUNNING show (attachable mid-show — see
+  // applyTournamentAttach + the server's live-tournament-attach fn).
+  const [attachedTournamentId, setAttachedTournamentId] = useState('')
+  const [attachSel, setAttachSel] = useState('')
+  const [attachBusy, setAttachBusy] = useState(false)
+  const [attachError, setAttachError] = useState('')
   const [backgroundUrl, setBackgroundUrl] = useState('')
   const [teamA, setTeamA] = useState('')
   const [teamB, setTeamB] = useState('')
@@ -118,6 +139,10 @@ export function GoLive() {
   const [shareUrl, setShareUrl] = useState<string>('')
   const [linked, setLinked] = useState<AutoLinkOutcome | null>(null)
   const [createdStreamId, setCreatedStreamId] = useState<string | null>(null)
+  const [recentSessions, setRecentSessions] = useState<LiveSessionRow[]>([])
+  const [sessionsLoading, setSessionsLoading] = useState(false)
+  const [sessionBusy, setSessionBusy] = useState(false)
+  const [replacementUrl, setReplacementUrl] = useState('')
 
   const LAST_KEY = user ? `kc_last_live_${user.id}` : ''
   const [restored, setRestored] = useState(false)
@@ -157,6 +182,25 @@ export function GoLive() {
     } catch { /* ignore malformed cache */ }
   }, [user])
 
+  // Recover the server-owned show after a reload, app restart, or device switch.
+  // The browser is only a control surface; losing its local state must not make
+  // the host lose the live session or its participant camera slots.
+  useEffect(() => {
+    if (!user) return
+    let cancelled = false
+    setSessionsLoading(true)
+    void listMyLiveSessions().then((rows) => {
+      if (cancelled) return
+      setRecentSessions(rows)
+      setSessionsLoading(false)
+      const active = rows.find((row) => row.is_live)
+      if (active) restoreSession(active)
+    })
+    return () => { cancelled = true }
+  // The active id intentionally is not a dependency: this is a login/reload recovery pass.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id])
+
   const youTubeLinked = hasLibrary || restored || !!savedHandle || backendLinked
   // The link we actually broadcast: typed → saved handle → resolved channel →
   // (if the host has no own stream) the first pasted angle link.
@@ -170,24 +214,64 @@ export function GoLive() {
   }
   const sourceKnown = youTubeLinked || restored || url.trim().length > 0
 
-  // Am I in a tournament right now? (Admin counts.) Also load MY tournaments for
-  // the "connect to a tournament" select — best-effort against the mock backend.
+  // Which tournaments can this host connect? Their OWN open/active ones
+  // (created_by = them, not completed) PLUS any they're a listed admin of.
+  // The old lookup read ONLY tournament_admins — and creating a tournament
+  // never writes an admin row — so a creator actively running a tournament was
+  // told "you're not running a tournament right now". created_by leads now.
   useEffect(() => {
     if (!user) return
-    supabase
-      .from('tournament_admins')
-      .select('tournament_id')
-      .eq('user_id', user.id)
-      .then(async ({ data }) => {
+    let cancelled = false
+    async function loadMyTournaments(userId: string) {
+      const found = new Map<string, TournamentOpt>()
+      type TRow = { id: string; name: string; status?: string | null }
+      try {
+        const { data: mine } = await supabase
+          .from('tournaments')
+          .select('id, name, status')
+          .eq('created_by', userId)
+        for (const t of (mine ?? []) as TRow[]) {
+          if ((t.status ?? 'open') !== 'closed') found.set(t.id, { id: t.id, name: t.name })
+        }
+      } catch { /* fail-soft — the admin lookup below still runs */ }
+      try {
+        const { data } = await supabase
+          .from('tournament_admins')
+          .select('tournament_id')
+          .eq('user_id', userId)
         const ids = Array.from(new Set((data ?? []).map((r: { tournament_id?: string }) => r.tournament_id).filter(Boolean))) as string[]
-        setInTournament(ids.length > 0)
-        if (!ids.length) { setTournaments([]); return }
-        try {
-          const { data: ts } = await supabase.from('tournaments').select('id, name').in('id', ids)
-          setTournaments((ts ?? []) as TournamentOpt[])
-        } catch { setTournaments([]) }
-      })
+        const missing = ids.filter((id) => !found.has(id))
+        if (missing.length) {
+          const { data: ts } = await supabase.from('tournaments').select('id, name, status').in('id', missing)
+          for (const t of (ts ?? []) as TRow[]) {
+            if ((t.status ?? 'open') !== 'closed') found.set(t.id, { id: t.id, name: t.name })
+          }
+        }
+      } catch { /* fail-soft */ }
+      if (cancelled) return
+      setTournaments(Array.from(found.values()))
+      setInTournament(found.size > 0)
+    }
+    void loadMyTournaments(user.id)
+    return () => { cancelled = true }
   }, [user])
+
+  // Pre-connect the deep-linked tournament ("Go live for this tournament" on
+  // the tournament page) so the created show carries its id from the start.
+  useEffect(() => {
+    if (!user || !requestedTournamentId) return
+    setTournamentId(requestedTournamentId)
+    supabase
+      .from('tournaments')
+      .select('id, name')
+      .eq('id', requestedTournamentId)
+      .single()
+      .then(({ data }) => {
+        const row = data as TournamentOpt | null
+        if (!row?.id) return
+        setTournaments((cur) => (cur.some((t) => t.id === row.id) ? cur : [...cur, row]))
+      })
+  }, [user, requestedTournamentId])
 
   // Debounced people search for the Streams section (reuses Discover's ilike).
   useEffect(() => {
@@ -273,6 +357,84 @@ export function GoLive() {
     setStagedLinks((cur) => cur.filter((_, idx) => idx !== i))
   }
 
+  function restoreSession(session: LiveSessionRow) {
+    const restoredPlacement = PLACEMENTS.some((item) => item.id === session.placement)
+      ? session.placement as Placement
+      : 'profile'
+    const qs = new URLSearchParams({ u: session.youtube_url })
+    if (session.title) qs.set('t', session.title)
+    const path = `/watch/${session.id}?${qs.toString()}`
+    setCreatedStreamId(session.id)
+    setDone(restoredPlacement)
+    setWatchTo(path)
+    setShareUrl(canonicalShareUrl(path))
+    setReplacementUrl(session.youtube_url || '')
+    setAttachedTournamentId(session.tournament_id || '')
+    setAttachSel(session.tournament_id || '')
+  }
+
+  /** Connect (or, with an empty pick, disconnect) a tournament on the running show. */
+  async function applyTournamentAttach() {
+    if (!createdStreamId || attachBusy) return
+    setAttachBusy(true)
+    setAttachError('')
+    const result = await attachTournamentToLive(createdStreamId, attachSel || null)
+    setAttachBusy(false)
+    if (!result.ok) {
+      setAttachError(result.error || 'Could not connect the tournament.')
+      return
+    }
+    setAttachedTournamentId(attachSel)
+  }
+
+  async function refreshSessions() {
+    const rows = await listMyLiveSessions()
+    setRecentSessions(rows)
+    return rows
+  }
+
+  async function resumeSession(session: LiveSessionRow) {
+    setError('')
+    setSessionBusy(true)
+    const result = await controlLiveSession(session.id, 'resume', session.youtube_url)
+    setSessionBusy(false)
+    if (!result.ok) {
+      setError(result.error || 'Could not resume that show.')
+      return
+    }
+    restoreSession(result.stream || { ...session, is_live: true })
+    await refreshSessions()
+  }
+
+  async function changeHostFeed() {
+    if (!createdStreamId || !replacementUrl.trim()) return
+    setSessionBusy(true)
+    const result = await controlLiveSession(createdStreamId, 'resume', replacementUrl)
+    setSessionBusy(false)
+    if (!result.ok) {
+      setError(result.error || 'Could not change the host feed.')
+      return
+    }
+    if (result.stream) restoreSession(result.stream)
+    await refreshSessions()
+  }
+
+  async function endCurrentSession() {
+    if (!createdStreamId) return
+    setSessionBusy(true)
+    const result = await controlLiveSession(createdStreamId, 'end')
+    setSessionBusy(false)
+    if (!result.ok) {
+      setError(result.error || 'Could not end the show.')
+      return
+    }
+    setDone(null)
+    setLinked(null)
+    setCreatedStreamId(null)
+    setReplacementUrl('')
+    await refreshSessions()
+  }
+
   const stagedCount = stagedPlayers.length + stagedLinks.length
 
   async function submit(e: React.FormEvent) {
@@ -320,7 +482,7 @@ export function GoLive() {
       tournament_id: tournamentId || null,
       show_bracket: Boolean(tournamentId && showBracket),
       host_share: hostShare,
-      background_url: backgroundUrl.trim() || null,
+      background_url: normalizeLiveBannerUrl(backgroundUrl),
       team_a: teamA.trim() || null,
       team_b: teamB.trim() || null,
       layout,
@@ -336,7 +498,7 @@ export function GoLive() {
     const newId = (inserted as { id?: string } | null)?.id
     if (newId) {
       setWatchTo(`/watch/${newId}${q}`)
-      setShareUrl(`https://tko.cam/watch/${newId}${q}`)
+      setShareUrl(canonicalShareUrl(`/watch/${newId}${q}`))
       // Attach any staged other-player streams as angles (best-effort — going
       // live already succeeded even if a particular angle can't be resolved).
       for (const p of stagedPlayers) {
@@ -349,9 +511,11 @@ export function GoLive() {
         await addAngle({ liveStreamId: newId, youtubeUrl: l.url, label: l.label })
       }
       setCreatedStreamId(newId)
+      setAttachedTournamentId(tournamentId || '')
+      setAttachSel(tournamentId || '')
     } else {
       setWatchTo(`/watch${q}`)
-      setShareUrl(`https://tko.cam/watch${q}`)
+      setShareUrl(canonicalShareUrl(`/watch${q}`))
     }
     setBusy(false)
     try {
@@ -388,13 +552,93 @@ export function GoLive() {
             )}
             <button
               type="button"
-              onClick={() => { setDone(null); setLinked(null); setCreatedStreamId(null) }}
-              className="px-4 py-2 rounded-lg border border-dark-border text-white hover:border-accent/50"
+              onClick={endCurrentSession}
+              disabled={sessionBusy}
+              className="px-4 py-2 rounded-lg border border-kunai/60 text-kunai hover:bg-kunai/10 disabled:opacity-50"
             >
-              Start another
+              {sessionBusy ? 'Ending...' : 'End show'}
             </button>
           </div>
+          {createdStreamId && (
+            <div className="mt-4 border-t border-leaf/20 pt-4">
+              <label className="block text-xs uppercase tracking-wider text-gray-400 mb-1.5" htmlFor="replacement-live-url">
+                Change my live feed
+              </label>
+              <div className="flex flex-col sm:flex-row gap-2">
+                <input
+                  id="replacement-live-url"
+                  type="url"
+                  value={replacementUrl}
+                  onChange={(event) => setReplacementUrl(event.target.value)}
+                  placeholder="Paste the replacement live link"
+                  className="min-w-0 flex-1 px-3 py-2 rounded-lg bg-dark border border-dark-border text-sm text-white focus:outline-none focus:border-accent"
+                />
+                <button
+                  type="button"
+                  onClick={changeHostFeed}
+                  disabled={sessionBusy || !replacementUrl.trim()}
+                  className="px-4 py-2 rounded-lg border border-accent/50 text-accent font-semibold hover:bg-accent/10 disabled:opacity-40"
+                >
+                  Change feed
+                </button>
+              </div>
+              {error && <p className="mt-2 text-xs text-kunai">{error}</p>}
+            </div>
+          )}
         </div>
+
+        {/* Connect the show to one of the host's tournaments — attachable
+            MID-SHOW too, so going live before picking one never strands the
+            bracket. Server-validated: host-only, own tournament, not closed. */}
+        {createdStreamId && (
+          <div className="mt-4 rounded-xl border border-dark-border bg-dark-card p-5">
+            <h2 className="text-lg font-bold text-white">Tournament</h2>
+            {attachedTournamentId ? (
+              <p className="text-sm text-gray-300 mt-1">
+                This show is connected to{' '}
+                <span className="text-accent font-semibold">
+                  {tournaments.find((t) => t.id === attachedTournamentId)?.name ?? 'your tournament'}
+                </span>
+                .
+              </p>
+            ) : (
+              <p className="text-sm text-gray-400 mt-1">
+                Running a tournament? Connect it and this show carries the bracket.
+              </p>
+            )}
+            {tournaments.length > 0 ? (
+              <div className="mt-3 flex flex-col sm:flex-row gap-2">
+                <select
+                  value={attachSel}
+                  onChange={(e) => setAttachSel(e.target.value)}
+                  aria-label="Tournament to connect"
+                  className="min-w-0 flex-1 px-3 py-2 rounded-lg bg-dark border border-dark-border text-sm text-white focus:outline-none focus:border-accent"
+                >
+                  <option value="">None</option>
+                  {tournaments.map((t) => (
+                    <option key={t.id} value={t.id}>{t.name}</option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  onClick={() => void applyTournamentAttach()}
+                  disabled={attachBusy || attachSel === attachedTournamentId}
+                  className="px-4 py-2 rounded-lg border border-accent/50 text-accent font-semibold hover:bg-accent/10 disabled:opacity-40"
+                >
+                  {attachBusy ? 'Connecting…' : attachSel ? 'Connect' : 'Disconnect'}
+                </button>
+              </div>
+            ) : (
+              <p className="mt-3 text-sm text-gray-500">
+                You're not running a tournament right now.{' '}
+                <Link to="/tournaments?create=1" className="text-accent hover:underline">
+                  Create a tournament →
+                </Link>
+              </p>
+            )}
+            {attachError && <p className="mt-2 text-xs text-kunai">{attachError}</p>}
+          </div>
+        )}
 
         {/* Add / manage more camera angles live. Available to every host now —
             the merged Go Live means any stream can become a multi-angle show. */}
@@ -498,6 +742,33 @@ export function GoLive() {
         Add stream(s) — yours, other players', or both — and hit Go Live. Everything below is
         optional: sensible defaults are already set, so you can just go.
       </p>
+
+      {sessionsLoading && <p className="mt-4 text-sm text-gray-500">Checking for your live shows...</p>}
+      {!sessionsLoading && recentSessions.some((session) => !session.is_live) && (
+        <div className="mt-5 rounded-xl border border-dark-border bg-dark-card p-4">
+          <h2 className="text-sm font-bold text-white">Recover a previous show</h2>
+          <p className="mt-1 text-xs text-gray-400">Resume it with its camera slots, or start a fresh show below.</p>
+          <div className="mt-3 space-y-2">
+            {recentSessions.filter((session) => !session.is_live).slice(0, 3).map((session) => (
+              <div key={session.id} className="flex items-center justify-between gap-3 rounded-lg border border-dark-border bg-dark px-3 py-2.5">
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-semibold text-white">{session.title || 'Untitled live show'}</p>
+                  <p className="text-xs text-gray-500">{session.angle_count || 0} added camera slot{session.angle_count === 1 ? '' : 's'}</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => resumeSession(session)}
+                  disabled={sessionBusy}
+                  className="shrink-0 rounded-lg border border-accent/50 px-3 py-1.5 text-xs font-semibold text-accent hover:bg-accent/10 disabled:opacity-40"
+                >
+                  Resume
+                </button>
+              </div>
+            ))}
+          </div>
+          {error && <p className="mt-2 text-xs text-kunai">{error}</p>}
+        </div>
+      )}
 
       {youTubeLinked ? (
         <div className="mt-4 flex items-center gap-2 text-sm text-leaf">
@@ -751,7 +1022,12 @@ export function GoLive() {
               ))}
             </select>
           ) : (
-            <p className="text-sm text-gray-500">You're not running a tournament right now — nothing to connect.</p>
+            <div className="text-sm text-gray-500">
+              <p>You're not running a tournament right now — nothing to connect.</p>
+              <Link to="/tournaments?create=1" className="mt-1 inline-block text-accent hover:underline">
+                Create a tournament →
+              </Link>
+            </div>
           )}
         </Section>
 
@@ -773,14 +1049,25 @@ export function GoLive() {
           title="Look"
           summary={teamA || teamB ? `${teamA || 'Team A'} vs ${teamB || 'Team B'}` : 'Default'}
         >
-          <label className="block text-sm text-gray-400 mb-1">Background image</label>
+          <p className="mb-2 text-sm font-semibold text-white">Stream banner</p>
+          <LiveBannerEditor
+            value={backgroundUrl}
+            onChange={setBackgroundUrl}
+            title={title}
+            teamA={teamA}
+            teamB={teamB}
+          />
+          <details className="mt-3">
+            <summary className="cursor-pointer text-xs text-gray-500">Legacy image URL</summary>
+            <label className="mt-2 block text-sm text-gray-400 mb-1">Background image</label>
           <input
             type="url"
             value={backgroundUrl}
             onChange={(e) => setBackgroundUrl(e.target.value)}
             placeholder="https://…/background.png (url or upload link)"
             className="w-full px-3 py-2 rounded-lg bg-dark border border-dark-border text-white text-sm focus:outline-none focus:border-accent"
-          />
+            />
+          </details>
           <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-3">
             <ChipInput fieldKey="live_team_a" value={teamA} onChange={setTeamA} label="Team A" placeholder="Leaf" />
             <ChipInput fieldKey="live_team_b" value={teamB} onChange={setTeamB} label="Team B" placeholder="Sand" />

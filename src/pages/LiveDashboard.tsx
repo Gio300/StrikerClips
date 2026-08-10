@@ -265,7 +265,7 @@ export function LiveDashboard() {
                 <div key={s.id} style={stageStyle(idx, count, view)}>
                   <div className="relative w-full h-full border border-black">
                     {/* Crop out the YouTube chrome so each screen reads as a clean feed. */}
-                    <CroppedFrame>
+                    <CroppedFrame overscan={1}>
                       <div ref={(el) => { containerRefs.current[idx] = el }} className="w-full h-full" />
                     </CroppedFrame>
                     <span className="absolute top-1 left-1 z-10 px-1.5 py-0.5 rounded bg-black/70 text-[11px] font-medium text-white pointer-events-none">

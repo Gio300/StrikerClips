@@ -1,6 +1,12 @@
 import { useEffect, useState } from 'react'
 import { loadAutoLinkMode, saveAutoLinkMode, cachedAutoLinkMode } from '@/lib/liveLinkPrefs'
 import { AUTO_LINK_MODES, AUTO_LINK_MODE_COPY, type AutoLinkMode } from '@/lib/liveLink'
+import {
+  cachedAutoDetectLive,
+  loadAutoDetectLive,
+  saveAutoDetectLive,
+} from '@/lib/autoLivePrefs'
+import { useLeagueTheme } from '@/components/LeagueThemeProvider'
 
 /**
  * Live-link settings — "when someone I'm matched with is live too".
@@ -13,14 +19,21 @@ import { AUTO_LINK_MODES, AUTO_LINK_MODE_COPY, type AutoLinkMode } from '@/lib/l
  * spelled out below so nobody is surprised when a link doesn't form.
  */
 export function LiveLinkSettings({ userId }: { userId: string }) {
+  const { league } = useLeagueTheme()
+  const brandName = league?.name || 'TKO'
   const [mode, setMode] = useState<AutoLinkMode>(() => cachedAutoLinkMode(userId))
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
+  const [autoDetect, setAutoDetect] = useState(() => cachedAutoDetectLive(userId))
+  const [savingDetection, setSavingDetection] = useState(false)
 
   useEffect(() => {
     let cancelled = false
     loadAutoLinkMode(userId).then((m) => {
       if (!cancelled) setMode(m)
+    })
+    loadAutoDetectLive(userId).then((enabled) => {
+      if (!cancelled) setAutoDetect(enabled)
     })
     return () => {
       cancelled = true
@@ -43,13 +56,51 @@ export function LiveLinkSettings({ userId }: { userId: string }) {
     }
   }
 
+  async function toggleDetection() {
+    if (savingDetection) return
+    const previous = autoDetect
+    const next = !previous
+    setAutoDetect(next)
+    setSavingDetection(true)
+    const ok = await saveAutoDetectLive(userId, next)
+    setSavingDetection(false)
+    if (!ok) setAutoDetect(previous)
+  }
+
   return (
     <div className="rounded-xl border border-dark-border bg-dark-card p-4">
+      <div className="flex items-start justify-between gap-4 border-b border-dark-border pb-4 mb-4">
+        <div>
+          <h3 className="font-semibold text-white">Automatically show me when I go live</h3>
+          <p className="text-sm text-gray-400 mt-1">
+            {brandName} watches your connected YouTube channel and adds an eligible broadcast to Live.
+            This is on by default, so you do not need to open {brandName} first.
+          </p>
+        </div>
+        <button
+          type="button"
+          role="switch"
+          aria-checked={autoDetect}
+          aria-label="Automatically detect my live streams"
+          disabled={savingDetection}
+          onClick={toggleDetection}
+          className={`relative mt-1 h-7 w-12 shrink-0 rounded-full border transition-colors ${
+            autoDetect ? 'border-accent bg-accent' : 'border-dark-border bg-black/40'
+          } disabled:opacity-50`}
+        >
+          <span
+            className={`absolute top-0.5 h-5 w-5 rounded-full bg-white transition-transform ${
+              autoDetect ? 'translate-x-5' : 'translate-x-0.5'
+            }`}
+          />
+        </button>
+      </div>
+
       <div className="flex items-start justify-between gap-3">
         <div>
           <h3 className="font-semibold text-white">When someone you're matched with is live too</h3>
           <p className="text-sm text-gray-400 mt-1">
-            If you and an opponent, clanmate or fellow entrant are live at the same time, TKO can
+            If you and an opponent, clanmate or fellow entrant are live at the same time, {brandName} can
             put your streams on one screen so viewers see every angle.
           </p>
         </div>

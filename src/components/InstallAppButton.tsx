@@ -5,7 +5,8 @@ import {
   detectStandalone,
   type InstallState,
 } from '@/lib/installPrompt'
-import { IS_MOBILE_STORE_BUILD } from '@/lib/storeBuild'
+import { useInstallBrandName, useInstallLabel } from '@/hooks/useInstallLabel'
+import { androidInstallUrl } from '@/lib/nativeUpdate'
 
 /** Chromium-only event; not yet included in lib.dom. */
 interface BeforeInstallPromptEvent extends Event {
@@ -130,6 +131,12 @@ export interface InstallAppButtonProps {
   /** 'primary' for the marketing hero/CTA, 'subtle' for in-app surfaces. */
   variant?: 'primary' | 'subtle'
   className?: string
+  /**
+   * Override the button text. Leave it unset: the default is the ACTIVE
+   * LEAGUE's install label (useInstallLabel), so on a league domain the button
+   * offers the app the browser is actually about to install — which is the
+   * league's, since the manifest is now built per host (src/lib/pwaManifest.ts).
+   */
   label?: string
   /** Open when installed; otherwise trigger the install prompt/help first. */
   mode?: 'install' | 'open-or-install'
@@ -139,18 +146,21 @@ export interface InstallAppButtonProps {
 export function InstallAppButton({
   variant = 'primary',
   className = '',
-  label = 'Install TKO',
+  label: labelOverride,
   mode = 'install',
   appHref = '/',
 }: InstallAppButtonProps) {
   const { state, promptInstall } = useInstallAvailability()
   const [android, setAndroid] = useState(false)
+  // Called unconditionally (rules of hooks); the prop still wins when passed.
+  const brandLabel = useInstallLabel()
+  const leagueBrandName = useInstallBrandName()
+  // The league's label by default — see src/hooks/useInstallLabel.ts.
+  const label = labelOverride ?? brandLabel
 
   useEffect(() => {
     setAndroid(/android/i.test(navigator.userAgent))
   }, [])
-
-  if (IS_MOBILE_STORE_BUILD) return null
 
   if (state === 'installed') {
     if (mode === 'install') return null
@@ -169,11 +179,12 @@ export function InstallAppButton({
       ? 'btn-primary text-base px-7 py-3'
       : 'rounded-lg border border-kunai/50 bg-kunai/10 px-3 py-2.5 text-sm font-semibold text-kunai hover:bg-kunai/20'
 
-  if (android) {
-    const apkUrl =
-      import.meta.env.VITE_DOWNLOAD_ANDROID ||
-      'https://storage.googleapis.com/reelone-498406-downloads/TKO-latest.apk'
-
+  const apkUrl = androidInstallUrl(
+    android,
+    leagueBrandName,
+    import.meta.env.VITE_DOWNLOAD_ANDROID,
+  )
+  if (apkUrl) {
     return (
       <a
         href={apkUrl}

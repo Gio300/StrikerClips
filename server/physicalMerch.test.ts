@@ -1,7 +1,6 @@
 import request from 'supertest'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it } from 'vitest'
 import { createApp } from './app'
-import { createPhysicalMerchService } from './physicalMerch'
 import { makeDb } from './testHarness'
 
 type User = { id: string; token: string }
@@ -36,12 +35,6 @@ describe('Stripe-first physical merchandise', () => {
     delete process.env.MERCH_ALLOW_PRINTFUL_DRAFTS
     delete process.env.MERCH_ALLOW_STRIPE_TRANSFERS
     delete process.env.MERCH_ALLOW_FULFILLMENT_CONFIRM
-    delete process.env.STRIPE_SECRET_KEY
-    delete process.env.SHOPIFY_BRIDGE_URL
-    delete process.env.TKO_SHOPIFY_BRIDGE_SECRET
-    delete process.env.PRINTFUL_ACCESS_TOKEN
-    delete process.env.PRINTFUL_STORE_ID
-    delete process.env.PRINTFUL_WEBHOOK_SECRET
 
     pool = makeDb()
     app = createApp(pool)
@@ -64,10 +57,6 @@ describe('Stripe-first physical merchandise', () => {
       [creator.id],
     )
     artifactId = String(artifact.rows[0].id)
-  })
-
-  afterEach(() => {
-    vi.unstubAllGlobals()
   })
 
   async function createApprovedProduct(): Promise<any> {
@@ -107,7 +96,6 @@ describe('Stripe-first physical merchandise', () => {
     expect(config.body).toMatchObject({
       mode: 'simulate',
       simulated: true,
-      checkout_ready: true,
       stripe_checkout_ready: true,
       shopify_bridge_ready: true,
       print_provider_ready: true,
@@ -230,122 +218,5 @@ describe('Stripe-first physical merchandise', () => {
       .get(`/api/physical/orders/${checkout.body.orderId}`)
       .set(authorized(stranger.token))
     expect(hidden.status).toBe(404)
-  })
-
-  it('creates no order and makes no Stripe call when real fulfillment is unavailable', async () => {
-    const product = await createApprovedProduct()
-    const externalFetch = vi.fn()
-    vi.stubGlobal('fetch', externalFetch)
-    process.env.MERCH_MODE = 'test'
-    process.env.STRIPE_SECRET_KEY = 'sk_test_not_used'
-    process.env.MERCH_ALLOW_STRIPE_CHECKOUT = '1'
-
-    const checkout = await request(app)
-      .post('/api/physical/checkout')
-      .set(authorized(buyer.token))
-      .send({
-        product_id: product.id,
-        variant_id: product.variants[0].id,
-        quantity: 1,
-        idempotency_key: 'real-checkout-must-be-ready',
-      })
-
-    expect(checkout.status).toBe(503)
-    expect(checkout.body.error).toBe('physical_checkout_not_ready')
-    expect(externalFetch).not.toHaveBeenCalled()
-    const orders = await pool.query(
-      'select id from physical_merch_orders where idempotency_key=$1',
-      ['real-checkout-must-be-ready'],
-    )
-    expect(orders.rows).toHaveLength(0)
-  })
-
-  it('confirms a Printful draft once and reuses the processed confirmation', async () => {
-    process.env.MERCH_MODE = 'test'
-    process.env.MERCH_ALLOW_PRINTFUL_DRAFTS = '1'
-    process.env.MERCH_ALLOW_FULFILLMENT_CONFIRM = '1'
-    process.env.PRINTFUL_ACCESS_TOKEN = 'printful-test-token'
-    const events = new Map<string, { payload: any; status: string }>()
-    const db = {
-      query: vi.fn(async (sql: string, params: any[] = []) => {
-        if (sql.includes('select payload from physical_merch_events')) {
-          const event = events.get(String(params[1]))
-          return { rows: event?.status === 'processed' ? [{ payload: event.payload }] : [] }
-        }
-        if (sql.includes('insert into physical_merch_events')) {
-          events.set(String(params[2]), {
-            payload: JSON.parse(String(params[4])),
-            status: String(params[5]),
-          })
-          return { rows: [] }
-        }
-        if (sql.includes('update physical_merch_orders')) return { rows: [] }
-        throw new Error(`Unexpected SQL in confirmation test: ${sql}`)
-      }),
-    }
-    const confirmationFetch = vi.fn(async () => ({
-      ok: true,
-      json: async () => ({ result: { id: 8741, status: 'pending' } }),
-    }))
-    vi.stubGlobal('fetch', confirmationFetch)
-    const service = createPhysicalMerchService({
-      pool: db,
-      auth: ((_req: any, _res: any, next: any) => next()),
-      uid: () => 'buyer-id',
-      withTransaction: async (fn: any) => fn(db),
-      stripeFetch: async () => ({ ok: false, status: 500, json: {} }),
-      stripeConfigured: () => false,
-      ensureCustomer: async () => '',
-      appUrl: () => 'https://tko.cam',
-    } as any)
-    const order = { id: 'order-confirm-once', provider_order_id: '8741' }
-
-    await (service as any).confirmProviderOrder(order)
-    await (service as any).confirmProviderOrder(order)
-
-    expect(confirmationFetch).toHaveBeenCalledTimes(1)
-    expect(confirmationFetch.mock.calls[0]?.[0]).toBe('https://api.printful.com/orders/8741/confirm')
-    expect(events.get('printful-confirm:order-confirm-once')).toMatchObject({
-      status: 'processed',
-      payload: { id: '8741', status: 'pending' },
-    })
-  })
-
-  it('recursively removes buyer PII from stored provider events', async () => {
-    process.env.PRINTFUL_WEBHOOK_SECRET = 'webhook-test-secret'
-    const response = await request(app)
-      .post('/api/physical/webhooks/printful')
-      .set(authorized('webhook-test-secret'))
-      .send({
-        id: 'evt-private-payload',
-        type: 'order_updated',
-        data: {
-          state: 'draft',
-          details: {
-            recipient: { name: 'Private Buyer', email: 'private@example.test' },
-            shipping_address: { line1: '123 Private Lane' },
-            nested: {
-              customerDetails: { name: 'Private Buyer', email: 'private@example.test' },
-              billingAddress: { line1: '456 Billing Road' },
-              email: 'still-private@example.test',
-              public_status: 'ready',
-            },
-          },
-        },
-      })
-
-    expect(response.status).toBe(200)
-    const stored = await pool.query(
-      `select payload from physical_merch_events
-        where provider='printful' and provider_event_id=$1`,
-      ['evt-private-payload'],
-    )
-    const payload = stored.rows[0]?.payload
-    expect(payload.data.state).toBe('draft')
-    expect(payload.data.details.nested.public_status).toBe('ready')
-    expect(JSON.stringify(payload)).not.toContain('Private Buyer')
-    expect(JSON.stringify(payload)).not.toContain('private@example.test')
-    expect(JSON.stringify(payload)).not.toContain('Private Lane')
-    expect(JSON.stringify(payload)).not.toContain('Billing Road')
   })
 })

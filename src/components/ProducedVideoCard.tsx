@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom'
-import type { ProducedVideo } from '@/lib/producedVideos'
+import { producedVideoRoute, type ProducedVideo } from '@/lib/producedVideos'
 import { YouTubeEmbed } from '@/components/YouTubeEmbed'
 
 /**
@@ -37,6 +37,7 @@ export function ProducedVideoCard({
         videoId={video.youtubeId}
         title={video.title}
         preview
+        shareRoute={producedVideoRoute(video.youtubeId)}
         overlay={
           <>
             <span className="absolute top-2 left-2 text-[10px] font-bold px-1.5 py-0.5 rounded border bg-accent/20 text-accent border-accent/30">
@@ -51,7 +52,11 @@ export function ProducedVideoCard({
         }
       />
       <div className="p-3">
-        <h3 className="font-semibold truncate">{video.title}</h3>
+        <h3 className="font-semibold truncate">
+          <Link to={producedVideoRoute(video.youtubeId)} className="hover:text-accent">
+            {video.title}
+          </Link>
+        </h3>
         <p className="text-xs text-gray-400 mt-1 truncate">{who}</p>
         {when && <p className="text-[11px] text-gray-500 mt-0.5">{when}</p>}
         <a
@@ -70,18 +75,23 @@ export function ProducedVideoCard({
 /**
  * A thin row of clickable player chips for a produced video — links each
  * appearing profile to their page. Rendered under a card where useful.
+ *
+ * Labels come off `participants`, where the gamertag travels WITH its player
+ * id. It used to index a separate `handles` array by position, which silently
+ * put the wrong name on a chip (or the placeholder "player" on all of them)
+ * whenever a handle was missing.
  */
 export function ProducedVideoPlayers({ video }: { video: ProducedVideo }) {
-  if (video.playerIds.length === 0) return null
+  if (video.participants.length === 0) return null
   return (
     <div className="flex flex-wrap gap-1.5 mt-1">
-      {video.playerIds.map((id, i) => (
+      {video.participants.map((p) => (
         <Link
-          key={id}
-          to={`/profile/${id}`}
+          key={p.id}
+          to={`/profile/${p.id}`}
           className="text-[11px] px-1.5 py-0.5 rounded bg-dark-border/40 text-accent hover:bg-accent/20"
         >
-          {video.handles[i] ?? 'player'}
+          {p.handle ?? 'player'}
         </Link>
       ))}
     </div>

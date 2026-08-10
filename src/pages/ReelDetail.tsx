@@ -4,26 +4,37 @@ import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/hooks/useAuth'
 import { usePip } from '@/components/pip/PipContext'
 import { ShareButtons } from '@/components/ShareButtons'
+import { canonicalShareUrl } from '@/lib/canonicalUrl'
 import { SyncedYouTubeReel } from '@/components/SyncedYouTubeReel'
 import { AdSlot } from '@/components/AdSlot'
 import { AutoUploadButton } from '@/components/AutoUploadButton'
 import { ReelComments } from '@/components/ReelComments'
 import { ImmersivePlayer } from '@/components/ImmersivePlayer'
 import { CollapsibleSection } from '@/components/CollapsibleSection'
-import { useEntitlements } from '@/hooks/useEntitlements'
-import { hidesAds } from '@/lib/tiers'
+import { useAdsHidden } from '@/hooks/useAdsHidden'
 import { resolveLayout, resolveSlots, isPlayableUrl, buildInviteTitle, isInviteTitleFor } from '@/lib/reelLayout'
 import { extractYouTubeId } from '@/lib/youtubeApi'
-import type { Reel, Clip, ReelLayout } from '@/types/database'
+import { reelFeedMediaLabel } from '@/lib/feedDiversity'
+import {
+  ensureReelAuthor,
+  reelAuthorName,
+  reelAuthorProfile,
+  type ReelWithAuthor,
+} from '@/lib/reelAuthor'
+import { YouTubeEmbed } from '@/components/YouTubeEmbed'
+import { ReportContentButton } from '@/components/ReportContentButton'
+import type { Clip, ReelLayout } from '@/types/database'
 
 export function ReelDetail() {
   const { id } = useParams()
   const navigate = useNavigate()
   const { minimize } = usePip()
   const { user } = useAuth()
-  const { tier } = useEntitlements()
-  const showAds = !hidesAds(tier)
-  const [reel, setReel] = useState<(Reel & { profiles?: { username: string; power_level?: number } }) | null>(null)
+  // Both ad-free ladders (personal tier + league plan), and nothing shows until
+  // the league half of the answer has landed — see useAdsHidden().
+  const { adsHidden, resolved: adsResolved } = useAdsHidden()
+  const showAds = adsResolved && !adsHidden
+  const [reel, setReel] = useState<ReelWithAuthor | null>(null)
   const [clips, setClips] = useState<Clip[]>([])
   const [inviteClips, setInviteClips] = useState<Clip[]>([])
   const [loading, setLoading] = useState(true)
@@ -47,7 +58,18 @@ export function ReelDetail() {
           .eq('id', id!)
           .single()
         if (!reelData) { setNotFound(true); return }
-        setReel(reelData as unknown as (Reel & { profiles?: { username: string; power_level?: number } }))
+        const resolvedReel = await ensureReelAuthor(
+          reelData as unknown as ReelWithAuthor,
+          async (userId) => {
+            const { data: profile } = await supabase
+              .from('profiles')
+              .select('username, power_level')
+              .eq('id', userId)
+              .maybeSingle()
+            return profile ?? null
+          },
+        )
+        setReel(resolvedReel)
 
         // 1) Officially-attached clips, in saved order.
         let ordered: Clip[] = []
@@ -113,20 +135,40 @@ export function ReelDetail() {
   const totalCount = allClips.length
   const isLocked = !!requiredSlots && totalCount < requiredSlots
   const isOwner = user?.id === reel.user_id
+  const authorName = reelAuthorName(reel)
+  const authorPower = reelAuthorProfile(reel)?.power_level
+
+  // The video factory publishes a produced short as a reel whose
+  // combined_video_url is a YOUTUBE WATCH URL (see /api/internal/publish-reel).
+  // A <video src> can't play that — it would render a dead player on every
+  // factory reel — so a YouTube-backed reel gets the real embed instead.
+  const combinedYouTubeId = isPlayableUrl(reel.combined_video_url)
+    ? extractYouTubeId(reel.combined_video_url ?? '')
+    : null
 
   // Decide which playback surface to render. Order matters:
   //  1) Locked → invite UI in place of player
-  //  2) Pre-rendered combined MP4 (uploads stitched via ffmpeg.wasm)
-  //  3) Synced YouTube reel (link-only multi-angle, free)
-  //  4) Single uploaded file fallback
+  //  2) Produced YouTube upload referenced by combined_video_url
+  //  3) Pre-rendered combined MP4 (uploads stitched via ffmpeg.wasm)
+  //  4) Synced YouTube reel (link-only multi-angle, free)
+  //  5) Single uploaded file fallback
   let body: React.ReactNode
   if (isLocked) {
     body = (
       <LockedSurface
         reelId={reel.id}
-        creatorName={reel.profiles?.username ?? 'the creator'}
+        creatorName={authorName}
         have={totalCount}
         need={requiredSlots!}
+      />
+    )
+  } else if (combinedYouTubeId) {
+    body = (
+      <YouTubeEmbed
+        videoId={combinedYouTubeId}
+        title={reel.title}
+        className="w-full h-full"
+        shareRoute={`/reels/${reel.id}`}
       />
     )
   } else if (isPlayableUrl(reel.combined_video_url)) {
@@ -184,7 +226,7 @@ export function ReelDetail() {
       <ImmersivePlayer
         reelId={reel.id}
         title={reel.title}
-        creatorName={reel.profiles?.username ?? 'Unknown'}
+        creatorName={authorName}
         creatorId={reel.user_id}
         onMinimize={handleMinimize}
         backTo="/videos"
@@ -277,14 +319,14 @@ export function ReelDetail() {
             )}
           </div>
           <p className="text-gray-400 mt-2">
-            by <Link to={`/profile/${reel.user_id}`} className="text-accent hover:underline">{reel.profiles?.username ?? 'Unknown'}</Link>
-            {reel.profiles?.power_level != null && reel.profiles.power_level > 0 && (
-              <> · PL {reel.profiles.power_level}</>
+            by <Link to={`/profile/${reel.user_id}`} className="text-accent hover:underline">{authorName}</Link>
+            {authorPower != null && authorPower > 0 && (
+              <> · PL {authorPower}</>
             )}
             {' • '}
             {requiredSlots
               ? <>{totalCount}/{requiredSlots} angles in</>
-              : <>{reel.clip_ids?.length ?? 0} clips</>}
+              : <>{reelFeedMediaLabel(reel)}</>}
             {layout !== 'concat' && <span className="ml-2 text-xs text-accent">· {layoutBadge(layout)}</span>}
             {isLocked && <span className="ml-2 text-xs text-yellow-400">· locked</span>}
           </p>
@@ -296,8 +338,19 @@ export function ReelDetail() {
           choice persists per section. */}
       <div className="mt-4 space-y-3">
         <CollapsibleSection id="reel-share" label="Share">
-          <ShareButtons title={reel.title} />
+          <ShareButtons url={canonicalShareUrl(`/reels/${reel.id}`)} title={reel.title} />
         </CollapsibleSection>
+
+        {!isOwner && user && (
+          <ReportContentButton
+            reporterId={user.id}
+            targetOwnerId={reel.user_id}
+            targetType="reel"
+            targetId={reel.id}
+            compact={false}
+            className="w-full justify-start border border-dark-border text-gray-300 hover:border-kunai/50"
+          />
+        )}
 
         {isOwner && !isLocked && reel?.user_id && (
           <CollapsibleSection id="reel-upload" label="Upload">
@@ -310,7 +363,7 @@ export function ReelDetail() {
       {isLocked && (
         <div className="mt-5 rounded-xl border border-yellow-400/30 bg-yellow-400/5 p-5">
           <h2 className="text-lg font-semibold mb-1">
-            {isOwner ? 'Add another angle' : `${reel.profiles?.username ?? 'The creator'} invited you to drop your angle`}
+            {isOwner ? 'Add another angle' : `${authorName} invited you to drop your angle`}
           </h2>
           <p className="text-sm text-gray-400 mb-4">
             Paste a YouTube link of your perspective. The reel auto-unlocks once {requiredSlots} clips
@@ -378,7 +431,7 @@ export function ReelDetail() {
 }
 
 function LockedSurface({ reelId, creatorName, have, need }: { reelId: string; creatorName: string; have: number; need: number }) {
-  const url = typeof window !== 'undefined' ? window.location.href : `/reels/${reelId}`
+  const url = canonicalShareUrl(`/reels/${reelId}`)
   const [copied, setCopied] = useState(false)
 
   function copyLink() {

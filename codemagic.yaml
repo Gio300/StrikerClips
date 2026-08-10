@@ -1,21 +1,23 @@
 workflows:
-  tko-ios-testflight:
-    name: TKO iOS - TestFlight
+  shinobi-ios-testflight:
+    name: Shinobi Striker League iOS - TestFlight
     instance_type: mac_mini_m2
     max_build_duration: 120
 
-    integrations:
-      app_store_connect: tko_app_store
-
     environment:
       groups:
-        - tko_mobile_public
-      ios_signing:
-        distribution_type: app_store
-        bundle_identifier: app.killcam
+        - appstore_credentials
       vars:
+        BUNDLE_ID: com.shinobistrikerleague.app
         XCODE_WORKSPACE: App.xcworkspace
         XCODE_SCHEME: App
+        TKO_NATIVE_BRAND: shinobistrikerleague
+        TKO_NATIVE_PLATFORMS: ios
+        VITE_NATIVE_LEAGUE_SLUG: shinobistrikerleague
+        VITE_NATIVE_DEEP_LINK_SCHEME: shinobistrikerleague
+        VITE_MOBILE_STORE_BUILD: "1"
+        VITE_REAL_BACKEND: "1"
+        VITE_API_BASE: https://tko.cam
       node: 22
       xcode: latest
       cocoapods: default
@@ -29,23 +31,29 @@ workflows:
       - name: Install JavaScript dependencies
         script: npm ci
 
-      - name: Validate physical checkout configuration
-        script: |
-          if [ -z "$VITE_STRIPE_PUBLISHABLE_KEY" ]; then
-            echo "VITE_STRIPE_PUBLISHABLE_KEY is required for physical merchandise checkout."
-            exit 1
-          fi
-
       - name: Run unit and integration tests
-        script: VITE_MOCK_BACKEND=1 npx vitest run --testTimeout 30000
+        script: npm test -- --testTimeout=15000
 
-      - name: Build the TKO web application
-        script: |
-          VITE_REAL_BACKEND=1 VITE_API_BASE=https://tko.cam VITE_BASE_PATH=/ VITE_MOBILE_STORE_BUILD=1 npm run build
-          node scripts/prune-mobile-store-assets.mjs
+      - name: Build the SSL web application
+        script: npm run build
 
       - name: Sync Capacitor iOS project
         script: npx cap sync ios
+
+      - name: Apply SSL native identity and artwork
+        script: node scripts/prepare-native-brand.mjs
+
+      - name: Initialize iOS signing keychain
+        script: keychain initialize
+
+      - name: Fetch or create SSL App Store signing files
+        script: |
+          app-store-connect fetch-signing-files "$BUNDLE_ID" \
+            --type IOS_APP_STORE \
+            --create
+
+      - name: Add signing certificate to keychain
+        script: keychain add-certificates
 
       - name: Apply App Store signing profiles
         script: xcode-project use-profiles
@@ -53,9 +61,7 @@ workflows:
       - name: Set iOS build number
         script: |
           cd "$CM_BUILD_DIR/ios/App"
-          BUILD_NUMBER="${PROJECT_BUILD_NUMBER:-4}"
-          if [ "$BUILD_NUMBER" -lt 4 ]; then BUILD_NUMBER=4; fi
-          agvtool new-version -all "$BUILD_NUMBER"
+          agvtool new-version -all "$PROJECT_BUILD_NUMBER"
 
       - name: Build signed IPA
         script: |
@@ -72,58 +78,8 @@ workflows:
 
     publishing:
       app_store_connect:
-        auth: integration
-        submit_to_testflight: false
+        api_key: $APP_STORE_CONNECT_PRIVATE_KEY
+        key_id: $APP_STORE_CONNECT_KEY_IDENTIFIER
+        issuer_id: $APP_STORE_CONNECT_ISSUER_ID
+        submit_to_testflight: true
         submit_to_app_store: false
-
-  tko-android-play:
-    name: TKO Android - Google Play
-    instance_type: linux_x2
-    max_build_duration: 120
-
-    environment:
-      groups:
-        - tko_mobile_public
-      android_signing:
-        - tko_android_upload
-      vars:
-        PACKAGE_NAME: app.killcam
-      node: 22
-      java: 17
-
-    cache:
-      cache_paths:
-        - $CM_BUILD_DIR/node_modules
-        - $HOME/.gradle/caches
-
-    scripts:
-      - name: Install JavaScript dependencies
-        script: npm ci
-
-      - name: Validate physical checkout configuration
-        script: |
-          if [ -z "$VITE_STRIPE_PUBLISHABLE_KEY" ]; then
-            echo "VITE_STRIPE_PUBLISHABLE_KEY is required for physical merchandise checkout."
-            exit 1
-          fi
-
-      - name: Run unit and integration tests
-        script: VITE_MOCK_BACKEND=1 npx vitest run --testTimeout 30000
-
-      - name: Build the TKO mobile store application
-        script: |
-          VITE_REAL_BACKEND=1 VITE_API_BASE=https://tko.cam VITE_BASE_PATH=/ VITE_MOBILE_STORE_BUILD=1 npm run build
-          node scripts/prune-mobile-store-assets.mjs
-
-      - name: Sync Capacitor Android project
-        script: npx cap sync android
-
-      - name: Build signed Android App Bundle
-        script: |
-          cd "$CM_BUILD_DIR/android"
-          chmod +x gradlew
-          ./gradlew bundleRelease
-
-    artifacts:
-      - android/app/build/outputs/bundle/release/*.aab
-      - android/app/build/outputs/mapping/release/mapping.txt

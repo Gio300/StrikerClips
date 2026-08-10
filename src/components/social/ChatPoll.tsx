@@ -1,18 +1,57 @@
-import { useEffect, useState } from 'react'
-import { BarChart3, Plus, SendHorizontal, X } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { BarChart3, ImagePlus, Plus, SendHorizontal, X } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import {
   encodeChatPoll,
   parseChatPoll,
   validateChatPoll,
 } from '@/lib/chat'
+import { encodeGifMessage, gifsEnabled, parseGifMessage, type GifResult } from '@/lib/gifs'
+import { GifPicker } from './GifPicker'
+import { GifMessageView } from './GifMessage'
+import { useChatDraft } from '@/hooks/useChatDraft'
+import { EmojiPickerButton, MentionMenu, ReplyingToBar } from '@/components/chat'
+import { ChatRichText } from '@/components/chat/ChatRichText'
+import { prepareChatMessage, type ChatMention } from '@/lib/chatMentions'
+import type { ReplyTarget } from '@/lib/chatReplies'
+import {
+  encodeChatImage,
+  parseChatImage,
+  uploadChatImage,
+  type UserImageScope,
+} from '@/lib/chatMedia'
+import { extractYouTubeId } from '@/lib/youtubeApi'
+import { YouTubeEmbed } from '@/components/YouTubeEmbed'
+
+/**
+ * Extras a send carries alongside the body. Optional so an existing caller that
+ * only wants the string keeps working — the structural mentions are simply not
+ * persisted for a surface that hasn't opted in yet.
+ */
+export interface ChatSendMeta {
+  mentions: ChatMention[]
+}
 
 interface ChatComposerProps {
   userId: string
   placeholder: string
-  onSend: (body: string) => Promise<void>
+  onSend: (body: string, meta?: ChatSendMeta) => Promise<void>
+  /**
+   * Called as the user types. OPTIONAL, and debounced by the caller's presence
+   * hook — a surface with no presence simply omits it and nothing changes.
+   */
+  onTyping?: () => void
+  /** The message being replied to, if any. Omit for surfaces without replies. */
+  replyTo?: ReplyTarget | null
+  onCancelReply?: () => void
+  /** Enables the picture picker and scopes uploads to this persisted chat. */
+  mediaRoomId?: string | null
+  mediaRoomType?: Exclude<UserImageScope, 'post' | 'stream' | 'tournament'>
   className?: string
 }
+
+/** DMs cap at 1000 server-side (server/app.ts dm_messages insertCheck). */
+const COMPOSER_MAX_LENGTH = 1000
 
 type ErrorLike = { message?: string } | null | undefined
 
@@ -61,24 +100,72 @@ export function ChatComposer({
   userId,
   placeholder,
   onSend,
+  onTyping,
+  replyTo = null,
+  onCancelReply,
+  mediaRoomId = null,
+  mediaRoomType = 'dm',
   className = '',
 }: ChatComposerProps) {
-  const [draft, setDraft] = useState('')
+  // The shared composer brain — the same @mention autocomplete, structural
+  // mentions and emoji insertion the live/tournament chats use.
+  const draft = useChatDraft({ userId, onTyping })
   const [pollOpen, setPollOpen] = useState(false)
+  const [gifOpen, setGifOpen] = useState(false)
   const [question, setQuestion] = useState('')
   const [options, setOptions] = useState(['', ''])
   const [sending, setSending] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const imageInputRef = useRef<HTMLInputElement>(null)
+  // No provider key configured → the button never renders and this composer is
+  // byte-for-byte what it was before GIFs existed.
+  const canGif = useMemo(() => gifsEnabled(), [])
 
-  async function sendText(event: React.FormEvent) {
-    event.preventDefault()
-    const body = draft.trim().slice(0, 1000)
-    if (!body || sending) return
+  async function sendGif(gif: GifResult) {
+    if (sending) return
     setSending(true)
     setError(null)
     try {
-      await onSend(body)
-      setDraft('')
+      // encodeGifMessage throws on an off-allowlist host, so a bad provider
+      // payload surfaces as an error instead of posting an unrenderable body.
+      await onSend(encodeGifMessage(gif))
+      setGifOpen(false)
+    } catch (sendError) {
+      setError(errorText(sendError, 'Could not send the GIF.'))
+    } finally {
+      setSending(false)
+    }
+  }
+
+  async function sendImage(file: File) {
+    if (!mediaRoomId || sending) return
+    setSending(true)
+    setError(null)
+    try {
+      const image = await uploadChatImage(file, mediaRoomId, mediaRoomType)
+      await onSend(encodeChatImage(image))
+    } catch (sendError) {
+      setError(errorText(sendError, 'Could not send the image.'))
+    } finally {
+      setSending(false)
+      if (imageInputRef.current) imageInputRef.current.value = ''
+    }
+  }
+
+  async function sendText(event: React.FormEvent) {
+    event.preventDefault()
+    // One place trims, strips spoofed control markers, caps the line AND
+    // re-anchors the mentions to the text those edits produced.
+    const outgoing = prepareChatMessage(
+      { text: draft.text, mentions: draft.mentions },
+      COMPOSER_MAX_LENGTH,
+    )
+    if (!outgoing.text || sending) return
+    setSending(true)
+    setError(null)
+    try {
+      await onSend(outgoing.text, { mentions: outgoing.mentions })
+      draft.reset()
     } catch (sendError) {
       setError(errorText(sendError, 'Could not send the message.'))
     } finally {
@@ -179,7 +266,58 @@ export function ChatComposer({
         </p>
       )}
 
-      <form onSubmit={sendText} className="flex items-center gap-2 p-3 sm:p-4">
+      {gifOpen && canGif && (
+        <div className="p-2">
+          <GifPicker onPick={sendGif} onClose={() => setGifOpen(false)} />
+        </div>
+      )}
+
+      {replyTo && (
+        <ReplyingToBar target={replyTo} onCancel={() => onCancelReply?.()} />
+      )}
+
+      <form onSubmit={sendText} className="relative flex items-center gap-2 p-3 sm:p-4">
+        <MentionMenu draft={draft} />
+        {mediaRoomId && (
+          <>
+            <input
+              ref={imageInputRef}
+              type="file"
+              accept="image/jpeg,image/png,image/webp,image/gif"
+              className="sr-only"
+              onChange={(event) => {
+                const file = event.target.files?.[0]
+                if (file) void sendImage(file)
+              }}
+            />
+            <button
+              type="button"
+              onClick={() => imageInputRef.current?.click()}
+              disabled={sending}
+              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-dark-border text-gray-400 hover:text-white disabled:opacity-40"
+              aria-label="Send a picture"
+              title="Send a picture"
+            >
+              <ImagePlus className="h-4 w-4" aria-hidden />
+            </button>
+          </>
+        )}
+        {canGif && (
+          <button
+            type="button"
+            onClick={() => setGifOpen((open) => !open)}
+            className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border text-xs font-black ${
+              gifOpen
+                ? 'border-accent bg-accent/10 text-accent'
+                : 'border-dark-border text-gray-400 hover:text-white'
+            }`}
+            aria-label="Send a GIF"
+            aria-expanded={gifOpen}
+            title="Send a GIF"
+          >
+            GIF
+          </button>
+        )}
         <button
           type="button"
           onClick={() => setPollOpen((open) => !open)}
@@ -194,15 +332,22 @@ export function ChatComposer({
           <BarChart3 className="h-4 w-4" />
         </button>
         <input
-          value={draft}
-          onChange={(event) => setDraft(event.target.value)}
-          maxLength={1000}
+          ref={(el) => {
+            draft.inputRef.current = el
+          }}
+          value={draft.text}
+          onChange={draft.onChange}
+          onKeyDown={draft.onKeyDown}
+          onClick={draft.onCaretMove}
+          onBlur={draft.onBlur}
+          maxLength={COMPOSER_MAX_LENGTH}
           placeholder={placeholder}
           className="min-w-0 flex-1 rounded-lg border border-dark-border bg-dark px-4 py-2 text-white placeholder-gray-500 focus:border-accent focus:outline-none"
         />
+        <EmojiPickerButton onPick={draft.insertEmoji} />
         <button
           type="submit"
-          disabled={!draft.trim() || sending}
+          disabled={!draft.text.trim() || sending}
           className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-accent text-dark disabled:opacity-50"
           aria-label="Send message"
           title="Send message"
@@ -354,13 +499,52 @@ function ConversationPoll({ pollId, userId }: { pollId: string; userId: string |
 export function ChatMessageContent({
   body,
   userId,
+  mentions,
   className = 'mt-0.5 break-words text-gray-300',
 }: {
   body: string
   userId: string | null
+  /**
+   * The row's validated mentions. Absent (legacy rows, or a backend without the
+   * column) simply means no chips — the body renders as plain text, which is
+   * correct rather than broken.
+   */
+  mentions?: readonly ChatMention[] | null
   className?: string
 }) {
   const pollId = parseChatPoll(body)
   if (pollId) return <ConversationPoll pollId={pollId} userId={userId} />
-  return <p className={className}>{body}</p>
+  // A GIF only renders as a GIF when the WHOLE body is a well-formed marker
+  // pointing at an allowlisted provider host — otherwise it falls through to
+  // plain text, so a hand-typed marker is just ugly text, never an embed.
+  const gif = parseGifMessage(body)
+  if (gif) return <GifMessageView gif={gif} />
+  const image = parseChatImage(body)
+  if (image) {
+    return (
+      <a href={image.url} target="_blank" rel="noopener noreferrer" className="block overflow-hidden rounded-md">
+        <img src={image.url} alt={image.alt} loading="lazy" className="max-h-[28rem] w-full object-contain" />
+      </a>
+    )
+  }
+  const candidates = body.match(/https?:\/\/[^\s<>"']+/giu) ?? []
+  const youtubeId = candidates.map((candidate) => extractYouTubeId(candidate)).find(Boolean) ?? null
+  if (youtubeId) {
+    return (
+      <div data-user-content className="w-[min(72vw,28rem)] max-w-full">
+        <p className={className}>
+          <ChatRichText text={body} mentions={mentions} viewerId={userId} />
+        </p>
+        <YouTubeEmbed videoId={youtubeId} title="Video shared in chat" className="mt-2 rounded-md" />
+      </div>
+    )
+  }
+  // ChatRichText renders React nodes only — mention chips come from the
+  // structural array, never from re-scanning the text, and there is no
+  // dangerouslySetInnerHTML anywhere on this path.
+  return (
+    <p data-user-content className={className}>
+      <ChatRichText text={body} mentions={mentions} viewerId={userId} />
+    </p>
+  )
 }

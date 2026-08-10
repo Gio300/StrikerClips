@@ -1,4 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
+import { recomputePower } from './power'
 // ===========================================================================
 // RENDER WORKER — the muscle behind auto-match.
 //
@@ -33,6 +34,33 @@ export interface RenderResult {
 export type RenderAndUpload = (pool: Pool, job: RenderJob) => Promise<RenderResult>
 
 const MAX_ATTEMPTS = 3
+
+/**
+ * Refuse to spend render time or a YouTube upload on clips that did not come
+ * from the frame-analysis pipeline. Each angle must be tied to its own detected
+ * match segment with the same confidence threshold used by the channel roster.
+ */
+export async function assertRenderJobHasCombatEvidence(pool: Pool, job: RenderJob): Promise<void> {
+  if (job.clip_ids.length === 0) throw new Error('combat verification failed: render job has no clips')
+  for (const clipId of job.clip_ids) {
+    const verified = await pool.query(
+      `select cr.id
+         from clip_records cr
+         join match_segments ms
+           on ms.id=cr.segment_id and ms.source_id=cr.source_id
+        where cr.id=$1
+          and cr.segment_id is not null
+          and cr.source_id is not null
+          and cr.score_verification_status in ('shadow','verified')
+          and coalesce(cr.boundary_confidence,ms.boundary_confidence,0) >= 0.70
+        limit 1`,
+      [clipId],
+    )
+    if (!verified.rows[0]) {
+      throw new Error(`combat verification failed for clip ${clipId}`)
+    }
+  }
+}
 
 async function recordMatchVersion(
   pool: Pool,
@@ -155,16 +183,7 @@ export async function completeJob(pool: Pool, job: RenderJob, result: RenderResu
   // (recompute from their clips so it stays consistent with server/app.ts:
   // wins +250, losses −75, neutral uploads +100, produced +150, floored at 0).
   for (const pid of job.participant_ids) {
-    await pool.query(
-      `update profiles set power_level = greatest(0, (
-         select coalesce(sum(case when outcome='victory' then 1 else 0 end),0) * 250
-              - coalesce(sum(case when outcome='defeat' then 1 else 0 end),0) * 75
-              + coalesce(sum(case when outcome is null or outcome='draw' then 1 else 0 end),0) * 100
-              + count(distinct case when composite_youtube_id is not null then composite_youtube_id end) * 150
-         from clip_records where player_id=$1
-       )) where id=$1`,
-      [pid],
-    )
+    await recomputePower(pool, pid)
   }
   // AUTO-MERGE → CONQUEST: this produced match is verified (same-match, linked
   // accounts). If it's a clan-vs-clan match with a tagged winner, feed the

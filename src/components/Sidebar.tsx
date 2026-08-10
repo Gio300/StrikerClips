@@ -1,9 +1,9 @@
+import { useState } from 'react'
 import { NavLink, useNavigate } from 'react-router-dom'
 import {
   Bell,
   Bot,
   Clapperboard,
-  Download,
   FileText,
   Gem,
   Hammer,
@@ -14,9 +14,13 @@ import {
   LogOut,
   MessageCircleMore,
   Mic2,
+  PanelLeftClose,
+  PanelLeftOpen,
   Plus,
   Radio,
   Search,
+  Settings2,
+  ShieldCheck,
   Shirt,
   ShoppingBag,
   Sparkles,
@@ -32,6 +36,9 @@ import { supabase } from '@/lib/supabase'
 import { canHost } from '@/lib/tkoKing'
 import { BrandLogo } from '@/components/BrandLogo'
 import { useUnreadNotifications } from '@/hooks/useUnreadNotifications'
+import { useInstallLabel } from '@/hooks/useInstallLabel'
+import { InstallAppButton } from '@/components/InstallAppButton'
+import { useLeagueTheme } from '@/components/LeagueThemeProvider'
 import { IS_MOBILE_STORE_BUILD } from '@/lib/storeBuild'
 
 type NavItem = {
@@ -51,7 +58,7 @@ const PLAY_NAV: NavItem[] = [
 ]
 
 const COMMUNITY_NAV: NavItem[] = [
-  { to: '/chat', label: 'Connect (Chat)', Icon: MessageCircleMore },
+  { to: '/messages', label: 'Chats', Icon: MessageCircleMore },
   { to: '/clans', label: 'Clans', Icon: UsersRound },
   { to: '/discover', label: 'Search', Icon: Search },
   { to: '/profile', label: 'Profile', Icon: UserRound },
@@ -65,23 +72,70 @@ const MARKET_NAV: NavItem[] = IS_MOBILE_STORE_BUILD
       { to: '/oracle', label: 'Oracle', Icon: Bot },
     ]
 
+const SIDEBAR_PREF_KEY = 'tko_sidebar_open'
+
 export function Sidebar() {
   const { user } = useAuth()
+  const { league } = useLeagueTheme()
+  const brandName = league?.name || 'TKO'
   const { count: unreadCount } = useUnreadNotifications()
+  // "Install TKO" on tko.cam, "Install <league>" on a league address.
+  const installLabel = useInstallLabel()
   const navigate = useNavigate()
+
+  // Operator 2026-08-02: "people don't need to see the side panel all the
+  // time" — the sidebar defaults SLID-AWAY everywhere; the floating opener
+  // brings it back, and the choice sticks for the session.
+  const [pref, setPref] = useState<boolean | null>(() => {
+    try {
+      const raw = sessionStorage.getItem(SIDEBAR_PREF_KEY)
+      return raw == null ? null : raw === '1'
+    } catch {
+      return null
+    }
+  })
+  const open = pref ?? false
+
+  function setOpenPref(next: boolean) {
+    setPref(next)
+    try { sessionStorage.setItem(SIDEBAR_PREF_KEY, next ? '1' : '0') } catch { /* best-effort */ }
+  }
 
   async function handleSignOut() {
     await supabase.auth.signOut()
     navigate('/')
   }
 
+  if (!open) {
+    return (
+      <button
+        type="button"
+        onClick={() => setOpenPref(true)}
+        aria-label="Open menu"
+        title="Open menu"
+        className="fixed left-2 top-2 z-40 hidden h-10 w-10 items-center justify-center rounded-lg border border-dark-border bg-dark-card/90 text-gray-300 shadow-lg backdrop-blur transition-colors hover:border-accent hover:text-accent sm:flex"
+      >
+        <PanelLeftOpen size={18} />
+      </button>
+    )
+  }
+
   return (
     <aside className="sticky top-0 hidden h-screen w-[72px] shrink-0 flex-col border-r border-dark-border bg-dark-card sm:flex md:w-[232px]">
-      <div className="flex h-16 items-center justify-center border-b border-dark-border px-3 md:justify-start">
-        <NavLink to="/" className="transition-opacity hover:opacity-80" aria-label="TKO home">
+      <div className="flex h-16 items-center justify-center gap-2 border-b border-dark-border px-3 md:justify-start">
+        <NavLink to="/" className="transition-opacity hover:opacity-80" aria-label={`${brandName} home`}>
           <BrandLogo variant="icon" className="text-base md:hidden" />
           <BrandLogo className="hidden text-base md:inline-flex" />
         </NavLink>
+        <button
+          type="button"
+          onClick={() => setOpenPref(false)}
+          aria-label="Hide menu"
+          title="Hide menu"
+          className="ml-auto flex h-8 w-8 items-center justify-center rounded-md text-gray-500 transition-colors hover:text-accent"
+        >
+          <PanelLeftClose size={16} />
+        </button>
       </div>
 
       <nav className="flex-1 overflow-y-auto px-2 py-3">
@@ -102,6 +156,10 @@ export function Sidebar() {
             label="Studio"
             items={[
               { to: '/connect', label: 'Connected accounts', Icon: Link2 },
+              ...(IS_MOBILE_STORE_BUILD
+                ? [{ to: '/settings', label: 'Account settings', Icon: Settings2 }]
+                : [{ to: '/settings', label: 'Account & payouts', Icon: Settings2 }]),
+              { to: '/privacy-settings', label: 'Privacy', Icon: ShieldCheck },
               ...(canHost(user) ? [{ to: '/host', label: 'Host', Icon: Mic2 }] : []),
               { to: '/rewards', label: 'Artifacts', Icon: Gem },
               { to: '/forge', label: 'Forge', Icon: Hammer },
@@ -116,7 +174,25 @@ export function Sidebar() {
       <div className="border-t border-dark-border p-2">
         {!IS_MOBILE_STORE_BUILD && <NavRow to="/upgrade" label="Membership" Icon={Sparkles} />}
         <NavRow to="/redeem" label="Redeem pass" Icon={Ticket} />
-        {!IS_MOBILE_STORE_BUILD && <NavRow to="/marketing" label="Install TKO" Icon={Download} />}
+        {/* THE INSTALL IS THE INSTALL, not a trip to the pitch page. Operator
+            2026-08-07: "shouldn't be taken to TKO.cam to download app.. should
+            just be able to download right from the more link.. that should
+            start the download."
+
+            This was a NavRow to /marketing, so the member left the app, landed
+            on sales copy, and had to find the button again. InstallAppButton
+            fires the browser's own prompt against the manifest of the host they
+            are already on -- so on a league domain a member installs the
+            LEAGUE's app, which is the whole point of the white label. It
+            renders nothing once installed, and falls back to help text on
+            browsers with no prompt (iOS), which the NavRow never did. */}
+        {!IS_MOBILE_STORE_BUILD && (
+          <InstallAppButton
+            variant="subtle"
+            label={installLabel}
+            className="block w-full [&>button]:w-full [&>button]:justify-start"
+          />
+        )}
         <NavRow to="/help" label="Help" Icon={HelpCircle} />
         <NavRow to="/legal" label="Legal" Icon={FileText} />
         {!user ? (

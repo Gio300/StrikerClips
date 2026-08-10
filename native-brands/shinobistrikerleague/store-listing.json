@@ -1,0 +1,18 @@
+{
+  "defaultLanguage": "en-US",
+  "appName": "Shinobi Striker League",
+  "subtitle": "Rise. Strike. Reign.",
+  "shortDescription": "League matches, clips, live rooms, clans, chat, and standings in one place.",
+  "description": "Shinobi Striker League is the home for the league community. Follow live competition, watch match clips and reels, join league conversations, and keep your player profile connected to the correct YouTube channel.\n\nUse the app to:\n- Follow tournaments, live matches, results, and standings\n- Watch league clips, reels, and player footage\n- Chat with players and league members\n- Join or manage a clan and its competition rosters\n- View match and message activity inside the app\n- Manage your profile and connected YouTube channel\n- Review privacy controls or request account deletion from Settings\n\nShinobi Striker League is a community competition app and is not affiliated with or endorsed by Bandai Namco Entertainment, Sony, or the Naruto franchise owners.",
+  "keywords": [
+    "shinobi striker",
+    "gaming league",
+    "tournaments",
+    "esports",
+    "clips"
+  ],
+  "category": "Sports",
+  "privacyUrl": "https://shinobistrikerleague.com/privacy",
+  "accountDeletionUrl": "https://shinobistrikerleague.com/account/delete",
+  "supportUrl": "https://shinobistrikerleague.com/help"
+}

@@ -176,7 +176,18 @@ async function ensurePrice(
  * server/app.ts. `envKey` is what the server reads to resolve the price.
  */
 const SUBSCRIPTIONS = [
-  { tierKey: 'ad_free', name: 'TKO Ad-Free', amountCents: 199, envKey: 'STRIPE_PRICE_AD_FREE' },
+  // RETIRED 2026-08 — `ad_free` ($1.99/mo, STRIPE_PRICE_AD_FREE) is deliberately
+  // ABSENT so re-running this script never re-creates the product or the price.
+  //
+  // Stripe's flat $0.30 is 15.1 points of an 18.0% total fee at $1.99
+  // (2.9% + $0.30 = $0.3577), and any SKU under $4.23 pays Stripe over 10%.
+  // $4.99 Pro is now the entry paid tier. See RETIRED_TIERS in server/app.ts
+  // for the full note.
+  //
+  // The tier is still HONOURED everywhere — existing subscribers renew and stay
+  // ad-free. This script only stops the SKU being re-listed; it does not and
+  // must not archive or delete the live price object, which is the operator's
+  // call in the Stripe dashboard.
   { tierKey: 'pro', name: 'TKO Pro', amountCents: 499, envKey: 'STRIPE_PRICE_PRO' },
   { tierKey: 'supporter', name: 'TKO Elite', amountCents: 999, envKey: 'STRIPE_PRICE_SUPPORTER' },
   { tierKey: 'creator', name: 'TKO Legend', amountCents: 2999, envKey: 'STRIPE_PRICE_CREATOR' },
@@ -194,6 +205,24 @@ const PACKS = [
   { packKey: 'plus', name: 'TKO Tokens — Plus', amountCents: 499, tokens: 550, bonusSweeps: 200, envKey: 'STRIPE_PRICE_PACK_PLUS' },
   { packKey: 'pro', name: 'TKO Tokens — Pro', amountCents: 999, tokens: 1200, bonusSweeps: 400, envKey: 'STRIPE_PRICE_PACK_PRO' },
   { packKey: 'mega', name: 'TKO Tokens — Mega', amountCents: 1999, tokens: 3000, bonusSweeps: 800, envKey: 'STRIPE_PRICE_PACK_MEGA' },
+] as const
+
+/**
+ * THE LEAGUE-OWNER PLANS — a different product from the subscription ladder
+ * above: bought by a league OWNER, not a player. Mirrored from LEAGUE_PLANS in
+ * src/lib/leaguePlans.ts, which the app and the server both read; the amounts
+ * here and there must agree or we charge for one plan and grant another.
+ *
+ * The env keys are deliberately in their own namespace. Both ladders contain
+ * the key 'pro', so if a league plan resolved through `STRIPE_PRICE_PRO` a
+ * league checkout would open against the $4.99 MEMBER price.
+ *
+ * 'enterprise' is absent on purpose: it has no checkout, it captures a lead.
+ */
+const LEAGUE_PLANS = [
+  { planKey: 'starter', name: 'TKO League — Starter', amountCents: 4900, envKey: 'STRIPE_PRICE_LEAGUE_STARTER' },
+  { planKey: 'pro', name: 'TKO League — Pro', amountCents: 14900, envKey: 'STRIPE_PRICE_LEAGUE_PRO' },
+  { planKey: 'dynasty', name: 'TKO League — Dynasty', amountCents: 39900, envKey: 'STRIPE_PRICE_LEAGUE_DYNASTY' },
 ] as const
 
 type Created = { envKey: string; priceId: string; label: string; action: Action; previous?: string }
@@ -222,6 +251,23 @@ async function main(): Promise<void> {
     out.push({
       envKey: s.envKey, priceId: price.id, action: price.action, previous: price.previous,
       label: `${s.name} (${usd(s.amountCents)}/mo)`,
+    })
+  }
+
+  console.log('\nLeague plans (bought by a league OWNER):')
+  for (const p of LEAGUE_PLANS) {
+    const productId = `tko_league_${p.planKey}`
+    const lookupKey = `tko_league_${p.planKey}`
+    const product = await ensureProduct(productId, p.name, {
+      brand: 'tko', kind: 'league_plan', plan: p.planKey,
+    })
+    const price = await ensurePrice(lookupKey, product.id, p.amountCents, true, {
+      brand: 'tko', league_plan: p.planKey,
+    })
+    console.log(`  ${p.name.padEnd(24)} ${usd(p.amountCents).padStart(8)}/mo   product:${product.action} price:${price.action}`)
+    out.push({
+      envKey: p.envKey, priceId: price.id, action: price.action, previous: price.previous,
+      label: `${p.name} (${usd(p.amountCents)}/mo)`,
     })
   }
 

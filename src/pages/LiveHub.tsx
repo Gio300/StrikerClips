@@ -1,10 +1,9 @@
-import { useState, type ReactNode } from 'react'
+import { type ReactNode } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { GoLive } from '@/pages/GoLive'
 import { Director } from '@/pages/Director'
 import { Videos } from '@/pages/Videos'
 import { OBSPanel } from '@/components/OBSPanel'
-import { LiveNowStrip } from '@/components/LiveNowStrip'
 import { LiveNowBoard } from '@/components/LiveNowBoard'
 import { ActionCard } from '@/components/ui/ActionCard'
 import type { NinjaIconName } from '@/components/ui/NinjaIcon'
@@ -64,10 +63,26 @@ const MENU: MenuItem[] = [...GO_LIVE_MENU, ...WATCH_MENU]
 
 export function LiveHub() {
   const [params, setParams] = useSearchParams()
-  const [screen, setScreen] = useState<Screen>(() => screenFromParams(params))
+
+  /**
+   * THE URL IS THE SCREEN — derived every render, never copied into state.
+   *
+   * This used to be `useState(() => screenFromParams(params))`, and a lazy
+   * initializer runs ONCE PER MOUNT. `/live` and `/live?do=golive` are the same
+   * <Route>, so arriving at the second while already on the first re-rendered
+   * this component instead of remounting it — and the initializer never ran
+   * again. The screen stayed on whatever it was when the page first opened.
+   *
+   * This matters for every link to the go-live door (`/live?do=golive`). Links
+   * followed while LiveHub was mounted changed the address bar but not the
+   * screen; links followed elsewhere mounted LiveHub fresh and appeared to work.
+   *
+   * Deriving instead of storing also makes browser Back/Forward move between
+   * these screens, which the copy could never do.
+   */
+  const screen = screenFromParams(params)
 
   const go = (next: Screen) => {
-    setScreen(next)
     const p = new URLSearchParams(params)
     p.delete('tab')
     if (next === 'menu') p.delete('do')
@@ -143,11 +158,6 @@ function WatchScreen() {
   return (
     <div className="p-6 sm:p-8 max-w-5xl mx-auto">
       <LiveNowBoard className="mb-8" />
-
-      <LiveNowStrip placement="front_page" />
-      <LiveNowStrip placement="tournament" />
-      <LiveNowStrip placement="clan" />
-      <LiveNowStrip placement="profile" />
 
       <div className="rounded-xl border border-dark-border bg-dark-card p-6 text-center">
         <div className="text-2xl mb-1">🔴</div>

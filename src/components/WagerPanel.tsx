@@ -16,6 +16,7 @@ import { useAuth } from '@/hooks/useAuth'
 import { useWallet } from '@/hooks/useWallet'
 import { callFn } from '@/lib/backend'
 import { supabase } from '@/lib/supabase'
+import { WAGERING_UI_ENABLED } from '@/lib/storeBuild'
 
 interface WagerPool {
   id: string
@@ -42,7 +43,12 @@ export interface WagerPanelProps {
   className?: string
 }
 
-export function WagerPanel({ matchRef, defaultOptions, title = 'Sweeps wager', className = '' }: WagerPanelProps) {
+export function WagerPanel(props: WagerPanelProps) {
+  if (!WAGERING_UI_ENABLED) return null
+  return <WagerPanelEnabled {...props} />
+}
+
+function WagerPanelEnabled({ matchRef, defaultOptions, title = 'Sweeps wager', className = '' }: WagerPanelProps) {
   const { user } = useAuth()
   const { sweeps, refresh } = useWallet()
   const isHost = user?.user_metadata?.tko_host === true

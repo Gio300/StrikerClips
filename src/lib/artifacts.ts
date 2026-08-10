@@ -31,7 +31,17 @@ export type Capability =
   | 'clan_tag'             // a clan/event tag cosmetic
   | 'event_badge'          // event art badge
 
-/** The tier a "gift" artifact grants — the entry paid tier, never Pro/creator. */
+/**
+ * The tier a "gift" artifact grants — the smallest pass we have, never
+ * Pro/creator, so gifts can't be farmed into free Pro months.
+ *
+ * DELIBERATELY UNCHANGED BY THE 2026-08 `ad_free` RETIREMENT. Retiring a SKU
+ * stops it being SOLD; a gift is not a sale. `ad_free` remains a fully honoured
+ * tier (see the note at the top of src/lib/tiers.ts), so a gifted pass behaves
+ * exactly as it always did — and repointing this at `pro` would silently turn a
+ * $1.99-shaped gift into a $4.99-shaped one, which is a product decision and
+ * not a side effect of a pricing change.
+ */
 export const GIFT_TIER = 'ad_free' as const
 
 export const CAPABILITY_LABEL: Record<Capability, string> = {

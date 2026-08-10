@@ -12,13 +12,16 @@ import {
 } from './guides'
 
 describe('guides — registry shape', () => {
-  it('exposes the five authored guides', () => {
+  it('exposes the authored user-journey guides', () => {
     expect(guideIds()).toEqual([
       'tko-king',
       'connect-youtube',
       'make-clip',
       'go-live',
       'join-clan',
+      'manage-clan-roster',
+      'run-tournament',
+      'video-and-power-status',
     ])
   })
 
@@ -114,6 +117,10 @@ describe('guides — route → guide suggestion', () => {
     expect(suggestGuideId('/reels/create')).toBe('make-clip')
     expect(suggestGuideId('/go-live')).toBe('go-live')
     expect(suggestGuideId('/clans/discover')).toBe('join-clan')
+    expect(suggestGuideId('/clans')).toBe('manage-clan-roster')
+    expect(suggestGuideId('/tournaments')).toBe('run-tournament')
+    expect(suggestGuideId('/my-clips')).toBe('video-and-power-status')
+    expect(suggestGuideId('/profile')).toBe('video-and-power-status')
   })
 
   it('matches sub-paths and tolerates a trailing slash', () => {
@@ -122,20 +129,18 @@ describe('guides — route → guide suggestion', () => {
   })
 
   it('prefers the longest (most specific) prefix', () => {
-    // /clans/discover must beat a broader /clans match (there is none, but the
-    // discover route should never be mistaken for a generic clans page).
+    // /clans/discover must beat the broader /clans roster-management route.
     expect(suggestGuideId('/clans/discover')).toBe('join-clan')
   })
 
   it('returns null for routes with no guide', () => {
     expect(suggestGuideId('/')).toBeNull()
-    expect(suggestGuideId('/profile')).toBeNull()
-    expect(suggestGuideId('/tournaments')).toBeNull()
+    expect(suggestGuideId('/messages')).toBeNull()
     expect(suggestGuideId('')).toBeNull()
   })
 
   it('suggestGuide returns the full guide object or undefined', () => {
     expect(suggestGuide('/go-live')?.id).toBe('go-live')
-    expect(suggestGuide('/profile')).toBeUndefined()
+    expect(suggestGuide('/messages')).toBeUndefined()
   })
 })

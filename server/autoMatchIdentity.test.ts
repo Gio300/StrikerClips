@@ -54,6 +54,9 @@ describe('auto-match identity regressions', () => {
     const carol = await signUp(app, 'carol')
     await entitleForAutoMerge(pool, bob.id)
     await entitleForAutoMerge(pool, carol.id)
+    for (const player of [alice, bob, carol]) {
+      await pool.query("update profiles set reel_usage_privacy='anyone' where id=$1", [player.id])
+    }
 
     const started = Date.parse('2026-07-26T18:00:00Z')
     const aliceClip = await addClip(app, alice, {
@@ -195,6 +198,9 @@ describe('auto-match identity regressions', () => {
     const hammy = await signUp(app, 'hammy')
     await entitleForAutoMerge(pool, bob.id)
     await entitleForAutoMerge(pool, hammy.id)
+    for (const player of [alice, bob, hammy]) {
+      await pool.query("update profiles set reel_usage_privacy='anyone' where id=$1", [player.id])
+    }
 
     const started = Date.parse('2026-07-26T22:00:00Z')
     const roster = ['alice', 'bob', 'hammy']

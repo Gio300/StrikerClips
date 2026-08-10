@@ -1,8 +1,8 @@
 import { Link } from 'react-router-dom'
-import { BRAND, SUPPORT } from '@/lib/brand'
+import { SUPPORT } from '@/lib/brand'
 import { NinjaIcon } from '@/components/ui'
 import { useAskTko } from '@/components/AskTkoContext'
-import { IS_MOBILE_STORE_BUILD } from '@/lib/storeBuild'
+import { useLeagueTheme } from '@/components/LeagueThemeProvider'
 
 /**
  * Get help — the customer-service entry point.
@@ -17,13 +17,15 @@ import { IS_MOBILE_STORE_BUILD } from '@/lib/storeBuild'
  */
 export function Help() {
   const { open: openAskTko } = useAskTko()
+  const { display } = useLeagueTheme()
+  const brandName = display.productName
 
   return (
     <div className="max-w-3xl mx-auto p-4 sm:p-6 lg:p-8 space-y-6">
       <div className="space-y-1.5">
         <h1 className="text-2xl font-bold text-white">Get help</h1>
         <p className="text-sm text-gray-400">
-          Stuck on something in {BRAND.name}? Start with the assistant — it walks you through the app step
+          Stuck on something in {brandName}? Start with the assistant — it walks you through the app step
           by step. If you need a person, we're on Facebook.
         </p>
       </div>
@@ -37,7 +39,7 @@ export function Help() {
         >
           <span className="flex items-center gap-2 text-accent">
             <NinjaIcon name="sparkle" size={20} />
-            <span className="text-lg font-semibold">Ask TKO</span>
+            <span className="text-lg font-semibold">{display.assistantName}</span>
           </span>
           <p className="text-sm text-gray-300 mt-2 leading-relaxed">
             The in-app guided assistant. Pick what you're trying to do — make a clip, go live, enter a
@@ -78,9 +80,32 @@ export function Help() {
             </button>
           </li>
           <li>
-            {IS_MOBILE_STORE_BUILD
-              ? <span className="text-gray-500">Membership and billing are not available in the mobile app.</span>
-              : <Link to="/upgrade" className="text-accent hover:underline">Membership, billing and what each tier unlocks</Link>}
+            <button type="button" onClick={() => openAskTko('connect-youtube')} className="text-accent hover:underline">
+              Connect the correct YouTube channel
+            </button>
+          </li>
+          <li>
+            <button type="button" onClick={() => openAskTko('join-clan')} className="text-accent hover:underline">
+              Apply to a clan and get approved
+            </button>
+          </li>
+          <li>
+            <button type="button" onClick={() => openAskTko('manage-clan-roster')} className="text-accent hover:underline">
+              Approve members and build a clan roster
+            </button>
+          </li>
+          <li>
+            <button type="button" onClick={() => openAskTko('run-tournament')} className="text-accent hover:underline">
+              Create, edit, and run a tournament
+            </button>
+          </li>
+          <li>
+            <button type="button" onClick={() => openAskTko('video-and-power-status')} className="text-accent hover:underline">
+              Check a missing clip or power change
+            </button>
+          </li>
+          <li>
+            <Link to="/upgrade" className="text-accent hover:underline">Membership, billing and what each tier unlocks</Link>
           </li>
           <li>
             <Link to="/redeem" className="text-accent hover:underline">Redeem a code</Link>

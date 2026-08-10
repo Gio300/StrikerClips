@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import {
+  CircleDollarSign,
   Coins,
   Crown,
   Hammer,
+  Lock,
   MapPinned,
   Shield,
   Shirt,
@@ -12,16 +14,17 @@ import {
   Ticket,
   UserRound,
   UsersRound,
+  Zap,
 } from 'lucide-react'
 import { useAuth } from '@/hooks/useAuth'
 import { useEntitlements } from '@/hooks/useEntitlements'
 import { supabase } from '@/lib/supabase'
 import UnlockReveal from '@/components/UnlockReveal'
+import UpgradeNudge from '@/components/UpgradeNudge'
 import { addAsset, type SellerType } from '@/lib/assets'
 import {
   RARITY,
   CAPABILITY_LABEL,
-  makeGiftCode,
   type Rarity,
   type Capability,
 } from '@/lib/artifacts'
@@ -32,27 +35,67 @@ import {
   conquestTierAllows,
   type ConquestArtifactRecipe,
 } from '@/lib/conquestArtifacts'
+import {
+  FORGE_MAX_POWERS,
+  FORGE_PRICE_MAX_CENTS,
+  canForge,
+  forgeTierName,
+  sanitizeForgePowers,
+  sanitizeForgePriceCents,
+} from '@/lib/forgeTiers'
+import {
+  FORGE_POWER_GROUPS,
+  FORGE_POWER_OPTIONS,
+  forgePowerByCode,
+  forgePowersFromCodes,
+} from '@/lib/forgePowers'
+import { fetchPhysicalProducts, type PhysicalProduct } from '@/lib/physicalMerchApi'
+import { normalizeOwnedArtifacts, type OwnedArtifact } from '@/lib/ownedArtifacts'
+import { useLeagueTheme } from '@/components/LeagueThemeProvider'
 import { IS_MOBILE_STORE_BUILD } from '@/lib/storeBuild'
 
 const RARITIES: Rarity[] = ['common', 'rare', 'epic', 'legendary', 'mythic']
 const CAPS: Capability[] = ['none', 'gift_starter', 'profile_flair', 'clan_tag', 'event_badge']
 
 /**
+ * THE UNIFIED FORGE — ONE TAB.
+ *
+ * Operator, verbatim: "a person forging an artifact should be able to install
+ * powers in it and make it a tshirt all on the same tab — just make drop down
+ * menus." So this is one screen, top to bottom, with no parts hidden behind
+ * anything you have to open first:
+ *
+ *   art + name + rarity + perk   (or a Conquest recipe)   — everyone
+ *   POWERS   — up to 4, each a DROPDOWN off the allowed
+ *              list in src/lib/forgePowers.ts             — Pro+
+ *   PRICE    — a cash sale price                          — Elite+
+ *   SHIRT    — a DROPDOWN of the member's own designed
+ *              t-shirts, with a link to design one        — Legend
+ *   marketplace listing + forge                           — everyone
+ *
+ * It used to be five collapsible sections, and the two the operator called out
+ * — powers and the shirt — were the two that were collapsed by default and
+ * asked for eight free-text fields between them.
+ *
+ * TIER LOCKS ARE UNCHANGED. A locked control still RENDERS, disabled, with the
+ * "Unlock — upgrade your account" CTA beside it, so you can see what the tier
+ * buys before you buy it. The mapping lives in src/lib/forgeTiers.ts and is
+ * enforced again server-side by /api/fn/forge-artifact-save — these locks are
+ * honest UI, never the gate.
+ *
  * Cosmetic items keep the existing marketplace path. Conquest items use a
  * separate trusted server path: the client selects a recipe code and the
  * server derives every effect, cap, price, tier, and slot cost.
  */
 export function Forge() {
   const { user, profile } = useAuth()
+  const { display } = useLeagueTheme()
   const ent = useEntitlements()
   const canvasRef = useRef<HTMLCanvasElement>(null)
-  const [searchParams, setSearchParams] = useSearchParams()
-  const guidedEntry = searchParams.get('create') === '1'
+  const [search] = useSearchParams()
+  const requestedEditId = search.get('edit') || ''
 
   const [purpose, setPurpose] = useState<'collectible' | 'conquest'>('collectible')
-  const [guideStep, setGuideStep] = useState<'target' | 'configure'>(
-    guidedEntry ? 'target' : 'configure',
-  )
   const [rarity, setRarity] = useState<Rarity>('rare')
   const [capability, setCapability] = useState<Capability>('none')
   const [recipeCode, setRecipeCode] = useState('scout-mark')
@@ -61,19 +104,39 @@ export function Forge() {
   const [imgSrc, setImgSrc] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [reveal, setReveal] = useState(false)
-  const [listForSale, setListForSale] = useState(!IS_MOBILE_STORE_BUILD)
+  const [listForSale, setListForSale] = useState(true)
   const [sellerType, setSellerType] = useState<Exclude<SellerType, 'official'>>('creator')
   const [managedClans, setManagedClans] = useState<{ id: string; name: string }[]>([])
   const [clanId, setClanId] = useState('')
   const [note, setNote] = useState<string | null>(null)
   const [forgedArtifactId, setForgedArtifactId] = useState<string | null>(null)
+  /** A collectible landed this session — surface the link to the collection. */
+  const [savedCollectible, setSavedCollectible] = useState(false)
+
+  // Paid extras (tier-gated; see src/lib/forgeTiers.ts for the one mapping).
+  // Powers are FORGE_MAX_POWERS dropdown slots — '' means "no power in this
+  // slot", so the cap is structural rather than something to check for.
+  const [powerCodes, setPowerCodes] = useState<string[]>(
+    () => Array.from({ length: FORGE_MAX_POWERS }, () => ''),
+  )
+  const [priceUsd, setPriceUsd] = useState('')
+  const [shirtProducts, setShirtProducts] = useState<PhysicalProduct[]>([])
+  const [shirtProductId, setShirtProductId] = useState('')
+  const [editingArtifact, setEditingArtifact] = useState<OwnedArtifact | null>(null)
+  const [editLoading, setEditLoading] = useState(false)
+  const [editImageChanged, setEditImageChanged] = useState(false)
+  const [editPowersChanged, setEditPowersChanged] = useState(false)
+  const [editPriceChanged, setEditPriceChanged] = useState(false)
+  const [editShirtChanged, setEditShirtChanged] = useState(false)
+
+  const canPowers = canForge('powers', ent.tier)
+  const canPrice = !IS_MOBILE_STORE_BUILD && canForge('price', ent.tier)
+  const canShirt = canForge('shirt', ent.tier)
 
   const selectedRecipe = CONQUEST_ARTIFACT_RECIPES.find((recipe) => recipe.code === recipeCode)
     ?? CONQUEST_ARTIFACT_RECIPES[0]
   const effectiveRarity = purpose === 'conquest' ? selectedRecipe.rarity : rarity
   const accent = RARITY[effectiveRarity].accent
-  const marketplaceListing =
-    !IS_MOBILE_STORE_BUILD && purpose === 'collectible' && listForSale
 
   useEffect(() => {
     if (!user) return
@@ -99,33 +162,91 @@ export function Forge() {
     return () => { alive = false }
   }, [user])
 
+  // The member's OWN designed shirts (the t-shirts part), for the Legend bundle.
+  useEffect(() => {
+    if (!user || !canShirt) return
+    let alive = true
+    void (async () => {
+      const result = await fetchPhysicalProducts(true)
+      if (alive && result.ok && result.data) setShirtProducts(result.data.products)
+    })()
+    return () => { alive = false }
+  }, [user, canShirt])
+
+  useEffect(() => {
+    if (!user || !requestedEditId) {
+      setEditingArtifact(null)
+      return
+    }
+    let alive = true
+    setEditLoading(true)
+    setNote(null)
+    void (async () => {
+      try {
+        const result = await callFn<{ ok?: boolean; artifacts?: unknown }>('forge-artifact-list', {})
+        const artifact = normalizeOwnedArtifacts(result?.artifacts).find((item) => item.id === requestedEditId) || null
+        if (!alive) return
+        if (!artifact) {
+          setNote('That artifact was not found in your collection.')
+          return
+        }
+        if (artifact.conquest) {
+          setNote('Conquest artifact powers come from their recipe and cannot be edited.')
+          return
+        }
+        setEditingArtifact(artifact)
+        setPurpose('collectible')
+        setListForSale(false)
+        setName(artifact.name)
+        setRarity(artifact.rarity)
+        setCapability(
+          Object.prototype.hasOwnProperty.call(CAPABILITY_LABEL, artifact.capability)
+            ? artifact.capability as Capability
+            : 'none',
+        )
+        setImgSrc(artifact.image_url)
+        const codes = artifact.powers.map((power) =>
+          FORGE_POWER_OPTIONS.find((option) =>
+            option.name === power.name && option.description === power.description,
+          )?.code || '',
+        )
+        setPowerCodes(Array.from({ length: FORGE_MAX_POWERS }, (_, index) => codes[index] || ''))
+        setPriceUsd(artifact.price_cents == null ? '' : String(artifact.price_cents / 100))
+        setShirtProductId(artifact.shirt?.id || '')
+        setEditImageChanged(false)
+        setEditPowersChanged(false)
+        setEditPriceChanged(false)
+        setEditShirtChanged(false)
+      } catch {
+        if (alive) setNote('Your artifact could not be loaded for editing.')
+      } finally {
+        if (alive) setEditLoading(false)
+      }
+    })()
+    return () => { alive = false }
+  }, [requestedEditId, user?.id])
+
   useEffect(() => {
     if (imgSrc) renderArtifact(imgSrc)
     // renderArtifact reads the current visual recipe and rarity.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [imgSrc, purpose, recipeCode, rarity])
-
-  useEffect(() => {
-    if (guidedEntry) setGuideStep('target')
-  }, [guidedEntry])
+  }, [imgSrc, purpose, recipeCode, rarity, display.productName])
 
   function choosePurpose(nextPurpose: 'collectible' | 'conquest') {
     setPurpose(nextPurpose)
-    setListForSale(!IS_MOBILE_STORE_BUILD && nextPurpose === 'collectible')
+    setListForSale(nextPurpose === 'collectible')
     setForgedArtifactId(null)
-    setGuideStep('configure')
-    if (guidedEntry) {
-      const next = new URLSearchParams(searchParams)
-      next.delete('create')
-      setSearchParams(next, { replace: true })
-    }
+    setNote(null)
   }
 
   function onFile(event: React.ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0]
     if (!file) return
     const reader = new FileReader()
-    reader.onload = () => setImgSrc(String(reader.result))
+    reader.onload = () => {
+      setImgSrc(String(reader.result))
+      setEditImageChanged(true)
+    }
     reader.readAsDataURL(file)
   }
 
@@ -176,9 +297,23 @@ export function Forge() {
       ctx.font = 'bold 30px system-ui, sans-serif'
       ctx.fillStyle = recipeAccent
       ctx.textAlign = 'center'
-      ctx.fillText('TKO', size / 2, size - 12)
+      ctx.fillText(display.productName, size / 2, size - 12)
     }
     img.src = src
+  }
+
+  /** One power dropdown changed. Codes are unique across slots by construction. */
+  function setPowerSlot(index: number, code: string) {
+    setEditPowersChanged(true)
+    setPowerCodes((current) =>
+      current.map((existing, i) => {
+        if (i === index) return code
+        // Picking a power that is already installed elsewhere MOVES it here
+        // rather than duplicating it — the other slot's option is disabled, so
+        // this only fires if a keyboard user gets there first.
+        return code && existing === code ? '' : existing
+      }),
+    )
   }
 
   async function forge() {
@@ -187,16 +322,18 @@ export function Forge() {
       setNote('Choose a clan you lead or manage.')
       return
     }
-    if (marketplaceListing && sellerType === 'clan' && !clanId) {
+    if (purpose === 'collectible' && listForSale && sellerType === 'clan' && !clanId) {
       setNote('Choose a clan storefront first.')
       return
     }
     setBusy(true)
     setNote(null)
     setForgedArtifactId(null)
+    setSavedCollectible(false)
     try {
-      const dataUrl = canvasRef.current?.toDataURL('image/png')
-      if (!dataUrl) throw new Error('Upload art before forging.')
+      const needsRenderedImage = purpose === 'conquest' || !editingArtifact || editImageChanged
+      const dataUrl = needsRenderedImage ? canvasRef.current?.toDataURL('image/png') : null
+      if (needsRenderedImage && !dataUrl) throw new Error('Upload art before forging.')
 
       if (purpose === 'conquest') {
         const result = await callFn<{
@@ -220,25 +357,58 @@ export function Forge() {
         return
       }
 
-      const tokenPrice = Math.max(0, Math.floor(Number(priceTokens) || 0))
-      const code = capability === 'gift_starter'
-        ? makeGiftCode(`${user.id}-${Date.now()}`)
-        : null
-      await (supabase as unknown as {
-        from: (table: string) => { insert: (value: unknown) => PromiseLike<unknown> }
-      }).from('artifacts').insert({
-        owner_id: user.id,
-        slug: 'forged',
-        name: name || 'Forged Artifact',
+      // COLLECTIBLE — one trusted server call carries the basic artifact plus
+      // whatever paid extras this tier has unlocked. Validate locally first for
+      // instant feedback; the server runs the same sanitizers and is the law.
+      const body: Record<string, unknown> = {
+        name,
         rarity,
         capability,
-        code,
-        price_cents: null,
-        image_url: dataUrl,
-      })
-      if (marketplaceListing) {
+      }
+      if (editingArtifact) body.artifactId = editingArtifact.id
+      if (dataUrl) body.imageUrl = dataUrl
+      if (canPowers) {
+        // The dropdowns emit codes; the save contract takes the same
+        // { name, description } pairs it always did.
+        const chosen = forgePowersFromCodes(powerCodes)
+        if (chosen.length || (editingArtifact && editPowersChanged)) {
+          const check = sanitizeForgePowers(chosen)
+          if (!check.ok) throw new Error(check.error)
+          body.powers = check.value
+        }
+      }
+      if (canPrice && (!editingArtifact ? priceUsd.trim() !== '' : editPriceChanged)) {
+        const check = sanitizeForgePriceCents(
+          priceUsd.trim() === '' ? null : Math.round(Number(priceUsd) * 100),
+        )
+        if (!check.ok) throw new Error(check.error)
+        body.priceCents = check.value
+      }
+      if (canShirt && (!editingArtifact ? Boolean(shirtProductId) : editShirtChanged)) {
+        body.shirtProductId = shirtProductId
+      }
+
+      const result = await callFn<{
+        ok: boolean
+        reason?: string
+        error?: string
+        artifact?: { id: string }
+      }>('forge-artifact-save', body)
+      if (!result?.ok || !result.artifact?.id) {
+        if (result?.reason === 'membership-upgrade-required') {
+          throw new Error('That option needs a higher membership tier — upgrade to unlock it.')
+        }
+        throw new Error(result?.error || 'The artifact could not be saved. Check your connection and try again.')
+      }
+
+      const tokenPrice = Math.max(0, Math.floor(Number(priceTokens) || 0))
+      if (!editingArtifact && listForSale && dataUrl) {
         const clan = managedClans.find((item) => item.id === clanId)
         await addAsset({
+          // The marketplace row and Forge collectible deliberately share one
+          // stable id. The trusted Forge edit/delete handlers use that link to
+          // keep the public listing in sync with the owner's collection.
+          id: result.artifact.id,
           name: name || 'Forged Artifact',
           teamName: sellerType === 'clan'
             ? (clan?.name || 'Clan')
@@ -251,10 +421,13 @@ export function Forge() {
           createdBy: user.id,
         })
       }
-      setNote(marketplaceListing
-        ? 'Collectible forged and listed in the marketplace.'
-        : 'Collectible forged and added to your collection.')
-      setReveal(true)
+      setNote(editingArtifact
+        ? 'Artifact changes saved.'
+        : listForSale
+          ? 'Collectible forged and listed in the marketplace.'
+          : 'Collectible forged and added to your collection.')
+      setSavedCollectible(true)
+      if (!editingArtifact) setReveal(true)
     } catch (error) {
       setNote(error instanceof Error
         ? error.message
@@ -300,133 +473,60 @@ export function Forge() {
     )
   }
 
+  const chosenPowerCodes = powerCodes.filter(Boolean)
+  const selectedShirt = shirtProducts.find((p) => p.id === shirtProductId)
+
   return (
     <div className="p-4 sm:p-6 lg:p-8 max-w-4xl mx-auto">
-      <h1 className="text-2xl font-bold">Forge an artifact</h1>
+      <h1 className="text-2xl font-bold">{requestedEditId ? 'Edit artifact' : 'Forge an artifact'}</h1>
       <p className="mt-1 text-sm text-gray-400">
-        {IS_MOBILE_STORE_BUILD
-          ? 'Make a collectible for your collection, forge a physical shirt, or bind your art to a protected Conquest recipe.'
-          : 'Make a collectible for the marketplace, or bind your art to a protected Conquest recipe.'}
-        {' '}Higher memberships unlock stronger clan powers.
+        {requestedEditId
+          ? 'Change the artifact you own, then save it back to your collection.'
+          : IS_MOBILE_STORE_BUILD
+            ? 'One tab, top to bottom: name it, install its powers, and pair it with one of your t-shirts.'
+            : 'One tab, top to bottom: name it, install its powers, set a price, and pair it with one of your t-shirts.'}
       </p>
 
-      {guideStep === 'target' && (
-        <section className="mt-5 rounded-lg border border-dark-border bg-dark-card p-4">
-          <div aria-label="Step 1 of 2: Choose artifact type">
-            <div className="flex gap-1.5">
-              <span className="h-1.5 flex-1 rounded-full bg-kunai" />
-              <span className="h-1.5 flex-1 rounded-full bg-dark-elevated" />
-            </div>
-            <div className="mt-2 flex items-center justify-between text-xs">
-              <span className="font-semibold text-white">Step 1 of 2</span>
-              <span className="text-gray-500">Choose a purpose</span>
-            </div>
-          </div>
-
-          <h2 className="mt-5 text-lg font-semibold text-white">What do you want to forge?</h2>
-          <p className="mt-1 text-sm text-gray-400">
-            Pick one. The next screen only shows the controls needed for it.
-          </p>
-
-          <div className="mt-4 grid gap-2">
-            <button
-              type="button"
-              onClick={() => choosePurpose('collectible')}
-              className="flex min-h-20 items-center gap-4 rounded-lg border border-dark-border px-4 py-3 text-left transition-colors hover:border-accent/60 hover:bg-dark-elevated"
-            >
-              <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-accent/10 text-accent">
-                <Store size={22} />
-              </span>
-              <span>
-                <span className="block font-semibold text-white">
-                  {IS_MOBILE_STORE_BUILD ? 'Collectible artifact' : 'Collectible or shop item'}
-                </span>
-                <span className="mt-0.5 block text-sm text-gray-400">
-                  {IS_MOBILE_STORE_BUILD
-                    ? 'Upload art, add a perk, and keep it in your collection.'
-                    : 'Upload art, add a perk, and keep it or list it for sale.'}
-                </span>
-              </span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => choosePurpose('conquest')}
-              className="flex min-h-20 items-center gap-4 rounded-lg border border-dark-border px-4 py-3 text-left transition-colors hover:border-trust/60 hover:bg-dark-elevated"
-            >
-              <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-trust/10 text-trust">
-                <MapPinned size={22} />
-              </span>
-              <span>
-                <span className="block font-semibold text-white">Shinobi Conquest power</span>
-                <span className="mt-0.5 block text-sm text-gray-400">
-                  Choose a protected recipe and bind its power to your clan.
-                </span>
-              </span>
-            </button>
-
-            <Link
-              to="/forge/physical"
-              className="flex min-h-20 items-center gap-4 rounded-lg border border-dark-border px-4 py-3 text-left transition-colors hover:border-kunai/60 hover:bg-dark-elevated"
-            >
-              <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-kunai/10 text-kunai">
-                <Shirt size={22} />
-              </span>
-              <span>
-                <span className="block font-semibold text-white">Physical shirt</span>
-                <span className="mt-0.5 block text-sm text-gray-400">
-                  Shop creator shirts or put one of your artifacts on a shirt.
-                </span>
-              </span>
-            </Link>
-          </div>
-        </section>
+      {requestedEditId ? (
+        <div className="mt-5 flex min-h-11 items-center justify-between gap-3 rounded-lg border border-dark-border bg-dark px-3">
+          <span className="text-sm text-gray-300">
+            {editLoading ? 'Loading artifact...' : editingArtifact?.name || 'Artifact unavailable'}
+          </span>
+          <Link to="/rewards" className="text-xs font-semibold text-accent hover:underline">Back to artifacts</Link>
+        </div>
+      ) : (
+        <div className="mt-5 grid grid-cols-3 gap-2 rounded-lg border border-dark-border bg-dark p-1">
+        <button
+          type="button"
+          onClick={() => choosePurpose('collectible')}
+          className={`flex min-h-11 items-center justify-center gap-2 rounded-md text-sm font-semibold ${
+            purpose === 'collectible' ? 'bg-white/10 text-white' : 'text-gray-400'
+          }`}
+        >
+          <Store size={17} />
+          Collectible
+        </button>
+        <button
+          type="button"
+          onClick={() => choosePurpose('conquest')}
+          className={`flex min-h-11 items-center justify-center gap-2 rounded-md text-sm font-semibold ${
+            purpose === 'conquest' ? 'bg-accent/15 text-accent' : 'text-gray-400'
+          }`}
+        >
+          <MapPinned size={17} />
+          Conquest power
+        </button>
+        <Link
+          to="/forge/physical"
+          className="flex min-h-11 items-center justify-center gap-2 rounded-md px-2 text-center text-sm font-semibold text-gray-400 transition-colors hover:bg-kunai/10 hover:text-kunai"
+        >
+          <Shirt size={17} />
+          Physical shirt
+        </Link>
+        </div>
       )}
 
-      {guideStep === 'configure' && (
-        <>
-          <div className="mt-5 grid grid-cols-3 gap-2 rounded-lg border border-dark-border bg-dark p-1">
-            <button
-              type="button"
-              onClick={() => choosePurpose('collectible')}
-              className={`flex min-h-11 items-center justify-center gap-2 rounded-md text-sm font-semibold ${
-                purpose === 'collectible' ? 'bg-white/10 text-white' : 'text-gray-400'
-              }`}
-            >
-              <Store size={17} />
-              Collectible
-            </button>
-            <button
-              type="button"
-              onClick={() => choosePurpose('conquest')}
-              className={`flex min-h-11 items-center justify-center gap-2 rounded-md text-sm font-semibold ${
-                purpose === 'conquest' ? 'bg-accent/15 text-accent' : 'text-gray-400'
-              }`}
-            >
-              <MapPinned size={17} />
-              Conquest power
-            </button>
-            <Link
-              to="/forge/physical"
-              className="flex min-h-11 items-center justify-center gap-2 rounded-md px-2 text-center text-sm font-semibold text-gray-400 transition-colors hover:bg-kunai/10 hover:text-kunai"
-            >
-              <Shirt size={17} />
-              Physical shirt
-            </Link>
-          </div>
-
-          <div className="mt-2 flex items-center justify-between text-xs">
-            <span className="font-semibold text-white">Step 2 of 2</span>
-            <button
-              type="button"
-              onClick={() => setGuideStep('target')}
-              className="text-accent hover:underline"
-            >
-              Change purpose
-            </button>
-          </div>
-
-          <div className="mt-6 grid gap-6 md:grid-cols-2">
+      <div className="mt-6 grid gap-6 md:grid-cols-2">
         <div className="flex flex-col items-center">
           <div
             className="rounded-lg border border-dark-border bg-dark p-3"
@@ -438,57 +538,291 @@ export function Forge() {
             {imgSrc ? 'Choose different art' : 'Upload your art'}
             <input type="file" accept="image/*" className="hidden" onChange={onFile} />
           </label>
+          {!imgSrc && <p className="mt-2 text-xs text-gray-500">Upload art to enable forging.</p>}
         </div>
 
-        <div className="space-y-4">
-          {purpose === 'collectible' ? (
-            <>
-              <div>
-                <label className="text-xs uppercase tracking-wide text-gray-500">Name</label>
-                <input
-                  value={name}
-                  onChange={(event) => setName(event.target.value)}
-                  placeholder="Name your artifact"
-                  className="mt-1 w-full rounded-lg border border-dark-border bg-dark px-3 py-2 text-white focus:border-accent focus:outline-none"
-                />
-              </div>
+        <div className="space-y-5">
+          {/* ── (a) THE ARTIFACT — the basic forge, open to everyone ───────── */}
+          <FieldGroup label="Artifact" icon={<Hammer size={14} />}>
+            {purpose === 'collectible' ? (
+              <div className="space-y-4">
+                <div>
+                  <label className="text-xs uppercase tracking-wide text-gray-500">Name</label>
+                  <input
+                    value={name}
+                    onChange={(event) => setName(event.target.value)}
+                    placeholder="Name your artifact"
+                    className="mt-1 w-full rounded-lg border border-dark-border bg-dark px-3 py-2 text-white focus:border-accent focus:outline-none"
+                  />
+                </div>
 
-              <div>
-                <label className="text-xs uppercase tracking-wide text-gray-500">Rarity</label>
-                <div className="mt-1 flex flex-wrap gap-2">
-                  {RARITIES.map((item) => (
-                    <button
-                      key={item}
-                      type="button"
-                      onClick={() => setRarity(item)}
-                      className="rounded-lg px-3 py-1.5 text-xs font-semibold"
-                      style={{
-                        background: rarity === item ? RARITY[item].accent : 'transparent',
-                        color: rarity === item ? '#05080f' : RARITY[item].accent,
-                        border: `1px solid ${RARITY[item].accent}`,
-                      }}
-                    >
-                      {RARITY[item].label}
-                    </button>
-                  ))}
+                <div>
+                  <label className="text-xs uppercase tracking-wide text-gray-500">Rarity</label>
+                  <div className="mt-1 flex flex-wrap gap-2">
+                    {RARITIES.map((item) => (
+                      <button
+                        key={item}
+                        type="button"
+                        onClick={() => setRarity(item)}
+                        className="rounded-lg px-3 py-1.5 text-xs font-semibold"
+                        style={{
+                          background: rarity === item ? RARITY[item].accent : 'transparent',
+                          color: rarity === item ? '#05080f' : RARITY[item].accent,
+                          border: `1px solid ${RARITY[item].accent}`,
+                        }}
+                      >
+                        {RARITY[item].label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div>
+                  <label className="text-xs uppercase tracking-wide text-gray-500">Collectible perk</label>
+                  <select
+                    value={capability}
+                    onChange={(event) => setCapability(event.target.value as Capability)}
+                    className="mt-1 w-full rounded-lg border border-dark-border bg-dark px-3 py-2 text-white focus:border-accent focus:outline-none"
+                  >
+                    {CAPS.map((item) => (
+                      <option key={item} value={item}>{CAPABILITY_LABEL[item]}</option>
+                    ))}
+                  </select>
                 </div>
               </div>
+            ) : (
+              <div className="space-y-4">
+                <div>
+                  <label className="text-xs uppercase tracking-wide text-gray-500">
+                    Clan power recipe
+                  </label>
+                  <div className="mt-2 space-y-2">
+                    {CONQUEST_ARTIFACT_RECIPES.map((recipe) => (
+                      <RecipeButton
+                        key={recipe.code}
+                        recipe={recipe}
+                        active={recipe.code === selectedRecipe.code}
+                        unlocked={conquestTierAllows(ent.tier, recipe)}
+                        onClick={() => {
+                          setRecipeCode(recipe.code)
+                          setForgedArtifactId(null)
+                        }}
+                      />
+                    ))}
+                  </div>
+                </div>
 
-              <div>
-                <label className="text-xs uppercase tracking-wide text-gray-500">Collectible perk</label>
-                <select
-                  value={capability}
-                  onChange={(event) => setCapability(event.target.value as Capability)}
-                  className="mt-1 w-full rounded-lg border border-dark-border bg-dark px-3 py-2 text-white focus:border-accent focus:outline-none"
+                <div>
+                  <label className="text-xs uppercase tracking-wide text-gray-500">
+                    Clan receiving the power
+                  </label>
+                  {managedClans.length > 0 ? (
+                    <select
+                      value={clanId}
+                      onChange={(event) => {
+                        setClanId(event.target.value)
+                        setForgedArtifactId(null)
+                      }}
+                      className="mt-1 w-full rounded-lg border border-dark-border bg-dark px-3 py-2 text-white focus:border-accent focus:outline-none"
+                    >
+                      {managedClans.map((clan) => (
+                        <option key={clan.id} value={clan.id}>{clan.name}</option>
+                      ))}
+                    </select>
+                  ) : (
+                    <p className="mt-1 rounded-lg border border-orange-500/30 bg-orange-500/10 p-3 text-sm text-orange-200">
+                      Lead or manage a clan before forging Conquest powers.
+                    </p>
+                  )}
+                </div>
+
+                <div className="rounded-lg border border-dark-border bg-black/20 p-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="text-sm font-semibold text-white">{selectedRecipe.name}</span>
+                    <span className="text-sm font-bold text-accent">
+                      ${(selectedRecipe.listPriceCents / 100).toFixed(2)} value
+                    </span>
+                  </div>
+                  <p className="mt-1 text-xs leading-5 text-gray-400">
+                    {selectedRecipe.description}
+                  </p>
+                  <p className="mt-2 text-[11px] uppercase text-gray-500">
+                    Uses {selectedRecipe.slotCost} active {selectedRecipe.slotCost === 1 ? 'slot' : 'slots'}
+                    {' / '}
+                    {CONQUEST_TIER_LABEL[selectedRecipe.minimumTier]}+
+                  </p>
+                  <p className="mt-2 text-[11px] text-gray-500">
+                    Conquest recipes carry their own powers and value, so the Powers, Price and
+                    Shirt fields below apply to collectibles only.
+                  </p>
+                </div>
+              </div>
+            )}
+          </FieldGroup>
+
+          {purpose === 'collectible' && (
+            <>
+              {/* ── (b) POWERS — Pro+. Dropdowns off the allowed list. ─────── */}
+              <GatedGroup
+                label="Powers"
+                icon={<Zap size={14} />}
+                unlocked={canPowers}
+                capability="powers"
+                lockedMessage={`Install up to ${FORGE_MAX_POWERS} powers in every artifact you forge.`}
+              >
+                <p className="text-xs text-gray-500">
+                  Install up to {FORGE_MAX_POWERS} powers. They show on the artifact wherever it
+                  appears.
+                </p>
+                <div className="mt-3 space-y-2">
+                  {powerCodes.map((code, index) => {
+                    const chosen = forgePowerByCode(code)
+                    return (
+                      <div key={index}>
+                        <label
+                          className="text-[11px] uppercase tracking-wide text-gray-500"
+                          htmlFor={`forge-power-${index}`}
+                        >
+                          Power {index + 1}
+                        </label>
+                        <select
+                          id={`forge-power-${index}`}
+                          value={code}
+                          disabled={!canPowers}
+                          onChange={(event) => setPowerSlot(index, event.target.value)}
+                          className="mt-1 w-full rounded-lg border border-dark-border bg-dark px-3 py-2 text-white focus:border-accent focus:outline-none disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          <option value="">No power</option>
+                          {FORGE_POWER_GROUPS.map((group) => (
+                            <optgroup key={group} label={group}>
+                              {FORGE_POWER_OPTIONS.filter((option) => option.group === group).map(
+                                (option) => (
+                                  <option
+                                    key={option.code}
+                                    value={option.code}
+                                    // Already installed in another slot — an
+                                    // artifact holds each power once.
+                                    disabled={option.code !== code && powerCodes.includes(option.code)}
+                                  >
+                                    {option.name}
+                                  </option>
+                                ),
+                              )}
+                            </optgroup>
+                          ))}
+                        </select>
+                        {chosen && (
+                          <p className="mt-1 text-[11px] leading-snug text-gray-500">
+                            {chosen.description}
+                          </p>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
+              </GatedGroup>
+
+              {/* ── (c) PRICE — Elite+ ────────────────────────────────────── */}
+              {!IS_MOBILE_STORE_BUILD && <GatedGroup
+                label="Price"
+                icon={<CircleDollarSign size={14} />}
+                unlocked={canPrice}
+                capability="price"
+                lockedMessage="Sell your artifact for cash — set the price when you forge it."
+              >
+                <label
+                  className="text-[11px] uppercase tracking-wide text-gray-500"
+                  htmlFor="forge-price-usd"
                 >
-                  {CAPS.map((item) => (
-                    <option key={item} value={item}>{CAPABILITY_LABEL[item]}</option>
+                  Sale price (USD)
+                </label>
+                <input
+                  id="forge-price-usd"
+                  type="number"
+                  min={0}
+                  max={FORGE_PRICE_MAX_CENTS / 100}
+                  step={0.5}
+                  value={priceUsd}
+                  disabled={!canPrice}
+                  onChange={(event) => {
+                    setPriceUsd(event.target.value)
+                    setEditPriceChanged(true)
+                  }}
+                  placeholder="e.g. 4.99"
+                  className="mt-1 w-full rounded-lg border border-dark-border bg-dark px-3 py-2 text-white focus:border-accent focus:outline-none disabled:cursor-not-allowed disabled:opacity-50"
+                />
+                <p className="mt-1 text-[11px] text-gray-500">
+                  $0 – ${FORGE_PRICE_MAX_CENTS / 100}. Stored on the artifact and shown on its
+                  listing; leave empty for no cash price.
+                </p>
+              </GatedGroup>}
+
+              {/* ── (d) SHIRT — Legend. A dropdown of the member's own. ────── */}
+              <GatedGroup
+                label="Shirt"
+                icon={<Shirt size={14} />}
+                unlocked={canShirt}
+                capability="shirt"
+                lockedMessage="Bundle your artifact with a real t-shirt you design in the Physical Forge."
+              >
+                <label
+                  className="text-[11px] uppercase tracking-wide text-gray-500"
+                  htmlFor="forge-shirt"
+                >
+                  Pair with one of your shirts
+                </label>
+                <select
+                  id="forge-shirt"
+                  value={shirtProductId}
+                  disabled={!canShirt || shirtProducts.length === 0}
+                  onChange={(event) => {
+                    setShirtProductId(event.target.value)
+                    setEditShirtChanged(true)
+                  }}
+                  className="mt-1 w-full rounded-lg border border-dark-border bg-dark px-3 py-2 text-white focus:border-accent focus:outline-none disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <option value="">No shirt — artifact only</option>
+                  {shirtProducts.map((product) => (
+                    <option key={product.id} value={product.id}>
+                      {product.title} — ${(product.sale_price_cents / 100).toFixed(2)}
+                    </option>
                   ))}
                 </select>
-              </div>
+                {canShirt && shirtProducts.length === 0 && (
+                  <p className="mt-1 text-[11px] text-gray-500">
+                    You haven&apos;t designed a shirt yet — design one and it appears here.
+                  </p>
+                )}
+                {selectedShirt && (
+                  <div className="mt-2 flex items-center gap-3 rounded-lg border border-kunai/40 bg-kunai/5 p-2">
+                    {selectedShirt.artwork_url ? (
+                      <img
+                        src={selectedShirt.artwork_url}
+                        alt=""
+                        className="h-10 w-10 shrink-0 rounded-md bg-black/40 object-cover"
+                      />
+                    ) : (
+                      <span className="grid h-10 w-10 shrink-0 place-items-center rounded-md bg-white/5 text-gray-300">
+                        <Shirt size={18} />
+                      </span>
+                    )}
+                    <span className="min-w-0 text-[11px] uppercase text-gray-400">
+                      {selectedShirt.status.replace(/_/g, ' ')}
+                    </span>
+                  </div>
+                )}
+                <Link
+                  to="/forge/physical"
+                  className="mt-2 flex min-h-11 w-full items-center justify-center gap-2 rounded-lg border border-kunai/50 text-sm font-semibold text-kunai hover:bg-kunai/10"
+                >
+                  <Shirt size={16} />
+                  Design a shirt in the Physical Forge
+                </Link>
+              </GatedGroup>
 
-              {!IS_MOBILE_STORE_BUILD && (
-                <>
+              {/* ── Marketplace listing (Utility Tokens) — free, unchanged ── */}
+              {!requestedEditId && <FieldGroup label="Marketplace" icon={<Store size={14} />}>
+                <div className="space-y-3">
                   <label className="flex items-center justify-between gap-3 rounded-lg border border-dark-border px-3 py-3">
                     <span className="flex items-center gap-2 text-sm font-semibold text-white">
                       <Store size={17} />
@@ -557,119 +891,85 @@ export function Forge() {
                           onChange={(event) => setPriceTokens(event.target.value)}
                           className="mt-1 w-full rounded-lg border border-dark-border bg-dark px-3 py-2 text-white focus:border-accent focus:outline-none"
                         />
-                        <p className="mt-1 text-[11px] text-gray-500">
-                          Cash creator listings use the separate fixed-price seller flow.
-                        </p>
+                        {!IS_MOBILE_STORE_BUILD && (
+                          <p className="mt-1 text-[11px] text-gray-500">
+                            Cash creator listings use the separate fixed-price seller flow.
+                          </p>
+                        )}
                       </div>
                     </>
                   )}
-                </>
-              )}
-            </>
-          ) : (
-            <>
-              <div>
-                <label className="text-xs uppercase tracking-wide text-gray-500">
-                  Clan power recipe
-                </label>
-                <div className="mt-2 space-y-2">
-                  {CONQUEST_ARTIFACT_RECIPES.map((recipe) => (
-                    <RecipeButton
-                      key={recipe.code}
-                      recipe={recipe}
-                      active={recipe.code === selectedRecipe.code}
-                      unlocked={conquestTierAllows(ent.tier, recipe)}
-                      onClick={() => {
-                        setRecipeCode(recipe.code)
-                        setForgedArtifactId(null)
-                      }}
-                    />
-                  ))}
                 </div>
-              </div>
-
-              <div>
-                <label className="text-xs uppercase tracking-wide text-gray-500">
-                  Clan receiving the power
-                </label>
-                {managedClans.length > 0 ? (
-                  <select
-                    value={clanId}
-                    onChange={(event) => {
-                      setClanId(event.target.value)
-                      setForgedArtifactId(null)
-                    }}
-                    className="mt-1 w-full rounded-lg border border-dark-border bg-dark px-3 py-2 text-white focus:border-accent focus:outline-none"
-                  >
-                    {managedClans.map((clan) => (
-                      <option key={clan.id} value={clan.id}>{clan.name}</option>
-                    ))}
-                  </select>
-                ) : (
-                  <p className="mt-1 rounded-lg border border-orange-500/30 bg-orange-500/10 p-3 text-sm text-orange-200">
-                    Lead or manage a clan before forging Conquest powers.
-                  </p>
-                )}
-              </div>
-
-              <div className="rounded-lg border border-dark-border bg-black/20 p-3">
-                <div className="flex items-center justify-between gap-3">
-                  <span className="text-sm font-semibold text-white">{selectedRecipe.name}</span>
-                  {!IS_MOBILE_STORE_BUILD && (
-                    <span className="text-sm font-bold text-accent">
-                      ${(selectedRecipe.listPriceCents / 100).toFixed(2)} value
-                    </span>
-                  )}
-                </div>
-                <p className="mt-1 text-xs leading-5 text-gray-400">
-                  {selectedRecipe.description}
-                </p>
-                <p className="mt-2 text-[11px] uppercase text-gray-500">
-                  Uses {selectedRecipe.slotCost} active {selectedRecipe.slotCost === 1 ? 'slot' : 'slots'}
-                  {' / '}
-                  {CONQUEST_TIER_LABEL[selectedRecipe.minimumTier]}+
-                </p>
-              </div>
+              </FieldGroup>}
             </>
           )}
 
-          <div className="flex items-center gap-2 text-xs uppercase text-gray-500">
-            <Hammer size={14} />
-            Ready to forge
-          </div>
+          {/* ── (e) PUBLISH ───────────────────────────────────────────────── */}
+          <div className="space-y-3 pt-1">
+            <div className="flex items-center gap-2 text-xs uppercase text-gray-500">
+              <Hammer size={14} />
+              Ready to forge
+            </div>
 
-          <button
-            type="button"
-            onClick={forge}
-            disabled={busy || !imgSrc || (purpose === 'conquest' && !clanId)}
-            className="w-full rounded-lg py-3 font-bold text-dark disabled:opacity-50"
-            style={{ background: accent, boxShadow: `0 0 22px ${accent}` }}
-          >
-            {busy
-              ? 'Forging...'
-              : purpose === 'conquest'
-                ? `Forge ${selectedRecipe.name}`
-                : marketplaceListing ? 'Forge & list item' : 'Forge artifact'}
-          </button>
+            {/* One tab means everything is above this line — say what is going
+                in, so nobody forges wondering whether a pick actually stuck. */}
+            {purpose === 'collectible' && (
+              <p className="text-[11px] text-gray-500">
+                {chosenPowerCodes.length > 0
+                  ? `${chosenPowerCodes.length} power${chosenPowerCodes.length === 1 ? '' : 's'} installed`
+                  : 'No powers installed'}
+                {!IS_MOBILE_STORE_BUILD && (
+                  <> {' · '}{canPrice && priceUsd.trim() ? `$${priceUsd}` : 'no cash price'}</>
+                )}
+                {' · '}
+                {selectedShirt ? `paired with ${selectedShirt.title}` : 'no shirt'}
+              </p>
+            )}
 
-          {purpose === 'conquest' && forgedArtifactId && (
             <button
               type="button"
-              onClick={activateConquestArtifact}
-              disabled={busy}
-              className="flex min-h-12 w-full items-center justify-center gap-2 rounded-lg border border-trust bg-trust/10 px-4 font-bold text-trust disabled:opacity-50"
+              onClick={forge}
+              disabled={busy || editLoading || Boolean(requestedEditId && !editingArtifact) || (!editingArtifact && !imgSrc) || (purpose === 'conquest' && !clanId)}
+              className="w-full rounded-lg py-3 font-bold text-dark disabled:opacity-50"
+              style={{ background: accent, boxShadow: `0 0 22px ${accent}` }}
             >
-              <Swords size={18} />
-              Activate for clan
+              {busy
+                ? 'Forging...'
+                : editingArtifact
+                  ? 'Save artifact changes'
+                  : purpose === 'conquest'
+                  ? `Forge ${selectedRecipe.name}`
+                  : listForSale ? 'Forge & list item' : 'Forge artifact'}
             </button>
-          )}
 
-          {note && <p className="text-sm text-orange-300">{note}</p>}
-          {!imgSrc && <p className="text-xs text-gray-500">Upload art to enable forging.</p>}
-        </div>
+            {purpose === 'conquest' && forgedArtifactId && (
+              <button
+                type="button"
+                onClick={activateConquestArtifact}
+                disabled={busy}
+                className="flex min-h-12 w-full items-center justify-center gap-2 rounded-lg border border-trust bg-trust/10 px-4 font-bold text-trust disabled:opacity-50"
+              >
+                <Swords size={18} />
+                Activate for clan
+              </button>
+            )}
+
+            {note && <p className="text-sm text-orange-300">{note}</p>}
+
+            {/* The forge is no longer write-only: every artifact a member
+                forges (with its powers, price and paired shirt) is listed on
+                the Artifacts page. Point them at it once something exists. */}
+            {savedCollectible && purpose === 'collectible' && (
+              <Link
+                to="/rewards"
+                className="flex min-h-12 w-full items-center justify-center gap-2 rounded-lg border border-dark-border px-4 text-sm font-semibold text-white"
+              >
+                View it in your collection
+              </Link>
+            )}
           </div>
-        </>
-      )}
+        </div>
+      </div>
 
       <UnlockReveal
         open={reveal}
@@ -678,12 +978,97 @@ export function Forge() {
         title="ARTIFACT FORGED"
         subtitle={purpose === 'conquest'
           ? `${selectedRecipe.name} is ready to activate.`
-          : marketplaceListing
+          : listForSale
             ? 'Your item is live in the marketplace.'
             : name ? `${name} is yours.` : 'Your artifact is ready.'}
         onClose={() => setReveal(false)}
       />
     </div>
+  )
+}
+
+/**
+ * One labelled block on the single forge tab. Nothing here collapses — the
+ * whole forge is meant to be readable in one scroll.
+ */
+function FieldGroup({
+  label,
+  icon,
+  lock,
+  children,
+}: {
+  label: string
+  icon?: React.ReactNode
+  /** Right-aligned "<tier> perk" chip, shown when the block is locked. */
+  lock?: React.ReactNode
+  children: React.ReactNode
+}) {
+  return (
+    <section className="rounded-xl border border-dark-border bg-dark-card p-4">
+      <div className="mb-3 flex items-center gap-2">
+        <span className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-gray-400">
+          {icon}
+          {label}
+        </span>
+        {lock}
+      </div>
+      {children}
+    </section>
+  )
+}
+
+/**
+ * A forge block that may be tier-locked.
+ *
+ * LOCKED DOES NOT MEAN HIDDEN. The controls still render — the dropdowns, the
+ * price box, all of it — just `disabled`, with the tier chip in the header and
+ * an "Unlock — upgrade your account" CTA underneath. A member can see exactly
+ * what the tier buys before deciding to buy it, which is the whole point of
+ * showing a locked control instead of an empty space.
+ *
+ * The real gate is server-side (/api/fn/forge-artifact-save, checking the same
+ * src/lib/forgeTiers.ts mapping); this is honest UI, never the enforcement.
+ */
+function GatedGroup({
+  label,
+  icon,
+  unlocked,
+  capability,
+  lockedMessage,
+  children,
+}: {
+  label: string
+  icon?: React.ReactNode
+  unlocked: boolean
+  capability: Parameters<typeof forgeTierName>[0]
+  lockedMessage: string
+  children: React.ReactNode
+}) {
+  const tierName = forgeTierName(capability)
+  return (
+    <FieldGroup
+      label={label}
+      icon={icon}
+      lock={
+        unlocked ? null : (
+          <span className="ml-auto flex items-center gap-1.5 text-xs text-gray-500">
+            <Lock size={13} />
+            {tierName} perk
+          </span>
+        )
+      }
+    >
+      <div className={unlocked ? '' : 'opacity-60'}>{children}</div>
+      {!unlocked && (
+        <UpgradeNudge
+          className="mt-3"
+          hideForPaid={false}
+          title={`${label} unlocks with ${tierName}`}
+          message={lockedMessage}
+          cta="Unlock — upgrade your account"
+        />
+      )}
+    </FieldGroup>
   )
 }
 
@@ -725,11 +1110,9 @@ function RecipeButton({
       <span className="min-w-0 flex-1">
         <span className="flex items-center justify-between gap-2">
           <span className="truncate text-sm font-semibold text-white">{recipe.name}</span>
-          {!IS_MOBILE_STORE_BUILD && (
-            <span className="shrink-0 text-xs font-bold text-gray-300">
-              ${(recipe.listPriceCents / 100).toFixed(2)}
-            </span>
-          )}
+          <span className="shrink-0 text-xs font-bold text-gray-300">
+            ${(recipe.listPriceCents / 100).toFixed(2)}
+          </span>
         </span>
         <span className="mt-0.5 block text-[11px] text-gray-500">
           {CONQUEST_TIER_LABEL[recipe.minimumTier]} / {recipe.slotCost}{' '}

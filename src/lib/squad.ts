@@ -24,6 +24,7 @@ export type Visibility = 'public' | 'followers' | 'private'
 export type SquadMember = {
   id: string
   name: string
+  avatarUrl?: string | null
   /** tailwind gradient classes for the avatar chip, e.g. 'from-... to-...' */
   tint?: string
 }

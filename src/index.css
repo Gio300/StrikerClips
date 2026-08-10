@@ -2,8 +2,84 @@
 @tailwind components;
 @tailwind utilities;
 
+:root {
+  --tko-safe-area-top: env(safe-area-inset-top, 0px);
+
+  /* One global chat button owns the bottom-right corner. On phones it clears
+     the fixed bottom navigation and home indicator; `clear` is the first line
+     above the 3.5rem button for page docks and update notices. */
+  --tko-chat-fab-bottom: calc(4.75rem + env(safe-area-inset-bottom, 0px));
+  --tko-chat-fab-clear: calc(8.75rem + env(safe-area-inset-bottom, 0px));
+  --tko-messages-viewport-height: calc(
+    100dvh - 7.5rem - var(--tko-safe-area-top) - env(safe-area-inset-bottom, 0px)
+  );
+
+  /* League palette defaults — the stock TKO look (neutral navy palette v2,
+     2026-08-03). "r g b" channel triplets so tailwind.config.js can wrap them
+     as rgb(var(--league-*) / <alpha>). These are the SINGLE source of truth for
+     the GLOBAL tko.cam chrome and are RECONCILED to the measured TKO_NEUTRAL
+     tokens — this map is exactly leagueThemeVars(DEFAULT_LEAGUE_CONFIG) in
+     src/lib/leagueTheme.ts, so the whole app, the Studio and its mockup default
+     wear one identical look. LeagueThemeProvider overrides these inline on
+     <html> (whole app) or a preview subtree to re-skin for a league; removing
+     the overrides falls back to exactly these values. A branding-only league
+     (SSL) does NOT fall back here — it pins STOCK_DARK_VARS (the ninja dark) so
+     its own domain is unaffected by this navy default. WCAG-AA audit 2026-08-03:
+     navy deepened from the measured #2c3c50 to #1a2636 so body/secondary text
+     clears 4.5:1 app-wide and sapphire accents clear the 3:1 large/UI floor. */
+  --league-dark: 26 38 54;          /* #1a2636 navy surface */
+  --league-dark-card: 35 47 62;     /* #232f3e */
+  --league-dark-border: 56 66 80;   /* #384250 */
+  --league-dark-elevated: 42 53 68; /* #2a3544 */
+  --league-accent: 168 195 225;     /* #a8c3e1 steel-blue link/focus, 8.4:1 */
+  --league-accent-muted: 134 156 180;/* #869cb4 */
+  --league-kunai: 43 105 228;       /* #2b69e4 sapphire CTA fill, white 4.95:1 */
+  --league-kunai-dark: 34 84 182;   /* #2254b6 CTA hover */
+  --league-kunai-2: 96 143 235;     /* #608feb — gradient-kunai end stop */
+  --league-chakra: 64 192 148;      /* #40c094 spring-green highlight, 6.7:1 */
+  --league-chakra-dark: 45 134 104; /* #2d8668 */
+
+  /* INK slots (palette v3, 2026-08-03). `text-ink` / `text-ink-muted` /
+     `text-on-primary` replace the hardcoded `text-white` / `text-gray-*`
+     that silently assumed a dark chrome. These :root values ARE the old
+     literals (gray-100 / a slate-300 stand-in for gray-300), so the in-app
+     product chrome renders exactly as before; the LIGHT TKO surfaces
+     (gateway boards, marketing, Studio, phone mockup) override them in their
+     own subtree via leagueThemeVars, which derives the pair from the surface
+     luminance. WCAG-AA on this navy field: ink 13.9:1, muted ink 10.3:1. */
+  --league-ink: 243 244 246;        /* #f3f4f6 */
+  --league-ink-muted: 203 213 225;  /* #cbd5e1 */
+  --league-on-primary: 255 255 255; /* white on the sapphire CTA, 4.95:1 */
+
+  /* ".cam" wordmark ink (BrandLogo suffix). On the navy chrome the sapphire
+     kunai slot is a CTA-plate tone (2.3:1 as ink — illegible), so the stock
+     wordmark rides the steel-blue accent slot (6-8:1 on the navy field),
+     matching the Studio's cyan ".cam". League takeovers restyle --league-accent
+     on <html>, so the wordmark still follows the active league; the bright
+     boards/Studio override --brand-cam separately (audit 2026-08-03). */
+  --brand-cam: var(--league-accent);
+}
+
+html.capacitor-native {
+  --tko-safe-area-top: max(env(safe-area-inset-top, 0px), 1.75rem);
+}
+
+/* sm+ — the bottom nav is replaced by the sidebar, so the chat button tucks into the
+   corner and everything above it follows. Kept as a media query rather than a
+   `sm:` utility so the two slots stay defined in ONE place. */
+@media (min-width: 640px) {
+  :root {
+    --tko-chat-fab-bottom: 1.25rem;
+    --tko-chat-fab-clear: 5.25rem;
+    --tko-messages-viewport-height: calc(100dvh - 7rem - var(--tko-safe-area-top));
+  }
+}
+
+/* Starts on the ink slot rather than a literal white: on a dark chrome ink is
+   #f3f4f6 (visually the old gradient), on the light TKO board it is the deep
+   #16202e, so the headline stays a readable ink→brand ramp either way. */
 .brand-gradient {
-  background: linear-gradient(110deg, #ffffff 0%, #ff5b3d 72%, #ffb224 100%);
+  background: linear-gradient(110deg, rgb(var(--league-ink)) 0%, rgb(var(--league-kunai)) 72%, rgb(var(--league-chakra)) 100%);
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
@@ -11,8 +87,10 @@
 
 @layer base {
   body {
-    @apply bg-dark text-gray-100 font-sans antialiased;
-    background-image: linear-gradient(rgba(255, 255, 255, 0.018) 1px, transparent 1px);
+    @apply bg-dark text-ink font-sans antialiased;
+    /* Rule lines ride the ink slot so they stay a faint tint of the FOREGROUND
+       on both families (a white hairline is invisible on the light board). */
+    background-image: linear-gradient(rgb(var(--league-ink) / 0.02) 1px, transparent 1px);
     background-size: 100% 48px;
     background-attachment: fixed;
   }
@@ -27,38 +105,53 @@
   }
 
   ::-webkit-scrollbar-track {
-    background: #07070a;
+    background: rgb(var(--league-dark));
   }
 
   ::-webkit-scrollbar-thumb {
-    background: #292930;
+    background: rgb(var(--league-dark-border));
     border-radius: 8px;
   }
 
   ::-webkit-scrollbar-thumb:hover {
-    background: #40404a;
+    background: #4a5568;
   }
 
   ::selection {
     color: #ffffff;
-    background: rgba(255, 91, 61, 0.6);
+    background: rgb(var(--league-kunai) / 0.6);
   }
 }
 
 @layer components {
   .btn-primary {
     @apply inline-flex min-h-10 items-center justify-center gap-2 rounded-lg bg-kunai px-4 py-2
-           font-semibold text-white transition-colors hover:bg-kunai-dark
+           font-semibold text-on-primary transition-colors hover:bg-kunai-dark
            focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-kunai/70
            disabled:cursor-not-allowed disabled:opacity-50;
   }
 
   .btn-ghost {
     @apply inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-dark-border
-           bg-dark-card px-4 py-2 font-medium text-gray-300 transition-colors
-           hover:border-gray-500 hover:bg-dark-elevated hover:text-white
+           bg-dark-card px-4 py-2 font-medium text-ink-muted transition-colors
+           hover:border-ink/40 hover:bg-dark-elevated hover:text-ink
            focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60
            disabled:cursor-not-allowed disabled:opacity-50;
+  }
+
+  /* board-skin — the brand-board surfaces (LeagueGateway). Palette v3 turned
+     these boards LIGHT (paper canvas, white panels), so the old white inset
+     edge and white ghost ink — both written for a bright BLUE field — would
+     now be invisible. Everything here rides the ink slot instead, which
+     inverts with the surface. Scoped so in-app chrome is untouched. */
+  .board-skin .btn-primary {
+    box-shadow: inset 0 0 0 1px rgb(var(--league-ink) / 0.12);
+  }
+
+  /* :not(.text-chakra): the Enterprise "Talk to us" ghost keeps its own
+     highlight ink + border (5.85:1 on the white board card — passes AA). */
+  .board-skin .btn-ghost:not(.text-chakra) {
+    @apply border-ink/25 text-ink hover:border-ink/60 hover:text-ink;
   }
 
   .card {
@@ -66,12 +159,12 @@
   }
 
   .card-hover {
-    @apply transition-colors hover:border-gray-500;
+    @apply transition-colors hover:border-ink/40;
   }
 
   .pill {
     @apply inline-flex items-center rounded-full border border-dark-border bg-dark-elevated
-           px-2 py-0.5 text-xs font-medium text-gray-300;
+           px-2 py-0.5 text-xs font-medium text-ink-muted;
   }
 
   .pill-kunai {
@@ -99,12 +192,12 @@
   }
 
   .section-heading {
-    @apply text-lg font-semibold text-white sm:text-xl;
+    @apply text-lg font-semibold text-ink sm:text-xl;
   }
 
   .field {
     @apply min-h-10 w-full rounded-lg border border-dark-border bg-dark px-3 py-2 text-sm
-           text-white outline-none transition-colors placeholder:text-gray-600
+           text-ink outline-none transition-colors placeholder:text-ink-muted/70
            focus:border-accent focus:ring-1 focus:ring-accent/40;
   }
 }

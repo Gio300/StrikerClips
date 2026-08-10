@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Link } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/hooks/useAuth'
 import { loadYouTubeApi, type YTPlayer } from '@/lib/youtubeApi'
@@ -200,13 +199,10 @@ export function AILabel() {
     <div className="p-4 sm:p-6 max-w-6xl mx-auto">
       <div className="mb-4 flex items-baseline justify-between gap-3 flex-wrap">
         <div>
-          <h1 className="text-2xl font-bold">AI label tool</h1>
+          <h1 className="text-2xl font-bold">Gameplay training review</h1>
           <p className="text-gray-400 text-sm">
-            Tag in-game events to build the Shinobi Striker training set. See{' '}
-            <Link to="/docs/cv-roadmap" className="text-accent hover:underline">
-              docs/cv-roadmap.md
-            </Link>{' '}
-            for what we do with these.
+            Mark visible in-game moments to improve automatic highlight detection. These labels are
+            training notes only; they do not approve stats, change power, or determine whether a player is modding.
           </p>
         </div>
       </div>

@@ -7,26 +7,50 @@ export default {
   theme: {
     extend: {
       colors: {
+        // League-themable slots. Each resolves through a `--league-*` CSS
+        // variable ("r g b" channel triplet) whose defaults — the stock TKO
+        // palette (neutral navy v2, 2026-08-03) — live in src/index.css :root.
+        // LeagueThemeProvider (src/lib/leagueTheme.ts) overrides them at runtime
+        // to re-skin the whole app for a league. `leaf` and `trust` are semantic
+        // (success / info) and intentionally NOT league-themable.
         dark: {
-          DEFAULT: '#07070a',
-          card: '#111116',
-          border: '#292930',
-          elevated: '#18181f',
+          DEFAULT: 'rgb(var(--league-dark) / <alpha-value>)',          // #1a2636
+          card: 'rgb(var(--league-dark-card) / <alpha-value>)',        // #232f3e
+          border: 'rgb(var(--league-dark-border) / <alpha-value>)',    // #384250
+          elevated: 'rgb(var(--league-dark-elevated) / <alpha-value>)',// #2a3544
         },
         accent: {
-          DEFAULT: '#2ed3dc',
-          muted: '#1fa5ad',
-          glow: 'rgba(46, 211, 220, 0.24)',
+          DEFAULT: 'rgb(var(--league-accent) / <alpha-value>)',        // #a8c3e1
+          muted: 'rgb(var(--league-accent-muted) / <alpha-value>)',    // #869cb4
+          glow: 'rgb(var(--league-accent) / 0.24)',
         },
         kunai: {
-          DEFAULT: '#ff5b3d',
-          dark: '#d83e26',
-          glow: 'rgba(255, 91, 61, 0.28)',
+          DEFAULT: 'rgb(var(--league-kunai) / <alpha-value>)',         // #2b69e4
+          dark: 'rgb(var(--league-kunai-dark) / <alpha-value>)',       // #2254b6
+          glow: 'rgb(var(--league-kunai) / 0.28)',
         },
         chakra: {
-          DEFAULT: '#ffb224',
-          dark: '#c77b00',
+          DEFAULT: 'rgb(var(--league-chakra) / <alpha-value>)',        // #40c094
+          dark: 'rgb(var(--league-chakra-dark) / <alpha-value>)',      // #2d8668
         },
+        // ".cam" wordmark ink (BrandLogo). Defaults to the kunai slot via
+        // --brand-cam in index.css; the bright TKO boards/Studio override it
+        // because their kunai is a CTA-plate tone, illegible as text there.
+        cam: 'rgb(var(--brand-cam) / <alpha-value>)',
+        // INK slots (palette v3, 2026-08-03). Before these every surface
+        // hardcoded `text-white` / `text-gray-400`, which silently assumed a
+        // DARK chrome — so the moment TKO's own board went LIGHT the copy
+        // rendered white-on-white. `text-ink` / `text-ink-muted` follow the
+        // active surface instead: leagueThemeVars derives the pair from the
+        // league background's luminance, so one markup reads on either family.
+        ink: {
+          DEFAULT: 'rgb(var(--league-ink) / <alpha-value>)',       // #16202e light · #f3f4f6 dark
+          muted: 'rgb(var(--league-ink-muted) / <alpha-value>)',   // #565f6e light · #cbd5e1 dark
+        },
+        // Label ink on a FILLED kunai CTA — white on every palette we ship,
+        // but derived so a pastel league brand can't produce a white-on-white
+        // button (see leagueThemeVars).
+        'on-primary': 'rgb(var(--league-on-primary) / <alpha-value>)',
         leaf: {
           DEFAULT: '#2ccb7f',
           dark: '#178b54',
@@ -43,17 +67,19 @@ export default {
         brand: ['Orbitron', 'system-ui', 'sans-serif'],
       },
       boxShadow: {
-        glow: '0 0 0 1px rgba(46, 211, 220, 0.22)',
+        glow: '0 0 0 1px rgb(var(--league-accent) / 0.22)',
         'glow-lg': '0 12px 36px rgba(0, 0, 0, 0.32)',
-        kunai: '0 0 0 1px rgba(255, 91, 61, 0.2)',
+        kunai: '0 0 0 1px rgb(var(--league-kunai) / 0.2)',
         'kunai-lg': '0 12px 32px rgba(0, 0, 0, 0.32)',
-        chakra: '0 0 0 1px rgba(255, 178, 36, 0.2)',
+        chakra: '0 0 0 1px rgb(var(--league-chakra) / 0.2)',
         trust: '0 0 0 1px rgba(90, 124, 255, 0.2)',
       },
       backgroundImage: {
-        'gradient-kunai': 'linear-gradient(120deg, #ff5b3d 0%, #ff8a3d 100%)',
-        'gradient-shinobi': 'linear-gradient(120deg, #2ed3dc 0%, #5a7cff 100%)',
-        'gradient-mist': 'linear-gradient(180deg, rgba(255,91,61,0.06) 0%, rgba(7,7,10,0) 62%)',
+        // --league-kunai-2 is the gradient companion (default #ff8a3d),
+        // derived from the league primary by LeagueThemeProvider.
+        'gradient-kunai': 'linear-gradient(120deg, rgb(var(--league-kunai)) 0%, rgb(var(--league-kunai-2)) 100%)',
+        'gradient-shinobi': 'linear-gradient(120deg, rgb(var(--league-accent)) 0%, #5a7cff 100%)',
+        'gradient-mist': 'linear-gradient(180deg, rgb(var(--league-kunai) / 0.06) 0%, rgb(var(--league-dark) / 0) 62%)',
       },
       animation: {
         'fade-in': 'fadeIn 0.4s ease-out',

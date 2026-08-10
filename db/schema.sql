@@ -33,6 +33,30 @@ create table if not exists public.users (
   updated_at     timestamptz default now()
 );
 
+-- Single-use account recovery and cross-origin session handoff. Raw codes are
+-- never stored; the API keeps keyed hashes and binds transfers to one origin.
+create table if not exists public.password_reset_tokens (
+  token_hash text primary key,
+  user_id uuid not null references public.users(id) on delete cascade,
+  expires_at timestamptz not null,
+  used_at timestamptz,
+  created_at timestamptz not null default now()
+);
+create index if not exists password_reset_tokens_user_created_idx
+  on public.password_reset_tokens(user_id, created_at desc);
+
+create table if not exists public.auth_transfer_tokens (
+  token_hash text primary key,
+  user_id uuid not null references public.users(id) on delete cascade,
+  target_origin text not null,
+  return_path text not null default '/',
+  expires_at timestamptz not null,
+  used_at timestamptz,
+  created_at timestamptz not null default now()
+);
+create index if not exists auth_transfer_tokens_expiry_idx
+  on public.auth_transfer_tokens(expires_at);
+
 -- ---------------------------------------------------------------------------
 -- CORE
 -- ---------------------------------------------------------------------------
@@ -91,6 +115,23 @@ create table if not exists public.reels (
   thumbnail text,
   created_at timestamptz default now()
 );
+-- FRONT-PAGE VISIBILITY. The public reels feed (src/pages/Reels.tsx) only
+-- surfaces promoted rows. Default TRUE so every ordinary user-created reel
+-- keeps appearing exactly as before; the auto video factory writes
+-- promoted=false for FREE-member weekly renders (they live on the member's own
+-- profile + share link only, never the front page) and true for paid tiers.
+-- `promoted` is in the server's PRIVILEGE_COLS, so no client-driven write may
+-- promote (or bury) content — only trusted server paths set it.
+alter table public.reels add column if not exists promoted boolean not null default true;
+-- PROVENANCE. Which league a reel was produced for (`leagues.slug`), stamped by
+-- the video factory through /api/internal/publish-reel. NULL for every ordinary
+-- user-created reel, so no existing row or feed changes meaning.
+alter table public.reels add column if not exists league_slug text;
+create index if not exists idx_reels_combined_url on public.reels(combined_video_url);
+
+-- Account-level consent for another TKO player/organizer reusing footage.
+-- Existing and new accounts default to the owner's two-hop follower circle.
+alter table public.profiles add column if not exists reel_usage_privacy text not null default 'followers_of_followers';
 
 -- The CAST of a combined/multi-angle reel: every player who appears in it, not
 -- just the uploader (`reels.user_id`). This is what makes the core loop close —
@@ -220,6 +261,31 @@ alter table public.live_streams add column if not exists placement text not null
 alter table public.live_streams add column if not exists updated_at timestamptz default now();
 alter table public.live_streams add column if not exists tournament_id uuid;
 alter table public.live_streams add column if not exists show_bracket boolean not null default false;
+alter table public.live_streams add column if not exists team_a text;
+alter table public.live_streams add column if not exists team_b text;
+alter table public.live_streams add column if not exists score_a integer not null default 0;
+alter table public.live_streams add column if not exists score_b integer not null default 0;
+alter table public.live_streams add column if not exists score_revision bigint not null default 0;
+-- Automatic channel watcher ownership. Manual sessions keep source='manual';
+-- the background YouTube scanner only heartbeats/ends rows it created.
+alter table public.live_streams add column if not exists source text not null default 'manual';
+alter table public.live_streams add column if not exists external_stream_id text;
+alter table public.live_streams add column if not exists detected_live_at timestamptz;
+create index if not exists idx_live_streams_auto_source
+  on public.live_streams(user_id, source, is_live, updated_at desc);
+create unique index if not exists uq_live_streams_auto_external
+  on public.live_streams(source, external_stream_id)
+  where source='auto_youtube' and external_stream_id is not null;
+-- HOST'S OWN FEED (angle 1) status, INDEPENDENT of is_live (the session flag).
+-- A host can STOP their own feed ('stopped') without ending the multi-cam show
+-- (is_live stays true, so participants keep streaming and can be re-added), then
+-- START it again ('live'). Distinct from is_live so "stop my feed" never tears
+-- down the whole session. See /api/fn/live-host-feed.
+alter table public.live_streams add column if not exists host_feed_status text not null default 'live';
+do $$ begin
+  alter table public.live_streams add constraint live_streams_host_feed_status_check
+    check (host_feed_status in ('live','stopped'));
+exception when duplicate_object then null; end $$;
 do $$ begin
   alter table public.live_streams add constraint live_streams_placement_check
     check (placement in ('profile','clan','front_page','tournament'));
@@ -235,10 +301,44 @@ create table if not exists public.live_stream_angles (
   user_id uuid references public.profiles(id) on delete set null,
   label text,
   youtube_url text,
+  -- Per-angle lifecycle so a participant's SLOT is retained across a stop or a
+  -- dropped feed (console/PS4 streamers drop often) instead of being deleted:
+  --   'live'         (default) the angle is on air
+  --   'stopped'      the host manually stopped this feed; slot kept, re-startable
+  --   'reconnecting' the feed dropped mid-session; slot reserved, auto-reconnects
+  --                  when the player's stream returns (see /api/fn/live-angle-*)
+  -- Removing an angle (live-angle-remove) is still a hard delete for a real leave.
+  status text not null default 'live',
   created_at timestamptz default now()
 );
+-- backfill (pre-existing DBs — create-table is a no-op on an existing table)
+alter table public.live_stream_angles add column if not exists status text not null default 'live';
+do $$ begin
+  alter table public.live_stream_angles add constraint live_stream_angles_status_check
+    check (status in ('live','stopped','reconnecting'));
+exception when duplicate_object then null; end $$;
 create index if not exists idx_live_stream_angles_stream
   on public.live_stream_angles(live_stream_id, created_at);
+-- LIVE ACTION SIGNAL — how "hot" each feed is RIGHT NOW, 0-100, written by the
+-- PC-side watcher (tko_live_director) through /api/internal/live-action after it
+-- scores live frames with the HUD detectors. The client's AUTO director reads it
+-- off the polled angle rows to follow the action; `*_at` timestamps let readers
+-- ignore stale scores. host_action_* is the host's own feed (angle 1, which has
+-- no live_stream_angles row); action_* is per added angle.
+alter table public.live_stream_angles add column if not exists action_level integer;
+alter table public.live_stream_angles add column if not exists action_at timestamptz;
+alter table public.live_streams add column if not exists host_action_level integer;
+alter table public.live_streams add column if not exists host_action_at timestamptz;
+-- Durable proof that the persistent match-type HUD was visible. Action alone
+-- can mean a menu animation; fight_* is what admits footage to a fight recap.
+alter table public.live_stream_angles add column if not exists fight_detected boolean not null default false;
+alter table public.live_stream_angles add column if not exists fight_mode text;
+alter table public.live_stream_angles add column if not exists fight_at timestamptz;
+alter table public.live_streams add column if not exists host_fight_detected boolean not null default false;
+alter table public.live_streams add column if not exists host_fight_mode text;
+alter table public.live_streams add column if not exists host_fight_at timestamptz;
+-- The shot the HOST has on air ({layout, feeds[], at}) -- viewers on Hosts view mirror it.
+alter table public.live_streams add column if not exists host_view jsonb;
 create table if not exists public.stream_messages (
   id uuid primary key default uuid_generate_v4(),
   stream_id uuid not null references public.live_streams(id) on delete cascade,
@@ -318,10 +418,82 @@ create index if not exists idx_live_group_sessions_created on public.live_group_
 -- owner-write, and this column is NOT in PRIVILEGE_COLS, so its owner (and only
 -- its owner) may set it through the generic API. See src/lib/liveLinkPrefs.ts.
 alter table public.profiles add column if not exists auto_link_mode text not null default 'auto';
+-- Default-on channel watcher. This is intentionally separate from
+-- auto_link_mode: discovery creates the player's own live row; linking decides
+-- whether that row may be combined with another player's stage.
+alter table public.profiles add column if not exists auto_detect_live boolean not null default true;
 do $$ begin
   alter table public.profiles add constraint profiles_auto_link_mode_check
     check (auto_link_mode in ('auto','ask','off'));
 exception when duplicate_object then null; end $$;
+
+-- Durable audit of each broadcast discovered by the channel watcher. Unknown
+-- network errors never close these records; only an explicit offline probe does.
+create table if not exists public.auto_live_discoveries (
+  id uuid primary key default uuid_generate_v4(),
+  user_id uuid not null references public.profiles(id) on delete cascade,
+  provider text not null default 'youtube',
+  external_stream_id text not null,
+  channel_url text not null,
+  watch_url text not null,
+  title text,
+  status text not null default 'live' check (status in ('live','ended')),
+  detection_method text not null,
+  confidence real not null default 0,
+  live_stream_id uuid references public.live_streams(id) on delete set null,
+  first_seen_at timestamptz not null default now(),
+  last_seen_at timestamptz not null default now(),
+  ended_at timestamptz,
+  details jsonb not null default '{}'::jsonb,
+  unique(user_id, provider, external_stream_id)
+);
+create index if not exists idx_auto_live_discoveries_status
+  on public.auto_live_discoveries(status, last_seen_at desc);
+
+-- SHADOW match intelligence. These tables are deliberately separate from
+-- match_results, ratings and Conquest. A model can collect evidence here, but
+-- no shadow verdict can change competition state without a later reviewed
+-- promotion path.
+create table if not exists public.shadow_match_analyses (
+  id uuid primary key default uuid_generate_v4(),
+  source_fingerprint text not null unique,
+  source_kind text not null default 'footage_group',
+  source_ref text,
+  status text not null default 'queued'
+    check (status in ('queued','processing','complete','needs_review','failed')),
+  match_signature text,
+  game text not null default 'shinobi_striker',
+  mode text,
+  verdict jsonb not null default '{}'::jsonb,
+  confidence real not null default 0,
+  evidence_quality real not null default 0,
+  analyzer text not null default 'local',
+  model text,
+  analyzer_version text,
+  evidence jsonb not null default '[]'::jsonb,
+  analysis jsonb not null default '{}'::jsonb,
+  error text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  completed_at timestamptz
+);
+create index if not exists idx_shadow_match_analyses_status
+  on public.shadow_match_analyses(status, confidence desc, updated_at desc);
+create table if not exists public.shadow_match_participants (
+  id uuid primary key default uuid_generate_v4(),
+  analysis_id uuid not null references public.shadow_match_analyses(id) on delete cascade,
+  profile_id uuid references public.profiles(id) on delete set null,
+  detected_name text not null,
+  team text,
+  outcome text not null default 'unknown'
+    check (outcome in ('win','loss','draw','unknown')),
+  kills integer,
+  deaths integer,
+  assists integer,
+  confidence real not null default 0,
+  evidence jsonb not null default '{}'::jsonb,
+  unique(analysis_id, detected_name)
+);
 
 -- BLOCKS. One user blocking another (see src/lib/blocking.ts).
 --
@@ -357,6 +529,12 @@ create table if not exists public.user_youtube_links (
   title text,
   created_at timestamptz default now()
 );
+-- Persisted YouTube channel-id cache for the background scanners
+-- (server/youtubeChannel.ts): `url` stays the member's @handle URL (Connect
+-- saves it; creditProduced matches on it); the UC… id it resolves to is
+-- written back here so [auto-youtube]/[auto-live] stop re-scraping the handle
+-- page every cycle. Additive & idempotent.
+alter table public.user_youtube_links add column if not exists channel_id text;
 
 -- Channel restream SLOTS (limited concurrent live streams on OUR channel; FCFS + scheduling)
 create table if not exists public.stream_slots (
@@ -406,6 +584,43 @@ create table if not exists public.post_likes (
   unique(post_id, user_id)
 );
 create index if not exists idx_post_likes_post on public.post_likes(post_id);
+
+-- ---------------------------------------------------------------------------
+-- UGC REPORTS / MODERATION QUEUE
+-- ---------------------------------------------------------------------------
+-- Targets are polymorphic, so the trusted report route validates target_id and
+-- derives both user ids. Reports remain after content/account deletion so an
+-- abuse decision retains its audit trail.
+create table if not exists public.content_reports (
+  id uuid primary key default uuid_generate_v4(),
+  reporter_id uuid references public.profiles(id) on delete set null,
+  target_type text not null check (target_type in (
+    'profile','post','post_comment','reel','reel_comment','chat_message',
+    'dm_message','stream_message','tournament_message','board_message'
+  )),
+  target_id uuid not null,
+  target_owner_id uuid references public.profiles(id) on delete set null,
+  target_is_ai boolean not null default false,
+  reason text not null check (reason in (
+    'harassment','hate','violence','sexual','spam','scam',
+    'impersonation','self_harm','other'
+  )),
+  details text,
+  source_path text,
+  status text not null default 'open'
+    check (status in ('open','reviewing','resolved','dismissed')),
+  reviewer_id uuid references public.profiles(id) on delete set null,
+  review_note text,
+  reviewed_at timestamptz,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create index if not exists content_reports_queue_idx on public.content_reports(status, created_at);
+create index if not exists content_reports_reporter_idx on public.content_reports(reporter_id, created_at desc);
+create index if not exists content_reports_target_idx on public.content_reports(target_type, target_id, created_at desc);
+create unique index if not exists content_reports_one_active_per_reporter_target
+  on public.content_reports(reporter_id, target_type, target_id)
+  where reporter_id is not null and status in ('open','reviewing');
 create table if not exists public.post_polls (id uuid primary key default uuid_generate_v4(), post_id uuid not null references public.posts(id) on delete cascade unique, question text not null, ends_at timestamptz, created_at timestamptz default now());
 create table if not exists public.post_poll_options (id uuid primary key default uuid_generate_v4(), poll_id uuid not null references public.post_polls(id) on delete cascade, label text not null, sort_order integer default 0, created_at timestamptz default now());
 create table if not exists public.post_poll_votes (id uuid primary key default uuid_generate_v4(), option_id uuid not null references public.post_poll_options(id) on delete cascade, user_id uuid not null references public.profiles(id) on delete cascade, created_at timestamptz default now(), unique(option_id, user_id));
@@ -419,9 +634,27 @@ create table if not exists public.match_results (id uuid primary key default uui
 create table if not exists public.match_result_players (id uuid primary key default uuid_generate_v4(), result_id uuid not null references public.match_results(id) on delete cascade, profile_id uuid not null references public.profiles(id) on delete cascade, role text not null check (role in ('winner','loser','participant')), score integer, points integer, in_game_name text, team text check (team in ('red','white')), unique(result_id, profile_id));
 create table if not exists public.power_ratings (profile_id uuid not null references public.profiles(id) on delete cascade, match_type text not null, rating integer not null default 1000, wins integer not null default 0, losses integer not null default 0, accumulated_points integer not null default 0, updated_at timestamptz default now(), primary key (profile_id, match_type));
 create table if not exists public.trophies (id uuid primary key default uuid_generate_v4(), profile_id uuid not null references public.profiles(id) on delete cascade, trophy_type text not null, earned_at timestamptz default now(), metadata jsonb default '{}');
-create table if not exists public.stat_check_submissions (id uuid primary key default uuid_generate_v4(), user_id uuid not null references public.profiles(id) on delete cascade, video_url text not null, character_name text, description text, status text not null default 'pending' check (status in ('pending','approved','rejected')), tournament_id uuid, reviewed_by uuid references public.profiles(id) on delete set null, reviewed_at timestamptz, created_at timestamptz default now());
-create table if not exists public.tournaments (id uuid primary key default uuid_generate_v4(), name text not null, description text, rules text, server_id uuid references public.servers(id) on delete set null, stat_check_times jsonb default '[]', tournament_days_times jsonb default '{}', created_by uuid references public.profiles(id) on delete set null, created_at timestamptz default now());
-create table if not exists public.tournament_admins (id uuid primary key default uuid_generate_v4(), tournament_id uuid not null references public.tournaments(id) on delete cascade, user_id uuid not null references public.profiles(id) on delete cascade, created_at timestamptz default now(), unique(tournament_id, user_id));
+create table if not exists public.stat_check_submissions (id uuid primary key default uuid_generate_v4(), user_id uuid not null references public.profiles(id) on delete cascade, video_url text not null, character_name text, description text, status text not null default 'pending' check (status in ('pending','approved','rejected')), tournament_id uuid, invited_admin_id uuid references public.profiles(id) on delete set null, reviewed_by uuid references public.profiles(id) on delete set null, reviewed_at timestamptz, review_notes text, creator_decision text check (creator_decision is null or creator_decision in ('allow','disqualify','no_action')), creator_notes text, creator_decided_at timestamptz, created_at timestamptz default now());
+-- Additive heal for DBs created from the pre-review shape (also run at boot by
+-- server/index.ts bootstrapTables — keep the two in sync).
+alter table public.stat_check_submissions add column if not exists invited_admin_id uuid references public.profiles(id) on delete set null;
+alter table public.stat_check_submissions add column if not exists review_notes text;
+alter table public.stat_check_submissions add column if not exists creator_decision text;
+alter table public.stat_check_submissions add column if not exists creator_notes text;
+alter table public.stat_check_submissions add column if not exists creator_decided_at timestamptz;
+create table if not exists public.tournaments (id uuid primary key default uuid_generate_v4(), name text not null, description text, rules text, server_id uuid references public.servers(id) on delete set null, stat_check_times jsonb default '[]', tournament_days_times jsonb default '{}', start_at timestamptz, end_at timestamptz, status text default 'draft', prize_pool text, created_by uuid references public.profiles(id) on delete set null, created_at timestamptz default now());
+alter table public.tournaments add column if not exists start_at timestamptz;
+alter table public.tournaments add column if not exists end_at timestamptz;
+alter table public.tournaments add column if not exists status text default 'draft';
+alter table public.tournaments add column if not exists prize_pool text;
+create table if not exists public.tournament_admins (id uuid primary key default uuid_generate_v4(), tournament_id uuid not null references public.tournaments(id) on delete cascade, user_id uuid not null references public.profiles(id) on delete cascade, can_approve_stat_check boolean default true, can_submit_results boolean default true, created_at timestamptz default now(), unique(tournament_id, user_id));
+alter table public.tournament_admins add column if not exists can_approve_stat_check boolean default true;
+alter table public.tournament_admins add column if not exists can_submit_results boolean default true;
+-- Entrants: default 'pending' — an entry is NEVER born approved. Only the
+-- host/admin approve fn (/api/fn/tournament-entrant-review) flips the status.
+create table if not exists public.tournament_entrants (id uuid primary key default uuid_generate_v4(), tournament_id uuid not null references public.tournaments(id) on delete cascade, user_id uuid not null references public.profiles(id) on delete cascade, team_name text, team_server_id uuid references public.servers(id) on delete set null, status text not null default 'pending' check (status in ('pending','accepted','withdrawn','rejected')), agreed_to_rules_at timestamptz, invited_by uuid references public.profiles(id) on delete set null, created_at timestamptz default now(), unique(tournament_id, user_id));
+create index if not exists idx_tournament_entrants_tournament on public.tournament_entrants(tournament_id);
+create index if not exists idx_tournament_entrants_user on public.tournament_entrants(user_id);
 create table if not exists public.tournament_results (id uuid primary key default uuid_generate_v4(), tournament_id uuid not null references public.tournaments(id) on delete cascade, winner_profile_id uuid not null references public.profiles(id) on delete cascade, team_name text, submitted_by uuid references public.profiles(id) on delete set null, created_at timestamptz default now());
 
 -- ---------------------------------------------------------------------------
@@ -786,6 +1019,197 @@ create table if not exists public.clan_dues_payments (
 create index if not exists idx_clan_dues_payments_server on public.clan_dues_payments(server_id, created_at desc);
 
 -- ---------------------------------------------------------------------------
+-- LEAGUES  (white-label league system — cloned from the clan pattern above)
+-- A league is the public identity of a re-skinned community: the gateway at `/`
+-- browses `leagues` rows, GET /api/league/:slug/config serves one league's skin
+-- to the app shell AND the renderer (Loras/common/tko_vertical.py --league),
+-- and `league_members` is what routes a logged-in user to THEIR league at `/`.
+-- `colors`/`music` are jsonb so the row stays renderer-compatible with the
+-- Loras/assets/leagues/*.json schema ("Download league.json" serializes it
+-- unchanged). Tiers split on video ownership: 'starter' (TKO's YouTube, TKO
+-- owns videos) / 'pro' (own YouTube, own videos) / 'dynasty' (priority + AI
+-- Studio help). 'enterprise' is accepted as data but is a coming-soon capture
+-- in the UI — no checkout exists for it.
+-- ---------------------------------------------------------------------------
+create table if not exists public.leagues (
+  id uuid primary key default uuid_generate_v4(),
+  slug text unique not null,
+  name text not null,
+  domain text,
+  colors jsonb not null default '{}'::jsonb,
+  logo_url text,
+  tagline text,
+  music jsonb not null default '{}'::jsonb,
+  video_ownership text not null default 'tko' check (video_ownership in ('tko','league')),
+  tier text not null default 'starter' check (tier in ('starter','pro','dynasty','enterprise')),
+  owner_id uuid references public.profiles(id) on delete set null,
+  created_at timestamptz default now(),
+  updated_at timestamptz default now(),
+  -- Slug is a URL path segment and the renderer's --league key: lowercase
+  -- letters/digits/hyphens only, must not start with a hyphen.
+  constraint leagues_slug_format check (slug ~ '^[a-z0-9][a-z0-9-]{0,62}$')
+);
+create index if not exists idx_leagues_owner on public.leagues(owner_id);
+
+-- League membership + role, mirroring clan_members. Free members ride at
+-- role='member'; the founder is 'owner'. This table is what picks the skin for
+-- a signed-in user at `/`.
+create table if not exists public.league_members (
+  id uuid primary key default uuid_generate_v4(),
+  league_id uuid not null references public.leagues(id) on delete cascade,
+  user_id uuid not null references public.profiles(id) on delete cascade,
+  role text not null default 'member' check (role in ('owner','officer','member')),
+  joined_at timestamptz default now(),
+  unique(league_id, user_id)
+);
+create index if not exists idx_league_members_league on public.league_members(league_id);
+create index if not exists idx_league_members_user on public.league_members(user_id);
+
+-- ---------------------------------------------------------------------------
+-- LEAGUE BILLING (see src/lib/leaguePlans.ts — the ONE plan catalogue).
+--
+-- WHY `plan_status` EXISTS. `leagues.tier` defaults to 'starter', and 'starter'
+-- is a PAID plan ($49/mo). Without a second column, "a row somebody typed into
+-- the Studio" and "a league somebody actually paid for" are indistinguishable,
+-- so every entitlement would leak to anyone who clicked Save. `plan_status` is
+-- the paid/unpaid bit; `tier` only says WHICH plan. Entitlement = both
+-- (leagueEntitlements() in src/lib/leaguePlans.ts).
+--
+--   none      never purchased (the Studio-draft default) -> no paid capability
+--   active    a live Stripe subscription
+--   comped    operator-granted, no Stripe subscription -> entitled
+--   past_due  renewal failed; Stripe is still dunning -> capabilities OFF
+--   canceled  subscription ended -> capabilities OFF
+--
+-- Both columns are written ONLY by the signature-verified Stripe webhook. They
+-- are in PRIVILEGE_COLS (server/app.ts) so the generic /api/db write path
+-- scrubs them: before this, any league owner could PATCH their own row to
+-- tier='dynasty' and take every paid capability for free.
+alter table public.leagues add column if not exists plan_status text not null default 'none';
+alter table public.leagues add column if not exists plan_since timestamptz;
+alter table public.leagues add column if not exists plan_expires_at timestamptz;
+alter table public.leagues add column if not exists stripe_subscription_id text;
+alter table public.leagues add column if not exists stripe_customer_id text;
+create index if not exists idx_leagues_subscription on public.leagues(stripe_subscription_id);
+
+-- One row per league-plan checkout attempt. Created PENDING when the Checkout
+-- Session is opened and settled by the webhook, so an abandoned checkout is
+-- still visible to the operator (a warm lead) rather than vanishing.
+-- `stripe_checkout_session_id` is UNIQUE: it is the natural idempotency key for
+-- a replayed checkout.session.completed.
+create table if not exists public.league_plan_purchases (
+  id uuid primary key default uuid_generate_v4(),
+  user_id uuid not null references public.profiles(id) on delete cascade,
+  league_id uuid references public.leagues(id) on delete set null,
+  league_slug text not null,
+  league_name text not null default '',
+  plan text not null check (plan in ('starter','pro','dynasty')),
+  status text not null default 'pending' check (status in ('pending','paid','canceled','expired')),
+  -- NOTE: no 'enterprise' — it has no checkout by design and lands in
+  -- league_leads instead.
+  stripe_checkout_session_id text unique,
+  stripe_subscription_id text,
+  stripe_customer_id text,
+  amount_cents integer not null default 0,
+  currency text not null default 'usd',
+  paid_at timestamptz,
+  created_at timestamptz default now(),
+  updated_at timestamptz default now()
+);
+create index if not exists idx_league_plan_purchases_user on public.league_plan_purchases(user_id, created_at desc);
+create index if not exists idx_league_plan_purchases_status on public.league_plan_purchases(status, created_at desc);
+
+-- LEAD CAPTURE — the "no prospect is lost" table.
+--
+-- Two ways in, and both matter more than they look:
+--   1. ENTERPRISE has no checkout by design ("contact us").
+--   2. Any plan whose STRIPE_PRICE_LEAGUE_* env var is not set yet. Before the
+--      operator creates the Stripe products, the plans still render and the
+--      button still works — it captures the lead instead of 400ing. That is the
+--      difference between a dead end and a pipeline on day one.
+create table if not exists public.league_leads (
+  id uuid primary key default uuid_generate_v4(),
+  email text not null,
+  plan text not null,
+  league_name text not null default '',
+  -- '' rather than null when the prospect has not named a league yet, so the
+  -- dedupe index below needs no coalesce (and stays portable to the in-memory
+  -- test engine, which cannot index an expression).
+  league_slug text not null default '',
+  user_id uuid references public.profiles(id) on delete set null,
+  note text,
+  -- why the lead was captured, not where the click came from:
+  --   enterprise   the contact-us plan
+  --   no_price     a purchasable plan with no Stripe price configured yet
+  --   stripe_off   STRIPE_SECRET_KEY unset on this deploy
+  source text not null default 'enterprise',
+  status text not null default 'new' check (status in ('new','contacted','converted','closed')),
+  created_at timestamptz default now(),
+  updated_at timestamptz default now()
+);
+create index if not exists idx_league_leads_status on public.league_leads(status, created_at desc);
+-- Dedupe key: one open lead per (email, plan, league). A prospect mashing the
+-- button is one lead, not nine.
+create unique index if not exists idx_league_leads_unique
+  on public.league_leads(lower(email), plan, league_slug);
+
+-- GRANDFATHER the two house leagues. Both predate billing: 'tko' is the house
+-- brand and 'shinobistrikerleague' is the live flagship on its own domain. The
+-- day entitlements start reading plan_status, a default of 'none' would strip
+-- SSL's domain takeover and video ownership — so they are comped, not sold.
+-- Guarded on plan_status='none' so a REAL later subscription is never
+-- overwritten by a re-run of this file.
+update public.leagues
+   set plan_status = 'comped', plan_since = coalesce(plan_since, now()), updated_at = now()
+ where slug in ('tko', 'shinobistrikerleague') and plan_status = 'none';
+
+-- Seed league #1 (shinobistrikerleague.com). SSL is the operator-owned
+-- Enterprise league; colors stay stock;
+-- colors stay stock (operator 2026-08-02): the indigo/red/cream of
+-- Loras/assets/leagues/shinobistrikerleague.json are LOGO/renderer colors,
+-- not UI chrome. Values mirror STOCK_LEAGUE_COLORS (src/lib/leagueTheme.ts =
+-- the index.css :root defaults). `on conflict do nothing` so a Studio save is
+-- never clobbered by a re-run of this file.
+insert into public.leagues (slug, name, domain, colors, tagline, video_ownership, tier)
+values ('shinobistrikerleague', 'SHINOBI STRIKER LEAGUE', 'shinobistrikerleague.com',
+        '{"primary":"#ff5b3d","secondary":"#2ed3dc","accent":"#ffb224","text":"#f5f5f8"}'::jsonb,
+        'rise. strike. reign.', 'league', 'enterprise')
+on conflict (slug) do nothing;
+
+-- Heal rows created by the former Pro seed. SSL is the operator's own full
+-- Enterprise build and must never lose clean-brand or custom-domain features.
+update public.leagues
+   set tier = 'enterprise', plan_status = 'comped',
+       plan_since = coalesce(plan_since, now()), updated_at = now()
+ where slug = 'shinobistrikerleague'
+   and (tier <> 'enterprise' or plan_status <> 'comped');
+
+-- Heal the old indigo seed (operator 2026-08-02) — guarded on the exact
+-- known-indigo primary so a real operator customization is never clobbered.
+update public.leagues
+   set colors = '{"primary":"#ff5b3d","secondary":"#2ed3dc","accent":"#ffb224","text":"#f5f5f8"}'::jsonb,
+       updated_at = now()
+ where slug = 'shinobistrikerleague' and colors->>'primary' = '#484878';
+
+-- Seed the HOUSE league row (operator audit 2026-08-03): GET /api/league/tko/
+-- config 404'd because 'tko' only existed as a client-side seed. Values mirror
+-- SEED_LEAGUES / DEFAULT_LEAGUE_CONFIG (src/lib/leagueConfig.ts) — the colors
+-- are the TKO_NEUTRAL tokens from src/lib/leagueTheme.ts (blue / royal / teal /
+-- ice). `on conflict do nothing` so a Studio save is never clobbered.
+insert into public.leagues (slug, name, domain, colors, tagline, video_ownership, tier)
+values ('tko', 'TKO', 'tko.cam',
+        '{"primary":"#2b69e4","secondary":"#1647aa","accent":"#40c094","text":"#f5f5f6"}'::jsonb,
+        'every angle. one cam.', 'tko', 'starter')
+on conflict (slug) do nothing;
+
+-- Heal the palette-v1 house row (operator 2026-08-03, palette v2) — guarded on
+-- the exact v1 primary so a real Studio customization is never clobbered.
+update public.leagues
+   set colors = '{"primary":"#2b69e4","secondary":"#1647aa","accent":"#40c094","text":"#f5f5f6"}'::jsonb,
+       updated_at = now()
+ where slug = 'tko' and colors->>'primary' = '#2563ff';
+
+-- ---------------------------------------------------------------------------
 -- CHAT SPACES (Discord-style: Space -> Category -> Channel -> Message)
 -- docs/economy-clans-villages.md §4. A "chat" a user makes is a SPACE holding
 -- many channels (grouped by category text) with a default #general. Kept as a
@@ -948,6 +1372,11 @@ alter table public.tournaments add column if not exists enroll_opens timestamptz
 alter table public.tournaments add column if not exists enroll_closes timestamptz;
 create index if not exists idx_tournaments_featured on public.tournaments(is_featured, format);
 
+-- Which league brand a tournament runs under: 'tko' (the house brand) or a
+-- leagues.slug like 'shinobistrikerleague' (see the LEAGUES section). Picked by
+-- the creator in the tournament wizard; branding context only, no mechanics.
+alter table public.tournaments add column if not exists league_slug text not null default 'tko';
+
 -- A Shinobi who registered for a (King) tournament through the entry gate.
 --   streamed     agreed to LIVE-STREAM their battles on TKO.
 --   no_mod_ack   accepted the no-modding attestation.
@@ -986,6 +1415,24 @@ alter table public.tournament_battles add column if not exists bracket_slot inte
 create unique index if not exists uq_tournament_battle_bracket_slot
   on public.tournament_battles(tournament_id, round, bracket_slot)
   where round is not null and bracket_slot is not null;
+-- Watch links attached to each SIDE of a matchup, keyed by side:
+--   { "a": { "live_url": "https://...", "clip_urls": ["https://www.youtube.com/watch?v=..."] }, "b": { ... } }
+-- Written ONLY through /api/fn/tournament-battle-media (validated: clips must
+-- parse to a YouTube id, lives must be https; an entrant writes only their own
+-- side, a tournament host writes either). See src/lib/battleMedia.ts.
+alter table public.tournament_battles add column if not exists media jsonb;
+-- REPLAY timeline timestamps (src/lib/tournamentReplay.ts): when the matchup
+-- was DECIDED (stamped by /api/fn/tournament-bracket-winner) and when its watch
+-- links last changed (stamped by /api/fn/tournament-battle-media). Rows from
+-- before these columns fall back to created_at in the replay event builder.
+alter table public.tournament_battles add column if not exists decided_at timestamptz;
+alter table public.tournament_battles add column if not exists media_updated_at timestamptz;
+
+-- END-TIME SWEEP (server/tournamentEndSweep.ts): every tournament created by
+-- the wizard now REQUIRES end_at (column added in the tournaments section
+-- above). When end_at passes, the sweep closes the tournament, pays the
+-- bracket leader(s) — an even split on a tie — and notifies entrants.
+create index if not exists idx_tournaments_end_sweep on public.tournaments(status, end_at);
 
 -- PIT MEET-UP: the private per-battle info exchange between the two fighters.
 -- Each fighter posts one card (in-game name / platform / lobby / notes); both
@@ -1102,6 +1549,19 @@ create table if not exists public.live_sessions (
 );
 create index if not exists idx_live_sessions_status on public.live_sessions(status, started_at desc);
 create index if not exists idx_live_sessions_host on public.live_sessions(host_id, status);
+
+-- The host's server-authoritative live-director selection. Viewers poll this
+-- tiny row to follow spoken/text camera and layout commands. All writes go
+-- through /api/fn/live-director-command; generic DB writes are denied.
+create table if not exists public.live_director_state (
+  live_stream_id uuid primary key references public.live_streams(id) on delete cascade,
+  mode text not null default 'auto',
+  angle_ids jsonb not null default '[]'::jsonb,
+  last_action text not null default 'status',
+  last_payload jsonb not null default '{}'::jsonb,
+  revision bigint not null default 0,
+  updated_at timestamptz not null default now()
+);
 
 -- ---------------------------------------------------------------------------
 -- IDENTITY UNIQUENESS  (usernames, clan names, clan tags)
@@ -1438,7 +1898,7 @@ create table if not exists public.creator_offers (
   seller_user_id uuid not null references public.profiles(id) on delete cascade,
   seller_type text not null default 'creator' check (seller_type in ('creator','clan')),
   clan_id uuid references public.servers(id) on delete cascade,
-  offer_type text not null check (offer_type in ('creator_subscription','clan_subscription','premium_highlight')),
+  offer_type text not null check (offer_type in ('creator_subscription','clan_subscription','premium_highlight','tournament_pack')),
   name text not null,
   description text not null default '',
   image_url text,
@@ -1505,6 +1965,31 @@ create table if not exists public.creator_earnings (
   transferred_at timestamptz,
   updated_at timestamptz not null default now()
 );
+-- Compatibility upgrade for deployments that created creator_earnings as the
+-- older ad-revenue ledger (creator_id/source/reel_id) before creator commerce.
+alter table public.creator_earnings add column if not exists order_id uuid;
+alter table public.creator_earnings add column if not exists seller_user_id uuid;
+alter table public.creator_earnings add column if not exists stripe_transfer_id text;
+alter table public.creator_earnings add column if not exists available_at timestamptz;
+alter table public.creator_earnings add column if not exists transferred_at timestamptz;
+alter table public.creator_earnings add column if not exists updated_at timestamptz not null default now();
+do $$
+begin
+  if exists (
+    select 1 from information_schema.columns
+    where table_schema='public' and table_name='creator_earnings' and column_name='creator_id'
+  ) then
+    execute 'update public.creator_earnings
+             set seller_user_id=creator_id
+             where seller_user_id is null and creator_id is not null';
+    execute 'alter table public.creator_earnings alter column creator_id drop not null';
+  end if;
+end $$;
+alter table public.creator_earnings alter column seller_user_id set not null;
+alter table public.creator_earnings drop constraint if exists creator_earnings_status_check;
+alter table public.creator_earnings add constraint creator_earnings_status_check
+  check (status in ('pending','available','transferred','reversed','accrued','payable','paid'));
+create unique index if not exists uq_creator_earnings_order on public.creator_earnings(order_id);
 create index if not exists idx_creator_earnings_seller on public.creator_earnings(seller_user_id, created_at desc);
 
 -- Elite and Legend members receive one no-charge basic creator/channel access
@@ -1658,6 +2143,13 @@ alter table public.artifacts add column if not exists slot_cost integer not null
 alter table public.artifacts add column if not exists official_override boolean not null default false;
 alter table public.artifacts add column if not exists clan_id uuid references public.servers(id) on delete set null;
 alter table public.artifacts add column if not exists used_at timestamptz;
+-- Unified-forge paid extras (see src/lib/forgeTiers.ts for the tier gates):
+-- creator-authored powers (Pro+, max 4 × {name, description}) and the bundled
+-- t-shirt reference (Legend, a physical_merch_products id the owner designed).
+-- Written ONLY by the trusted /api/fn/forge-artifact-save handler; both are
+-- PRIVILEGE_COLS in server/app.ts so the generic data API scrubs them.
+alter table public.artifacts add column if not exists powers jsonb not null default '[]'::jsonb;
+alter table public.artifacts add column if not exists shirt_ref text;
 create index if not exists artifacts_recipe_idx
   on public.artifacts(owner_id, recipe_code, created_at);
 
@@ -1688,6 +2180,30 @@ create table if not exists public.oracle_bets (
 );
 create index if not exists oracle_bets_match_idx on public.oracle_bets(match_ref, status);
 create index if not exists oracle_bets_stream_idx on public.oracle_bets(stream_id);
+
+-- One host-opened prediction window per live match. Choices are copied from
+-- the live stream's actual host/angle records so clients cannot invent an
+-- opponent or keep a free prediction window open with their own timer.
+create table if not exists public.oracle_live_rounds (
+  id uuid primary key default uuid_generate_v4(),
+  stream_id uuid not null,
+  match_ref text not null unique,
+  status text not null default 'open'
+    check (status in ('open','locked','settled','cancelled')),
+  choices jsonb not null default '[]'::jsonb,
+  opened_by uuid not null,
+  opened_at timestamptz not null default now(),
+  locks_at timestamptz not null,
+  winning_choice text,
+  losing_choice text,
+  resolved_at timestamptz,
+  updated_at timestamptz not null default now()
+);
+create index if not exists oracle_live_rounds_stream_idx
+  on public.oracle_live_rounds(stream_id, opened_at desc);
+create unique index if not exists oracle_live_rounds_one_active_idx
+  on public.oracle_live_rounds(stream_id)
+  where status in ('open','locked');
 
 -- Per-stream minimum bet the streamer sets in their live setup / control room.
 create table if not exists public.oracle_stream_config (
@@ -1919,3 +2435,241 @@ create table if not exists public.physical_merch_earnings (
 );
 create index if not exists physical_merch_earnings_seller_idx
   on public.physical_merch_earnings(seller_user_id, status, available_at);
+
+-- ---------------------------------------------------------------------------
+-- Clan alliances become durable shared villages. A village is private to its
+-- member clans and owns one home territory on the Conquest map.
+-- ---------------------------------------------------------------------------
+create table if not exists public.villages (
+  id uuid primary key default uuid_generate_v4(),
+  name text not null,
+  chief_profile_id uuid references public.profiles(id) on delete set null,
+  home_territory_id uuid unique,
+  status text not null default 'active',
+  created_by uuid not null references public.profiles(id) on delete restrict,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create index if not exists villages_status_idx on public.villages(status, updated_at desc);
+
+create table if not exists public.village_clans (
+  village_id uuid not null references public.villages(id) on delete cascade,
+  server_id uuid not null references public.servers(id) on delete cascade,
+  joined_by uuid references public.profiles(id) on delete set null,
+  under_strength boolean not null default false,
+  joined_at timestamptz not null default now(),
+  primary key (village_id, server_id),
+  unique (server_id)
+);
+create index if not exists village_clans_village_idx on public.village_clans(village_id, joined_at);
+
+create table if not exists public.clan_alliance_requests (
+  id uuid primary key default uuid_generate_v4(),
+  from_clan_id uuid not null references public.servers(id) on delete cascade,
+  to_clan_id uuid not null references public.servers(id) on delete cascade,
+  requester_id uuid not null references public.profiles(id) on delete restrict,
+  proposed_village_name text not null default '',
+  status text not null default 'pending',
+  reviewed_by uuid references public.profiles(id) on delete set null,
+  reviewed_at timestamptz,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (from_clan_id, to_clan_id)
+);
+alter table public.clan_alliance_requests add column if not exists proposed_village_name text not null default '';
+alter table public.clan_alliance_requests add column if not exists reviewed_by uuid;
+alter table public.clan_alliance_requests add column if not exists reviewed_at timestamptz;
+alter table public.clan_alliance_requests add column if not exists updated_at timestamptz not null default now();
+create index if not exists clan_alliance_requests_target_idx
+  on public.clan_alliance_requests(to_clan_id, status, updated_at desc);
+
+create table if not exists public.clan_alliances (
+  id uuid primary key default uuid_generate_v4(),
+  clan_id uuid not null references public.servers(id) on delete cascade,
+  ally_clan_id uuid not null references public.servers(id) on delete cascade,
+  village_id uuid references public.villages(id) on delete cascade,
+  created_at timestamptz not null default now(),
+  unique (clan_id, ally_clan_id)
+);
+alter table public.clan_alliances add column if not exists village_id uuid;
+create index if not exists clan_alliances_village_idx on public.clan_alliances(village_id, created_at);
+
+alter table public.servers add column if not exists village_id uuid;
+alter table public.territories add column if not exists owner_village_id uuid;
+alter table public.tournaments add column if not exists server_id uuid;
+alter table public.tournaments add column if not exists entry_scope text not null default 'public';
+alter table public.tournaments add column if not exists village_id uuid;
+
+-- ---------------------------------------------------------------------------
+-- Clan applications, reusable clan lineups, and locked tournament rosters.
+-- Tournament entrants remain the per-player stat-check gate; these rows are
+-- the official team snapshot and its revision/perk audit trail.
+-- ---------------------------------------------------------------------------
+create table if not exists public.clan_applications (
+  id uuid primary key default uuid_generate_v4(),
+  server_id uuid not null references public.servers(id) on delete cascade,
+  applicant_id uuid not null references public.profiles(id) on delete cascade,
+  status text not null default 'pending' check (status in ('pending','approved','rejected','withdrawn')),
+  message text not null default '',
+  fee_tokens_snapshot integer not null default 0 check (fee_tokens_snapshot >= 0),
+  reviewed_by uuid references public.profiles(id) on delete set null,
+  reviewed_at timestamptz,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (server_id, applicant_id)
+);
+create index if not exists clan_applications_review_idx on public.clan_applications(server_id, status, created_at);
+create index if not exists clan_applications_applicant_idx on public.clan_applications(applicant_id, updated_at desc);
+
+create table if not exists public.clan_rosters (
+  id uuid primary key default uuid_generate_v4(),
+  server_id uuid not null references public.servers(id) on delete cascade,
+  name text not null,
+  game text not null default 'Shinobi Striker',
+  max_members integer not null default 4 check (max_members between 1 and 100),
+  status text not null default 'active' check (status in ('active','archived')),
+  created_by uuid not null references public.profiles(id) on delete restrict,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (server_id, name)
+);
+create index if not exists clan_rosters_server_idx on public.clan_rosters(server_id, status, updated_at desc);
+
+create table if not exists public.clan_roster_members (
+  id uuid primary key default uuid_generate_v4(),
+  roster_id uuid not null references public.clan_rosters(id) on delete cascade,
+  user_id uuid not null references public.profiles(id) on delete cascade,
+  member_role text not null default 'starter' check (member_role in ('captain','starter','substitute','coach')),
+  added_by uuid not null references public.profiles(id) on delete restrict,
+  added_at timestamptz not null default now(),
+  unique (roster_id, user_id)
+);
+create index if not exists clan_roster_members_user_idx on public.clan_roster_members(user_id, added_at desc);
+
+create table if not exists public.clan_roster_invites (
+  id uuid primary key default uuid_generate_v4(),
+  roster_id uuid not null references public.clan_rosters(id) on delete cascade,
+  email text not null,
+  invitee_id uuid references public.profiles(id) on delete set null,
+  member_role text not null default 'starter' check (member_role in ('captain','starter','substitute','coach')),
+  token_hash text not null unique,
+  status text not null default 'pending' check (status in ('pending','accepted','declined','revoked','expired')),
+  fee_tokens_snapshot integer not null default 0 check (fee_tokens_snapshot >= 0),
+  invited_by uuid not null references public.profiles(id) on delete restrict,
+  expires_at timestamptz not null,
+  accepted_at timestamptz,
+  created_at timestamptz not null default now()
+);
+create index if not exists clan_roster_invites_roster_idx on public.clan_roster_invites(roster_id, status, created_at desc);
+create index if not exists clan_roster_invites_invitee_idx on public.clan_roster_invites(invitee_id, status, created_at desc);
+
+create table if not exists public.tournament_rosters (
+  id uuid primary key default uuid_generate_v4(),
+  tournament_id uuid not null references public.tournaments(id) on delete cascade,
+  clan_id uuid references public.servers(id) on delete set null,
+  source_clan_roster_id uuid references public.clan_rosters(id) on delete set null,
+  name text not null,
+  captain_id uuid references public.profiles(id) on delete set null,
+  status text not null default 'draft' check (status in ('draft','submitted','approved','changes_requested','rejected','withdrawn')),
+  version integer not null default 1 check (version > 0),
+  locked_at timestamptz,
+  submitted_at timestamptz,
+  approved_at timestamptz,
+  approved_by uuid references public.profiles(id) on delete set null,
+  change_request text,
+  created_by uuid not null references public.profiles(id) on delete restrict,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (tournament_id, name)
+);
+create index if not exists tournament_rosters_event_idx on public.tournament_rosters(tournament_id, status, updated_at desc);
+create index if not exists tournament_rosters_clan_idx on public.tournament_rosters(clan_id, tournament_id);
+
+create table if not exists public.tournament_roster_members (
+  id uuid primary key default uuid_generate_v4(),
+  tournament_roster_id uuid not null references public.tournament_rosters(id) on delete cascade,
+  user_id uuid not null references public.profiles(id) on delete cascade,
+  member_role text not null default 'starter' check (member_role in ('captain','starter','substitute','coach')),
+  source_clan_roster_member_id uuid references public.clan_roster_members(id) on delete set null,
+  added_at timestamptz not null default now(),
+  unique (tournament_roster_id, user_id)
+);
+create index if not exists tournament_roster_members_user_idx on public.tournament_roster_members(user_id, added_at desc);
+
+create table if not exists public.tournament_roster_revisions (
+  id uuid primary key default uuid_generate_v4(),
+  tournament_roster_id uuid not null references public.tournament_rosters(id) on delete cascade,
+  version integer not null,
+  action text not null,
+  actor_id uuid not null references public.profiles(id) on delete restrict,
+  reason text,
+  before_members jsonb not null default '[]'::jsonb,
+  after_members jsonb not null default '[]'::jsonb,
+  entitlement_source text,
+  entitlement_ref text,
+  mutation_id text not null,
+  created_at timestamptz not null default now(),
+  unique (tournament_roster_id, version),
+  unique (mutation_id)
+);
+create index if not exists tournament_roster_revisions_idx on public.tournament_roster_revisions(tournament_roster_id, version desc);
+
+create table if not exists public.tournament_perk_packs (
+  id uuid primary key default uuid_generate_v4(),
+  tournament_id uuid not null references public.tournaments(id) on delete cascade,
+  organizer_id uuid not null references public.profiles(id) on delete restrict,
+  offer_id uuid references public.creator_offers(id) on delete set null,
+  qualifying_asset_id text references public.assets(id) on delete set null,
+  name text not null,
+  description text not null default '',
+  image_url text,
+  price_cents integer not null default 0 check (price_cents >= 0),
+  benefits jsonb not null default '{"roster_changes":1,"artifact_slots":0}'::jsonb,
+  active boolean not null default true,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create index if not exists tournament_perk_packs_event_idx on public.tournament_perk_packs(tournament_id, active, created_at);
+create unique index if not exists tournament_perk_packs_offer_idx on public.tournament_perk_packs(offer_id) where offer_id is not null;
+
+create table if not exists public.tournament_perk_grants (
+  id uuid primary key default uuid_generate_v4(),
+  pack_id uuid not null references public.tournament_perk_packs(id) on delete cascade,
+  user_id uuid references public.profiles(id) on delete cascade,
+  tournament_roster_id uuid references public.tournament_rosters(id) on delete cascade,
+  granted_by uuid not null references public.profiles(id) on delete restrict,
+  note text,
+  status text not null default 'active' check (status in ('active','revoked')),
+  created_at timestamptz not null default now(),
+  check (user_id is not null or tournament_roster_id is not null)
+);
+create index if not exists tournament_perk_grants_lookup_idx on public.tournament_perk_grants(pack_id, user_id, tournament_roster_id, status);
+
+create table if not exists public.tournament_roster_artifacts (
+  id uuid primary key default uuid_generate_v4(),
+  tournament_roster_id uuid not null references public.tournament_rosters(id) on delete cascade,
+  asset_id text not null references public.assets(id) on delete restrict,
+  attached_by uuid not null references public.profiles(id) on delete restrict,
+  entitlement_source text not null check (entitlement_source in ('purchase','artifact','grant','host_override')),
+  entitlement_ref text not null,
+  reason text,
+  mutation_id text not null unique,
+  attached_at timestamptz not null default now(),
+  unique (tournament_roster_id, asset_id)
+);
+create index if not exists tournament_roster_artifacts_roster_idx on public.tournament_roster_artifacts(tournament_roster_id, attached_at);
+
+create table if not exists public.tournament_perk_usage (
+  id uuid primary key default uuid_generate_v4(),
+  pack_id uuid not null references public.tournament_perk_packs(id) on delete restrict,
+  tournament_roster_id uuid not null references public.tournament_rosters(id) on delete cascade,
+  user_id uuid not null references public.profiles(id) on delete restrict,
+  source_kind text not null check (source_kind in ('purchase','artifact','grant')),
+  source_ref text not null,
+  benefit text not null,
+  units integer not null default 1 check (units > 0),
+  idempotency_key text not null unique,
+  created_at timestamptz not null default now()
+);
+create index if not exists tournament_perk_usage_source_idx on public.tournament_perk_usage(source_kind, source_ref, benefit);
+create index if not exists tournament_perk_usage_roster_idx on public.tournament_perk_usage(tournament_roster_id, created_at desc);

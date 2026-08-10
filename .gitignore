@@ -1,12 +1,17 @@
 node_modules
 dist
 dist-site
-.env
-.env.local
-.env.*.local
-.env.production
-/public/mobile-version.json
+.env*
+!.env.example
 *.log
+*.tsbuildinfo
+# Amplify manual-deploy bundles (scripts/league_pwa.py --zip output)
+/*-deploy*.zip
+.codex-*
+/artifacts/
+/coverage/
+/playwright-report/
+/test-results/
 .DS_Store
 .cursor/settings.json
 
@@ -21,9 +26,17 @@ src-tauri/WixTools
 
 # Local dev + on-device verification helpers (this session)
 _*
+/android
 /appicons
 
 # Android release signing — NEVER commit a keystore or its passwords.
 android/keystore.properties
 *.jks
 *.keystore
+*.p8
+*.p12
+*.mobileprovision
+*.ipa
+*.xcarchive
+
+.claude/

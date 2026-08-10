@@ -36,13 +36,44 @@ export async function registerServiceWorker(
   if (!canUseServiceWorker()) return null
   if (registration) return registration
   try {
-    registration = await navigator.serviceWorker.register(swUrl(base), { scope: swScope(base) })
+    registration = await navigator.serviceWorker.register(swUrl(base), {
+      scope: swScope(base),
+      // The worker bytes carry the build id. Never let the browser's HTTP cache
+      // hide a newly deployed script from registration.update().
+      updateViaCache: 'none',
+    })
     return registration
   } catch {
     // A failed registration must never break the app — the /version.json poll
     // is an independent path to the same "new build available" prompt.
     return null
   }
+}
+
+/**
+ * The live registration, for anything that needs the worker itself rather than
+ * the update machinery — today that is web push (`registration.pushManager`).
+ *
+ * Prefers the one this module already holds and falls back to asking the browser
+ * (the worker may have been registered by a previous page load of this origin).
+ * Returns null instead of throwing so a caller can simply treat "no worker" as
+ * "this feature is unavailable here".
+ */
+export async function getServiceWorkerRegistration(
+  base: string,
+): Promise<ServiceWorkerRegistration | null> {
+  if (registration) return registration
+  if (!canUseServiceWorker()) return null
+  try {
+    const existing = await navigator.serviceWorker.getRegistration(swScope(base))
+    if (existing) {
+      registration = existing
+      return existing
+    }
+  } catch {
+    /* fall through to a fresh registration attempt */
+  }
+  return registerServiceWorker(base)
 }
 
 /**

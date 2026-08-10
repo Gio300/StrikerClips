@@ -50,8 +50,8 @@ export function PlayerProducedVideos({
         <p className="text-gray-400 text-sm animate-pulse">Loading videos…</p>
       ) : videos.length === 0 ? (
         <p className="text-gray-400 text-sm">
-          No produced multi-angle videos yet. When several angles of one of your matches are combined and
-          posted, they show up here.
+          No produced videos yet. Eligible new Shinobi Striker gameplay uploaded after signup is analyzed,
+          rendered, and published automatically. Processing can take time; older pre-signup uploads are not backfilled.
         </p>
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">

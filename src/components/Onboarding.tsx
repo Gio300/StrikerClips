@@ -1,40 +1,45 @@
 import { useEffect, useState } from 'react'
 import { useAuth } from '@/hooks/useAuth'
-import { BRAND } from '@/lib/brand'
+import { useLeagueTheme } from '@/components/LeagueThemeProvider'
 
 type Step = {
   title: string
   line: string
 }
 
-const STEPS: Step[] = [
-  {
-    title: `Welcome to ${BRAND.name}`,
-    line: 'Every angle of the kill, one cam — your gameplay, turned into highlights.',
-  },
-  {
-    title: 'Create',
-    line: 'Hit the Create button in the sidebar to turn your gameplay into a highlight reel.',
-  },
-  {
-    title: 'Live',
-    line: 'Go live, host a control room, or just watch — it all lives behind one Live tab.',
-  },
-  {
-    title: 'Tournaments',
-    line: 'Jump into tournaments, climb the rankings, and run your stat checks.',
-  },
-  {
-    title: 'Ask TKO anytime',
-    line: 'Use the command bar at the bottom — type or speak to get around and get help.',
-  },
-]
+function onboardingSteps(brandName: string): Step[] {
+  return [
+    {
+      title: `Welcome to ${brandName}`,
+      line: 'Every angle of the kill, one cam — your gameplay, turned into highlights.',
+    },
+    {
+      title: 'Create',
+      line: 'Tap Create in the bottom bar to turn footage from your connected YouTube into a highlight reel.',
+    },
+    {
+      title: 'Join your clan',
+      line: 'Open More, then Clans & crews to apply, create a clan, or enter your clan board and chat.',
+    },
+    {
+      title: 'Tournaments',
+      line: 'Tap Play to find a tournament. Clan leaders build reusable lineups in Clan tools, then enter them in events.',
+    },
+    {
+      title: 'Activity and help',
+      line: 'The top bell shows applications, tournament decisions, and video updates. Use the chat button for conversations and help.',
+    },
+  ]
+}
 
 /** localStorage flag prefix; full key is `kc_onboarded_${user.id}`. */
 const FLAG_PREFIX = 'kc_onboarded_'
 
 export function Onboarding() {
   const { user } = useAuth()
+  const { league } = useLeagueTheme()
+  const brandName = league?.name || 'TKO'
+  const steps = onboardingSteps(brandName)
   const [open, setOpen] = useState(false)
   const [step, setStep] = useState(0)
 
@@ -71,7 +76,7 @@ export function Onboarding() {
   }
 
   function next() {
-    if (step >= STEPS.length - 1) {
+    if (step >= steps.length - 1) {
       markDone()
     } else {
       setStep((s) => s + 1)
@@ -92,15 +97,15 @@ export function Onboarding() {
 
   if (!user || !open) return null
 
-  const current = STEPS[step]
-  const isLast = step === STEPS.length - 1
+  const current = steps[step]
+  const isLast = step === steps.length - 1
 
   return (
     <div
       className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-dark/80 backdrop-blur-sm animate-fade-in"
       role="dialog"
       aria-modal="true"
-      aria-label={`${BRAND.name} welcome tour`}
+      aria-label={`${brandName} welcome tour`}
       onClick={(e) => {
         // Tap outside the card (on the backdrop itself) dismisses + marks seen.
         if (e.target === e.currentTarget) markDone()
@@ -118,7 +123,7 @@ export function Onboarding() {
             </svg>
           </div>
           <span className="text-xs font-medium uppercase tracking-widest text-gray-400">
-            Step {step + 1} of {STEPS.length}
+            Step {step + 1} of {steps.length}
           </span>
         </div>
 
@@ -127,7 +132,7 @@ export function Onboarding() {
 
         {/* Progress dots */}
         <div className="mt-6 flex items-center gap-2">
-          {STEPS.map((_, i) => (
+          {steps.map((_, i) => (
             <span
               key={i}
               className={`h-1.5 rounded-full transition-all ${

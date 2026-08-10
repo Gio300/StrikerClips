@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from 'react'
-import { Link, useSearchParams } from 'react-router-dom'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import {
   ArrowRight,
   CalendarDays,
@@ -20,17 +20,41 @@ import {
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/hooks/useAuth'
 import { isKingPit } from '@/lib/tkoKing'
+import { DEFAULT_LEAGUE_CONFIG, SEED_LEAGUES } from '@/lib/leagueConfig'
+import { fetchMyManagedClans } from '@/lib/organizerApi'
+import { parseTournamentCreationTarget, type TournamentCreationTarget } from '@/lib/tournamentCreation'
+import { appendUniqueById, splitExtraRowPage } from '@/lib/paging'
 import type { Tournament, TournamentStatus } from '@/types/database'
 
 type TournamentRow = Pick<
   Tournament,
-  'id' | 'name' | 'description' | 'status' | 'created_at' | 'created_by' | 'start_at' | 'end_at' | 'format'
+  'id' | 'name' | 'description' | 'status' | 'created_at' | 'created_by' | 'start_at' | 'end_at' | 'format' |
+  'server_id' | 'entry_scope' | 'clan_entry_mode'
 >
 
 const FILTERS = ['all', 'open', 'live', 'closed', 'draft'] as const
+const TOURNAMENT_PAGE_SIZE = 30
 
-type TournamentTarget = 'king_1v1' | 'clan_battle' | 'open_bracket'
+type TournamentTarget = TournamentCreationTarget
 type TournamentWizardStep = 'target' | 'configure' | 'review'
+
+// Which league brand the tournament runs under (tournaments.league_slug).
+// Branding context only — TKO is the house brand; the Shinobi Striker League is
+// league #1 of the white-label league system (see src/lib/leagueConfig.ts).
+const LEAGUE_CHOICES: { slug: string; name: string; tagline: string; accent: string }[] = [
+  {
+    slug: DEFAULT_LEAGUE_CONFIG.slug,
+    name: DEFAULT_LEAGUE_CONFIG.name,
+    tagline: DEFAULT_LEAGUE_CONFIG.tagline,
+    accent: DEFAULT_LEAGUE_CONFIG.colors.primary,
+  },
+  ...SEED_LEAGUES.filter((league) => league.slug !== DEFAULT_LEAGUE_CONFIG.slug).map((league) => ({
+    slug: league.slug,
+    name: league.name,
+    tagline: league.tagline,
+    accent: league.colors.primary,
+  })),
+]
 
 const TOURNAMENT_TARGETS = {
   king_1v1: {
@@ -49,6 +73,14 @@ const TOURNAMENT_TARGETS = {
       'Clan Battle rules:\n- Each clan confirms its active roster.\n- All matches must be recorded.\n- Stat check video is required for entry.\n- The host verifies the final result.',
     Icon: UsersRound,
   },
+  clan_internal: {
+    title: 'In-clan Tournament',
+    description: 'A private competition that only your clan members can enter.',
+    defaultDescription: 'A members-only tournament to sharpen the clan and settle its internal rankings.',
+    defaultRules:
+      'In-clan tournament rules:\n- Entry is limited to current clan members.\n- Rosters must use members of the host clan.\n- All matches must be recorded.\n- Stat check video is required for entry.\n- The host verifies the final result.',
+    Icon: Users,
+  },
   open_bracket: {
     title: 'Open Community Bracket',
     description: 'Open registration and let the community compete.',
@@ -61,26 +93,45 @@ const TOURNAMENT_TARGETS = {
 
 export function Tournaments() {
   const { user, loading: authLoading } = useAuth()
+  const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
   const [tournaments, setTournaments] = useState<TournamentRow[]>([])
   const [loading, setLoading] = useState(true)
+  const [loadingMore, setLoadingMore] = useState(false)
+  const [loadedCount, setLoadedCount] = useState(0)
+  const [hasMore, setHasMore] = useState(false)
+  const [loadError, setLoadError] = useState('')
   const [showCreate, setShowCreate] = useState(false)
   const [statusFilter, setStatusFilter] = useState<'all' | TournamentStatus>('all')
   const [query, setQuery] = useState('')
   const createRequested = searchParams.get('create') === '1'
+  const requestedClanId = searchParams.get('scope') === 'clan' ? searchParams.get('clan') || '' : ''
+  const requestedTarget = parseTournamentCreationTarget(searchParams.get('target'))
+
+  const loadTournamentPage = useCallback(async (offset: number) => {
+    if (offset === 0) setLoading(true)
+    else setLoadingMore(true)
+    setLoadError('')
+    const { data, error } = await supabase
+      .from('tournaments')
+      .select('id,name,description,status,created_at,created_by,start_at,end_at,format,server_id,entry_scope,clan_entry_mode')
+      .order('created_at', { ascending: false })
+      .range(offset, offset + TOURNAMENT_PAGE_SIZE)
+    if (error) {
+      setLoadError('Tournaments could not be loaded. Check your connection and try again.')
+    } else {
+      const page = splitExtraRowPage((data ?? []) as TournamentRow[], TOURNAMENT_PAGE_SIZE)
+      setTournaments((current) => offset === 0 ? page.items : appendUniqueById(current, page.items))
+      setLoadedCount(offset + page.items.length)
+      setHasMore(page.hasMore)
+    }
+    setLoading(false)
+    setLoadingMore(false)
+  }, [])
 
   useEffect(() => {
-    async function load() {
-      const { data } = await supabase
-        .from('tournaments')
-        .select('*')
-        .order('start_at', { ascending: true, nullsFirst: false })
-        .order('created_at', { ascending: false })
-      setTournaments((data ?? []) as TournamentRow[])
-      setLoading(false)
-    }
-    void load()
-  }, [])
+    void loadTournamentPage(0)
+  }, [loadTournamentPage])
 
   useEffect(() => {
     if (user && createRequested) setShowCreate(true)
@@ -182,13 +233,25 @@ export function Tournaments() {
         ))}
       </div>
 
+      {loadError && (
+        <div role="alert" className="mb-4 rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-200">
+          <p>{loadError}</p>
+          <button type="button" onClick={() => { void loadTournamentPage(loadedCount) }} className="mt-2 font-semibold underline">
+            Try again
+          </button>
+        </div>
+      )}
+
       {showCreate && user && (
         <CreateTournamentForm
           userId={user.id}
+          initialClanId={requestedClanId}
+          initialTarget={requestedTarget}
           onCancel={closeCreate}
           onCreated={(tournament) => {
             setTournaments((current) => [tournament, ...current])
             closeCreate()
+            navigate(`/tournaments/${tournament.id}?section=rosters`)
           }}
         />
       )}
@@ -237,14 +300,27 @@ export function Tournaments() {
         </div>
       )}
 
+      {hasMore && !loading && (
+        <button
+          type="button"
+          onClick={() => { void loadTournamentPage(loadedCount) }}
+          disabled={loadingMore}
+          className="mt-5 w-full rounded-lg border border-dark-border px-4 py-3 text-sm font-semibold text-gray-200 hover:border-kunai/60 disabled:opacity-50"
+        >
+          {loadingMore ? 'Loading more tournaments...' : 'Load more tournaments'}
+        </button>
+      )}
+
       <TkoKingDock />
     </div>
   )
 }
 
+// On a phone this dock spans the full width, so it sits above the chat button.
+// At sm+ it centres itself and drops back to bottom-5.
 function TkoKingDock() {
   return (
-    <aside className="fixed bottom-[calc(8.5rem+env(safe-area-inset-bottom))] left-3 right-3 z-40 sm:bottom-5 sm:left-1/2 sm:right-auto sm:w-[26rem] sm:-translate-x-1/2">
+    <aside className="fixed bottom-[var(--tko-chat-fab-clear)] left-3 right-3 z-40 sm:bottom-5 sm:left-1/2 sm:right-auto sm:w-[26rem] sm:-translate-x-1/2">
       <Link
         to="/king"
         className="flex min-h-16 items-center gap-3 rounded-lg border border-kunai/50 bg-dark-card/95 px-3 py-3 shadow-2xl backdrop-blur-md transition-colors hover:border-kunai"
@@ -297,7 +373,7 @@ function TournamentCard({ tournament }: { tournament: TournamentRow }) {
       <div className="mt-auto flex flex-wrap items-center gap-x-4 gap-y-2 pt-5 text-xs text-gray-500">
         <span className="inline-flex items-center gap-1.5">
           <Users size={14} />
-          Open registration
+          {tournament.entry_scope === 'clan' ? 'Clan members only' : 'Open registration'}
         </span>
         <span className="inline-flex items-center gap-1.5">
           <CalendarDays size={14} />
@@ -337,22 +413,32 @@ function StatusPill({ status }: { status: TournamentStatus | undefined }) {
 
 function CreateTournamentForm({
   userId,
+  initialClanId,
+  initialTarget: requestedInitialTarget,
   onCancel,
   onCreated,
 }: {
   userId: string
+  initialClanId: string
+  initialTarget: TournamentTarget | null
   onCancel: () => void
   onCreated: (tournament: TournamentRow) => void
 }) {
-  const [step, setStep] = useState<TournamentWizardStep>('target')
-  const [target, setTarget] = useState<TournamentTarget | null>(null)
+  const initialTarget = requestedInitialTarget ?? (initialClanId ? 'clan_internal' : null)
+  const initialPreset = initialTarget ? TOURNAMENT_TARGETS[initialTarget] : null
+  const [step, setStep] = useState<TournamentWizardStep>(initialTarget ? 'configure' : 'target')
+  const [target, setTarget] = useState<TournamentTarget | null>(initialTarget)
   const [name, setName] = useState('')
-  const [description, setDescription] = useState('')
-  const [rules, setRules] = useState('')
+  const [description, setDescription] = useState(initialPreset?.defaultDescription || '')
+  const [rules, setRules] = useState(initialPreset?.defaultRules || '')
   const [startAt, setStartAt] = useState('')
   const [endAt, setEndAt] = useState('')
   const [status, setStatus] = useState<TournamentStatus>('open')
-  const [serverId, setServerId] = useState('')
+  const [clanEntryMode, setClanEntryMode] = useState<'open' | 'invited_only'>(
+    initialTarget === 'clan_internal' || initialTarget === 'clan_battle' ? 'invited_only' : 'open',
+  )
+  const [leagueSlug, setLeagueSlug] = useState(DEFAULT_LEAGUE_CONFIG.slug)
+  const [serverId, setServerId] = useState(initialClanId)
   const [advanced, setAdvanced] = useState(false)
   const [servers, setServers] = useState<{ id: string; name: string }[]>([])
   const [submitting, setSubmitting] = useState(false)
@@ -360,43 +446,61 @@ function CreateTournamentForm({
 
   useEffect(() => {
     async function loadClans() {
-      const { data: members } = await supabase
-        .from('server_members')
-        .select('server_id')
-        .eq('user_id', userId)
-      const ids = (members ?? []).map((member) => member.server_id)
-      if (ids.length === 0) {
-        setServers([])
-        return
+      const result = await fetchMyManagedClans()
+      const rows = result.data?.clans.map(({ id, name }) => ({ id, name })) ?? []
+      setServers(rows)
+      if (initialClanId && !rows.some((clan) => clan.id === initialClanId)) {
+        setServerId('')
+        setError('Only a clan leader or officer can create a tournament for this clan.')
       }
-      const { data: rows } = await supabase
-        .from('servers')
-        .select('id, name')
-        .in('id', ids)
-      setServers((rows ?? []) as { id: string; name: string }[])
     }
     void loadClans()
-  }, [userId])
+  }, [initialClanId])
 
   function chooseTarget(nextTarget: TournamentTarget) {
     const preset = TOURNAMENT_TARGETS[nextTarget]
     setTarget(nextTarget)
     setDescription(preset.defaultDescription)
     setRules(preset.defaultRules)
-    setServerId('')
+    setServerId(nextTarget === 'clan_internal' && servers.length === 1 ? servers[0].id : '')
+    setClanEntryMode(nextTarget === 'clan_battle' ? 'invited_only' : 'open')
     setAdvanced(false)
     setError('')
     setStep('configure')
   }
 
+  // Every tournament must carry an end time: when it passes, the server sweep
+  // ends the tournament on its own (bracket leader wins; a tie splits the
+  // prize evenly). See server/tournamentEndSweep.ts.
+  const endAtProblem = !endAt
+    ? 'Set an end date and time — the tournament ends automatically when it passes.'
+    : Number.isNaN(new Date(endAt).getTime())
+      ? 'That end date could not be read.'
+      : startAt && new Date(endAt).getTime() <= new Date(startAt).getTime()
+        ? 'The end time must be after the start time.'
+        : ''
+
   function reviewTournament() {
     if (!name.trim() || !target) return
+    if (target === 'clan_internal' && !serverId) {
+      setError('Choose the clan running this members-only tournament.')
+      return
+    }
+    if (endAtProblem) {
+      setError(endAtProblem)
+      return
+    }
     setError('')
     setStep('review')
   }
 
   async function createTournament() {
     if (!name.trim() || submitting) return
+    if (endAtProblem) {
+      setError(endAtProblem)
+      setStep('configure')
+      return
+    }
     setSubmitting(true)
     setError('')
 
@@ -406,15 +510,18 @@ function CreateTournamentForm({
       rules: rules.trim() || null,
       created_by: userId,
       status,
+      league_slug: leagueSlug,
       start_at: startAt ? new Date(startAt).toISOString() : null,
       end_at: endAt ? new Date(endAt).toISOString() : null,
       server_id: serverId || null,
+      entry_scope: target === 'clan_internal' ? 'clan' : 'public',
+      clan_entry_mode: target === 'clan_internal' ? 'invited_only' : clanEntryMode,
     }
 
     const { data, error: insertError } = await supabase
       .from('tournaments')
       .insert(payload)
-      .select('id, name, description, status, created_at, created_by, start_at, end_at')
+      .select('id, name, description, status, created_at, created_by, start_at, end_at, server_id, entry_scope, clan_entry_mode')
       .single()
 
     setSubmitting(false)
@@ -488,6 +595,8 @@ function CreateTournamentForm({
                     ? 'Friday Night 1v1'
                     : target === 'clan_battle'
                       ? 'AI Clan vs Rival Squad'
+                      : target === 'clan_internal'
+                        ? 'Hidden Leaf Clan Trials'
                       : 'Summer Community Cup'
                 }
                 className="field"
@@ -506,21 +615,92 @@ function CreateTournamentForm({
               />
             </Field>
 
-            {target === 'clan_battle' && (
-              <Field label="Host clan">
+            <Field label="Runs under" hint="The league brand this tournament carries — pure branding, same rules either way.">
+              <div className="grid gap-2 sm:grid-cols-2" role="radiogroup" aria-label="League">
+                {LEAGUE_CHOICES.map((league) => {
+                  const selected = leagueSlug === league.slug
+                  return (
+                    <button
+                      key={league.slug}
+                      type="button"
+                      role="radio"
+                      aria-checked={selected}
+                      onClick={() => setLeagueSlug(league.slug)}
+                      className={`min-h-16 rounded-lg border px-3 py-2.5 text-left transition-colors ${
+                        selected ? 'bg-dark-elevated' : 'border-dark-border hover:border-gray-500'
+                      }`}
+                      style={selected ? { borderColor: league.accent } : undefined}
+                    >
+                      <span className="flex items-center gap-2">
+                        <span
+                          aria-hidden
+                          className="h-2.5 w-2.5 shrink-0 rounded-full"
+                          style={{ backgroundColor: league.accent }}
+                        />
+                        <span className="block text-sm font-semibold text-white">{league.name}</span>
+                      </span>
+                      <span className="mt-0.5 block text-xs text-gray-500">{league.tagline}</span>
+                    </button>
+                  )
+                })}
+              </div>
+            </Field>
+
+            {(target === 'clan_battle' || target === 'clan_internal') && (
+              <Field label={target === 'clan_internal' ? 'Competing clan' : 'Host clan'} required={target === 'clan_internal'}>
                 <select value={serverId} onChange={(event) => setServerId(event.target.value)} className="field">
-                  <option value="">Community hosted</option>
+                  <option value="">{target === 'clan_internal' ? 'Choose a clan' : 'Community hosted'}</option>
                   {servers.map((server) => (
                     <option key={server.id} value={server.id}>{server.name}</option>
                   ))}
                 </select>
                 {servers.length === 0 && (
                   <span className="mt-1 block text-xs text-gray-500">
-                    No clan yet. <Link to="/boards/create" className="text-accent hover:underline">Create one first</Link>.
+                    You must lead or manage a clan first. <Link to="/clans" className="text-accent hover:underline">Open clans</Link>.
                   </span>
                 )}
               </Field>
             )}
+
+            {target !== 'clan_internal' && (
+              <Field
+                label="Clan roster participation"
+                hint="You can invite specific clans and optionally select one of their saved rosters after creating the tournament."
+              >
+                <select
+                  value={clanEntryMode}
+                  onChange={(event) => setClanEntryMode(event.target.value as 'open' | 'invited_only')}
+                  className="field"
+                >
+                  <option value="open">Allow every clan to enter a saved roster</option>
+                  <option value="invited_only">Only clans I invite</option>
+                </select>
+              </Field>
+            )}
+
+            <div className="grid gap-4 sm:grid-cols-2">
+              <Field label="Start date and time">
+                <input
+                  type="datetime-local"
+                  value={startAt}
+                  onChange={(event) => setStartAt(event.target.value)}
+                  className="field"
+                />
+              </Field>
+              <Field
+                label="End date and time"
+                required
+                hint="When this passes, the tournament ends automatically — the bracket leader wins, and a tie splits the prize evenly."
+              >
+                <input
+                  type="datetime-local"
+                  value={endAt}
+                  onChange={(event) => setEndAt(event.target.value)}
+                  className="field"
+                  required
+                />
+              </Field>
+            </div>
 
             <button
               type="button"
@@ -553,7 +733,7 @@ function CreateTournamentForm({
                       <option value="closed">Closed</option>
                     </select>
                   </Field>
-                  {target !== 'clan_battle' && (
+                  {target !== 'clan_battle' && target !== 'clan_internal' && (
                     <Field label="Host clan">
                       <select value={serverId} onChange={(event) => setServerId(event.target.value)} className="field">
                         <option value="">Community hosted</option>
@@ -563,25 +743,6 @@ function CreateTournamentForm({
                       </select>
                     </Field>
                   )}
-                </div>
-
-                <div className="grid gap-4 sm:grid-cols-2">
-                  <Field label="Start date and time">
-                    <input
-                      type="datetime-local"
-                      value={startAt}
-                      onChange={(event) => setStartAt(event.target.value)}
-                      className="field"
-                    />
-                  </Field>
-                  <Field label="End date and time">
-                    <input
-                      type="datetime-local"
-                      value={endAt}
-                      onChange={(event) => setEndAt(event.target.value)}
-                      className="field"
-                    />
-                  </Field>
                 </div>
 
                 <Field label="Rules" hint="Players agree to these rules before entering or submitting a stat check.">
@@ -602,7 +763,7 @@ function CreateTournamentForm({
             <button
               type="button"
               onClick={reviewTournament}
-              disabled={!name.trim()}
+              disabled={!name.trim() || (target === 'clan_internal' && !serverId)}
               className="btn-primary"
             >
               Review
@@ -626,9 +787,19 @@ function CreateTournamentForm({
           <dl className="mt-5 divide-y divide-dark-border border-y border-dark-border">
             <ReviewRow label="Format" value={preset.title} />
             <ReviewRow label="Name" value={name.trim()} />
-            <ReviewRow label="Registration" value={statusLabel(status)} />
+            <ReviewRow
+              label="League"
+              value={LEAGUE_CHOICES.find((league) => league.slug === leagueSlug)?.name ?? 'TKO'}
+            />
+            <ReviewRow label="Tournament status" value={statusLabel(status)} />
+            <ReviewRow label="Access" value={target === 'clan_internal' ? 'Host clan members only' : 'Open registration'} />
+            <ReviewRow
+              label="Clan rosters"
+              value={target === 'clan_internal' || clanEntryMode === 'invited_only' ? 'Invited/host clan only' : 'Any clan may enter'}
+            />
             <ReviewRow label="Host" value={selectedServer?.name ?? 'Community hosted'} />
             <ReviewRow label="Starts" value={startAt ? formatStart(new Date(startAt).toISOString()) : 'Date TBD'} />
+            <ReviewRow label="Ends" value={endAt ? formatStart(new Date(endAt).toISOString()) : 'Required'} />
             <ReviewRow
               label="Rules"
               value={rules.trim().split('\n').filter(Boolean)[0] ?? 'Standard recorded-match rules'}

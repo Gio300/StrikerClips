@@ -51,6 +51,27 @@ type ApiResult<T> = {
   status: number
 }
 
+/** Convert API/debug codes into a useful player-facing recovery message. */
+export function creatorCommerceError(
+  error: string | null | undefined,
+  fallback = 'Payout services are unavailable right now. Try again later.',
+): string {
+  const value = String(error ?? '').trim()
+  if (!value) return fallback
+  if (value === 'stripe_not_configured') {
+    return 'Creator payouts are not available yet. You can still use the rest of your account.'
+  }
+  if (/failed to fetch|network error|load failed/i.test(value)) {
+    return 'We could not reach payout services. Check your connection and try again.'
+  }
+  if (/^(unauthorized|invalid_token|auth_required)$/i.test(value)) {
+    return 'Sign in again to manage creator payouts.'
+  }
+  // Never put an internal snake_case code in front of a player.
+  if (/^[a-z0-9_]+$/i.test(value)) return fallback
+  return value
+}
+
 async function accessToken(): Promise<string | null> {
   const client = await backend()
   if (!client?.auth?.getSession) return null

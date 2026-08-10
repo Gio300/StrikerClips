@@ -6,8 +6,17 @@
     <link rel="icon" type="image/png" sizes="16x16" href="/icons/favicon-16.png" />
     <link rel="apple-touch-icon" sizes="180x180" href="/icons/apple-touch-icon.png" />
     <!-- Vite rewrites this public-file URL with the deploy base, so it resolves
-         to /app/manifest.json on the web build and /manifest.json on mobile. -->
-    <link rel="manifest" href="/manifest.json" />
+         to /app/manifest.json on the web build and /manifest.json on mobile.
+
+         THE URL IS FIXED; THE ANSWER IS NOT. The server builds this manifest
+         from the league the request's HOSTNAME resolves to (server/app.ts →
+         src/lib/pwaManifest.ts), so shinobistrikerleague.com installs as
+         Shinobi Striker League while tko.cam — and the Capacitor APK, which
+         has no server and reads the static public/manifest.json — install as
+         TKO. The id is here so src/main.tsx can re-point the href on the
+         `tko.cam/<slug>` PATH rung, where the host alone cannot say which
+         league is being served. -->
+    <link rel="manifest" id="app-manifest" href="/manifest.json" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <meta name="theme-color" content="#0A0A0C" />
     <meta name="mobile-web-app-capable" content="yes" />

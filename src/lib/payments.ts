@@ -140,6 +140,162 @@ export async function requestCheckout(
 }
 
 // ─────────────────────────────────────────────────────────────────────────
+//  SELF-SERVE CANCELLATION — Stripe's hosted Customer Portal.
+//
+//  Cancelling has to be as easy as subscribing (FTC negative-option rule; CA,
+//  NY and other state auto-renewal statutes). Subscribing is two clicks in the
+//  app, so cancelling is one button that opens the portal — where Stripe itself
+//  handles the cancel, the card swap and the invoice history, and tells our
+//  webhook about it so the tier actually lapses.
+//
+//  `no_customer` is a NORMAL answer, not a failure: a free account, a redeem
+//  code or a founder pass never created a Stripe customer and has nothing to
+//  manage. The UI says so plainly instead of showing an error.
+// ─────────────────────────────────────────────────────────────────────────
+
+export type PortalResult =
+  | { ok: true; url: string }
+  | { ok: false; reason: 'not_configured' | 'no_customer' | 'error'; message: string }
+
+/** Copy for each non-success outcome. Pure, so the wording is unit-testable. */
+export const PORTAL_MESSAGES = {
+  not_configured: 'Billing is not enabled on this deploy, so there is no subscription to manage.',
+  no_customer: 'You have no paid subscription on this account, so there is nothing to cancel.',
+  error: 'Could not open the billing portal. Please try again.',
+} as const
+
+type PortalPayload = { ok?: boolean; url?: string; error?: string; detail?: string } | null
+
+/**
+ * Interpret the server's reply to POST /api/billing/portal. Pure — split out so
+ * every branch (including the ones that need a live Stripe) is testable.
+ */
+export function parsePortalResponse(status: number, data: PortalPayload): PortalResult {
+  if (data?.ok === true && data.url) return { ok: true, url: data.url }
+  if (status === 503 || data?.error === 'stripe_not_configured') {
+    return { ok: false, reason: 'not_configured', message: PORTAL_MESSAGES.not_configured }
+  }
+  if (data?.error === 'no_customer') {
+    return { ok: false, reason: 'no_customer', message: PORTAL_MESSAGES.no_customer }
+  }
+  return { ok: false, reason: 'error', message: data?.detail || data?.error || PORTAL_MESSAGES.error }
+}
+
+/**
+ * Ask the server for a Stripe Customer Portal URL. Never throws.
+ *
+ * `returnTo` is the in-app path Stripe sends the user back to; the server
+ * clamps it to a same-site path, so a caller cannot turn it into a redirect.
+ */
+export async function requestBillingPortal(
+  input: { returnTo?: string } = {},
+): Promise<PortalResult> {
+  try {
+    const res = await fetch(apiUrl('/billing/portal'), {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({ returnTo: input.returnTo ?? '/upgrade' }),
+    })
+    const data = await res.json().catch(() => null) as PortalPayload
+    return parsePortalResponse(res.status, data)
+  } catch (e) {
+    return {
+      ok: false,
+      reason: 'error',
+      message: e instanceof Error ? e.message : PORTAL_MESSAGES.error,
+    }
+  }
+}
+
+/** What the server knows about the caller's subscription right now. */
+export type BillingSubscription = {
+  configured: boolean
+  hasBillingAccount: boolean
+  tier: string
+  tierExpiresAt: string | null
+  subscription: {
+    id: string
+    status: string
+    tier: string
+    cancelAtPeriodEnd: boolean
+    currentPeriodEnd: string | null
+  } | null
+}
+
+export const BILLING_UNKNOWN: BillingSubscription = {
+  configured: false, hasBillingAccount: false, tier: '', tierExpiresAt: null, subscription: null,
+}
+
+/**
+ * GET /api/billing/subscription. Never throws — any failure reports "no billing
+ * account", which hides the manage button rather than showing one that cannot
+ * work.
+ */
+export async function fetchBillingSubscription(): Promise<BillingSubscription> {
+  try {
+    const res = await fetch(apiUrl('/billing/subscription'), { headers: authHeaders() })
+    if (!res.ok) return BILLING_UNKNOWN
+    const data = await res.json().catch(() => null) as Partial<BillingSubscription> | null
+    if (!data || typeof data.configured !== 'boolean') return BILLING_UNKNOWN
+    return {
+      configured: data.configured,
+      hasBillingAccount: data.hasBillingAccount === true,
+      tier: typeof data.tier === 'string' ? data.tier : '',
+      tierExpiresAt: typeof data.tierExpiresAt === 'string' ? data.tierExpiresAt : null,
+      subscription: data.subscription ?? null,
+    }
+  } catch {
+    return BILLING_UNKNOWN
+  }
+}
+
+/** Display names for the tier keys. Mirrors LEVEL_TIER_NAME / trialTierName. */
+export const TIER_LABELS: Record<string, string> = {
+  ad_free: 'Ad-Free',
+  pro: 'Pro',
+  supporter: 'Elite',
+  creator: 'Legend',
+}
+
+/** Human name for a tier key; '' (free) and anything unknown read as "Free". */
+export function tierLabel(tier: string | null | undefined): string {
+  return TIER_LABELS[String(tier ?? '')] ?? 'Free'
+}
+
+/**
+ * One plain-English line about what happens next, for the manage-subscription
+ * panel. Pure.
+ *
+ * The distinction that matters legally: a subscription that has been cancelled
+ * ENDS on the period end and must not be described as "renews on" — that is the
+ * exact wording an auto-renewal regulator reads.
+ */
+export function describeRenewal(
+  billing: Pick<BillingSubscription, 'subscription' | 'tierExpiresAt'>,
+  fmt: (iso: string) => string = (iso) => new Date(iso).toLocaleDateString(),
+): string {
+  const sub = billing.subscription
+  const when = sub?.currentPeriodEnd || billing.tierExpiresAt || ''
+  const date = when ? fmt(when) : ''
+  if (sub) {
+    if (sub.cancelAtPeriodEnd) {
+      return date ? `Cancelled — access ends ${date}.` : 'Cancelled — access ends at the end of this billing period.'
+    }
+    if (sub.status === 'trialing') {
+      return date ? `Free trial — first charge ${date}.` : 'Free trial running.'
+    }
+    if (sub.status === 'past_due' || sub.status === 'unpaid') {
+      return 'Payment failed — update your card to keep this plan.'
+    }
+    if (sub.status === 'canceled') {
+      return date ? `Cancelled — access ended ${date}.` : 'Cancelled.'
+    }
+    return date ? `Renews ${date}.` : 'Renews monthly.'
+  }
+  return date ? `Access runs to ${date}.` : ''
+}
+
+// ─────────────────────────────────────────────────────────────────────────
 //  TRIAL → PAID CONVERSION.
 //
 //  There are two trial mechanisms, and the difference matters:

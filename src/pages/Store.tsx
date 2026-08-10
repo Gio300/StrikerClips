@@ -9,6 +9,7 @@ import {
   ShoppingBag,
   Sparkles,
   Store as StoreIcon,
+  Ticket,
   Trophy,
   WalletCards,
   Zap,
@@ -74,7 +75,7 @@ const PACK_ICONS: Record<string, LucideIcon> = {
 
 export function Store() {
   const { user } = useAuth()
-  const { tokens, sweeps, paid_sweeps_cents: paidSweepsCents, claimDaily, refresh } = useWallet()
+  const { tokens, sweeps, paid_sweeps_cents: paidSweepsCents, oracle_tickets: oracleTickets, claimDaily, refresh } = useWallet()
   const [flash, setFlash] = useState<string | null>(null)
   const [canClaim, setCanClaim] = useState(true)
   const [claiming, setClaiming] = useState(false)
@@ -171,7 +172,7 @@ export function Store() {
    */
   async function purchasePack(pack: TokenPack) {
     if (!canBuyPack(payments, pack.id)) {
-      showFlash('Payments are not enabled on this deploy yet — nothing was charged or credited.')
+      showFlash('Token-pack checkout is temporarily unavailable. Nothing was charged or credited.')
       return
     }
     setBuying(pack.id)
@@ -182,7 +183,7 @@ export function Store() {
         return
       }
       showFlash(result.notConfigured
-        ? 'Payments are not enabled on this deploy yet — nothing was charged or credited.'
+        ? 'Token-pack checkout is temporarily unavailable. Nothing was charged or credited.'
         : (result.error || 'Could not start checkout — please try again.'))
     } finally {
       setBuying(null)
@@ -236,8 +237,7 @@ export function Store() {
         </div>
       ) : (
         <div className="mb-6 rounded-lg border border-chakra/40 bg-chakra/10 px-4 py-2 text-xs text-chakra">
-          Payments are not enabled on this deploy yet — Token packs cannot be purchased. Your free daily
-          Give Points below still work.
+          Token-pack checkout is temporarily unavailable. Nothing can be charged here right now; the free daily Oracle-ticket claim still works.
         </div>
       )}
 
@@ -247,13 +247,13 @@ export function Store() {
             <StoreIcon size={15} />
             TKO Wallet
           </div>
-          <h1 className="text-2xl font-bold">Tokens & Give Points</h1>
+          <h1 className="text-2xl font-bold">Wallet & balances</h1>
           <p className="text-sm text-gray-500 mt-1">
-            Tokens unlock marketplace items and platform features. Give Points support people, clans, and events.
+            Tokens buy marketplace items. Give Points support the community. Oracle tickets are used only for eligible match calls.
           </p>
         </div>
         {/* Current balance */}
-        <div className="grid grid-cols-3 gap-2">
+        <div className="grid w-full grid-cols-2 gap-2 sm:w-auto sm:grid-cols-4">
           <div className="rounded-lg border border-dark-border bg-dark-card px-4 py-2">
             <div className="flex items-center gap-1.5 text-lg font-bold text-accent"><Coins size={17} />{tokens.toLocaleString()}</div>
             <div className="text-[11px] uppercase tracking-wide text-gray-500">Tokens</div>
@@ -268,6 +268,10 @@ export function Store() {
           <div className="rounded-lg border border-dark-border bg-dark-card px-4 py-2">
             <div className="flex items-center gap-1.5 text-lg font-bold text-leaf"><Gift size={17} />{sweeps.toLocaleString()}</div>
             <div className="text-[11px] text-gray-500">Give Points</div>
+          </div>
+          <div className="rounded-lg border border-purple-400/35 bg-purple-500/5 px-4 py-2">
+            <div className="flex items-center gap-1.5 text-lg font-bold text-purple-200"><Ticket size={17} />{oracleTickets.toLocaleString()}</div>
+            <div className="text-[11px] text-gray-500">Oracle tickets</div>
           </div>
         </div>
       </div>
@@ -284,8 +288,8 @@ export function Store() {
         <div className="min-w-0">
           <h2 className="font-semibold text-leaf">Claim daily Oracle tickets</h2>
           <p className="text-sm text-gray-400 mt-0.5">
-            Get {DAILY_ORACLE_TICKETS} free Oracle tickets every day. Bet them on live host-tier matches —
-            they’re Oracle-use only and never cost a cent.
+            Get {DAILY_ORACLE_TICKETS} free tickets every day. Use them to call an outcome on eligible live matches.
+            They are separate from Give Points and paid credits, cost nothing, and have no cash value.
           </p>
         </div>
         <button
@@ -383,7 +387,7 @@ export function Store() {
               ) : (
                 <button
                   disabled
-                  title="Payments are not enabled on this deploy yet"
+                  title="Token-pack checkout is temporarily unavailable"
                   className="px-4 py-2 rounded-lg border border-dark-border bg-dark-elevated text-gray-500 text-sm font-semibold cursor-not-allowed"
                 >
                   Unavailable

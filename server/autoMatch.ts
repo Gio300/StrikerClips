@@ -25,6 +25,8 @@ import {
   type ClipMeta,
   type MatchGroup,
 } from '../src/lib/matchGrouping'
+import { normalizeReelUsePrivacy } from '../src/lib/reelPrivacy'
+import { canUsePlayerReels } from './reelPrivacy'
 
 type Pool = { query: (text: string, params?: any[]) => Promise<{ rows: any[] }> }
 
@@ -421,11 +423,15 @@ export async function runAutoMatch(pool: Pool, triggerClipRecordId: string): Pro
   if (!trigger) return { matched: false, clipCount: 0, notified: 0, reason: 'clip record not found' }
   if (trigger.player_id) {
     const pref = await pool.query(
-      'select auto_merge_opt_out from profiles where id=$1',
+      'select auto_merge_opt_out,reel_usage_privacy from profiles where id=$1',
       [trigger.player_id],
     )
     if (pref.rows[0]?.auto_merge_opt_out) {
       return { matched: false, clipCount: 1, notified: 0, reason: 'player opted out of future auto-merge' }
+    }
+    const privacy = normalizeReelUsePrivacy(pref.rows[0]?.reel_usage_privacy)
+    if (privacy === 'only_me' || privacy === 'tournaments' || privacy === 'lives') {
+      return { matched: false, clipCount: 1, notified: 0, reason: 'reel privacy excludes general auto-merge' }
     }
   }
 
@@ -454,7 +460,19 @@ export async function runAutoMatch(pool: Pool, triggerClipRecordId: string): Pro
 
   // Dedup rows by id (the trigger is normally already in the window query).
   const byId = new Map<string, any>()
-  for (const r of cand.rows) byId.set(String(r.id), r)
+  for (const r of cand.rows) {
+    if (
+      trigger.player_id
+      && r.player_id
+      && String(r.player_id) !== String(trigger.player_id)
+      && !(await canUsePlayerReels(pool, {
+        ownerUserId: String(r.player_id),
+        actorUserId: String(trigger.player_id),
+        context: 'general',
+      }))
+    ) continue
+    byId.set(String(r.id), r)
+  }
   byId.set(String(trigger.id), trigger)
   const rows = [...byId.values()]
 

@@ -3,7 +3,6 @@ import { creatorApi } from './creatorCommerceApi'
 export type PhysicalMerchConfig = {
   mode: 'simulate' | 'test' | 'live'
   simulated: boolean
-  checkout_ready: boolean
   stripe_checkout_ready: boolean
   shopify_bridge_ready: boolean
   print_provider_ready: boolean
@@ -20,7 +19,6 @@ export type PhysicalVariant = {
   size: string
   color: string
   sku: string
-  provider_variant_id?: string | null
   active: boolean
 }
 

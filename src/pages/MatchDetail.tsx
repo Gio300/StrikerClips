@@ -5,6 +5,7 @@ import { useAuth } from '@/hooks/useAuth'
 import { hostSourceLabel, latestHostVersion } from '@/lib/hostCommentary'
 import { isPlayableUrl } from '@/lib/reelLayout'
 import { supabase } from '@/lib/supabase'
+import { useLeagueTheme } from '@/components/LeagueThemeProvider'
 import type {
   Clip,
   HostCommentary,
@@ -22,6 +23,18 @@ type AutoMatchView = {
   versions: MatchVersionRow[]
   angles: MatchAngleRow[]
   isLive: boolean
+}
+
+export function hasPublishedMatchMedia({
+  clipCount,
+  reelCount,
+  hasHostVersion,
+}: {
+  clipCount: number
+  reelCount: number
+  hasHostVersion: boolean
+}): boolean {
+  return clipCount > 0 || reelCount > 0 || hasHostVersion
 }
 
 export function MatchDetail() {
@@ -116,6 +129,11 @@ export function MatchDetail() {
 
   const youtubeClips = clips.filter((clip) => clip.source_type === 'youtube')
   const uploadClips = clips.filter((clip) => clip.source_type === 'upload')
+  const hasMedia = hasPublishedMatchMedia({
+    clipCount: clips.length,
+    reelCount: reels.length,
+    hasHostVersion: Boolean(hostVersion),
+  })
 
   return (
     <div className="mx-auto max-w-4xl p-4 sm:p-6 lg:p-8">
@@ -197,6 +215,18 @@ export function MatchDetail() {
           </div>
         </div>
       )}
+
+      {!hasMedia && (
+        <div className="rounded-xl border border-dark-border bg-dark-card p-6 text-center">
+          <h2 className="font-semibold text-white">Video is not ready yet</h2>
+          <p className="mt-2 text-sm text-gray-400">
+            This page updates after clips or a produced reel are attached to the match.
+          </p>
+          <Link to="/videos" className="mt-4 inline-block text-sm font-semibold text-accent hover:underline">
+            Watch published videos
+          </Link>
+        </div>
+      )}
       <Link to="/matches" className="mt-8 inline-block text-accent hover:underline">Back to matches</Link>
     </div>
   )
@@ -210,6 +240,8 @@ function AutoMatchDetail({
   onRefresh: () => Promise<void>
 }) {
   const { user } = useAuth()
+  const { league } = useLeagueTheme()
+  const brandName = league?.name || 'TKO'
   const [removing, setRemoving] = useState(false)
   const [notice, setNotice] = useState('')
   const [error, setError] = useState('')
@@ -233,7 +265,7 @@ function AutoMatchDetail({
   const removeCamera = async () => {
     if (!currentAngle || value.isLive || removing) return
     const confirmed = window.confirm(
-      'Remove your camera from the current recorded game? TKO will keep the earlier public upload in version history and rebuild the current version without your angle.',
+      `Remove your camera from the current recorded game? ${brandName} will keep the earlier public upload in version history and rebuild the current version without your angle.`,
     )
     if (!confirmed) return
     setRemoving(true)
@@ -247,7 +279,7 @@ function AutoMatchDetail({
     } else {
       setNotice(
         data?.rerenderQueued
-          ? 'Your camera is removed. TKO is building the reduced-angle version.'
+          ? `Your camera is removed. ${brandName} is building the reduced-angle version.`
           : 'Your camera is removed from the current game.',
       )
       await onRefresh()
@@ -259,7 +291,7 @@ function AutoMatchDetail({
     <div className="mx-auto max-w-4xl p-4 sm:p-6 lg:p-8">
       <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
         <div>
-          <p className="text-xs font-semibold uppercase tracking-wider text-accent">TKO multi-angle game</p>
+          <p className="text-xs font-semibold uppercase tracking-wider text-accent">{brandName} multi-angle game</p>
           <h1 className="mt-1 text-2xl font-bold">
             {value.group.map || value.group.mode || 'Synchronized match'}
           </h1>
@@ -287,7 +319,7 @@ function AutoMatchDetail({
         <div className="mb-5 aspect-video overflow-hidden rounded-lg border border-dark-border bg-black">
           <iframe
             src={`https://www.youtube.com/embed/${currentYoutubeId}`}
-            title="Current TKO multi-angle game"
+            title={`Current ${brandName} multi-angle game`}
             allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
             allowFullScreen
             className="h-full w-full"
@@ -303,7 +335,7 @@ function AutoMatchDetail({
         <div className="mb-5 rounded-lg border border-dark-border bg-dark-card p-4">
           <div className="font-semibold text-white">You are tagged in this recorded game.</div>
           <p className="mt-1 text-xs leading-5 text-gray-400">
-            You can remove your camera from the current TKO version. Earlier public uploads remain in
+            You can remove your camera from the current {brandName} version. Earlier public uploads remain in
             version history; live broadcasts cannot be edited.
           </p>
           <button

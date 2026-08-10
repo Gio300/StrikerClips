@@ -3,6 +3,13 @@ import { Link } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
 import { extractYouTubeId } from '@/lib/youtubeApi'
 import { thumbUrl } from '@/lib/youtubeConnect'
+import {
+  orderCreatorFeed,
+  reelsFetchWindow,
+  REELS_PAGE_SIZE,
+  reelFeedMediaLabel,
+  takeFeedPage,
+} from '@/lib/feedDiversity'
 import { AdSlot } from '@/components/AdSlot'
 import type { Reel, Clip } from '@/types/database'
 
@@ -14,17 +21,37 @@ export function Reels() {
   const [authors, setAuthors] = useState<Record<string, AuthorMeta>>({})
   const [query, setQuery] = useState('')
   const [loading, setLoading] = useState(true)
+  const [loadingMore, setLoadingMore] = useState(false)
+  const [requestedLimit, setRequestedLimit] = useState(REELS_PAGE_SIZE)
+  const [hasMore, setHasMore] = useState(false)
 
   useEffect(() => {
     let alive = true
     async function fetchReels() {
+      if (requestedLimit > REELS_PAGE_SIZE) setLoadingMore(true)
       try {
+        // Scan a bounded window wider than the displayed page. Otherwise one
+        // creator with 24 fresh uploads could occupy the whole first page even
+        // though other creators are immediately behind them.
+        const fetchWindow = reelsFetchWindow(requestedLimit)
         const { data } = await supabase
           .from('reels')
           .select('*, profiles(username, power_level)')
           .order('created_at', { ascending: false })
-        const rows = (data ?? []) as Reel[]
+          // Initial Watch must stay cheap. One look-ahead row tells us whether
+          // to show Load more without downloading the entire promoted table.
+          .limit(fetchWindow + 1)
+        // FRONT-PAGE EXCLUSION: free members' auto weekly videos are inserted
+        // with promoted=false — they live on the member's own profile + share
+        // link only, never this feed. Filtered client-side (not `.eq(...)`) so
+        // a backend whose reels rows predate the `promoted` column — or the
+        // mock backend's seed data — still shows everything: a missing value
+        // reads as promoted, matching the column's default of true.
+        const fetched = (data ?? []) as Reel[]
+        const page = takeFeedPage(fetched, fetchWindow)
+        const rows = page.items.filter((r) => r.promoted !== false)
         if (!alive) return
+        setHasMore(page.hasMore || rows.length > requestedLimit)
         setReels(rows)
         setLoading(false)
 
@@ -59,14 +86,17 @@ export function Reels() {
           if (alive) setThumbs(tmap)
         }
       } catch {
-        if (alive) setReels([])
+        if (alive && requestedLimit === REELS_PAGE_SIZE) setReels([])
       } finally {
-        if (alive) setLoading(false)
+        if (alive) {
+          setLoading(false)
+          setLoadingMore(false)
+        }
       }
     }
     fetchReels()
     return () => { alive = false }
-  }, [])
+  }, [requestedLimit])
 
   // Resolve an author label for a reel, preferring the join then the second
   // query, and falling back to a friendly label (never "Unknown").
@@ -89,6 +119,14 @@ export function Reels() {
       return title.includes(q) || author.includes(q)
     })
   }, [reels, query, authors])
+
+  // Discovery gets a stable creator round-robin. Search stays in newest-first
+  // order so results do not mysteriously jump around while the user types.
+  const visible = useMemo(
+    () => orderCreatorFeed(filtered, (reel) => reel.user_id || reel.id, query)
+      .slice(0, requestedLimit),
+    [filtered, query, requestedLimit],
+  )
 
   if (loading) {
     return (
@@ -117,9 +155,14 @@ export function Reels() {
           placeholder="Search reels by title or creator…"
           className="w-full md:max-w-md px-4 py-2 rounded-lg bg-dark border border-dark-border text-white placeholder-gray-500 focus:outline-none focus:border-accent/50"
         />
+        {query.trim() && hasMore && (
+          <p className="mt-2 text-xs text-gray-500">
+            Searching {reels.length} loaded reels. Load more to include older posts.
+          </p>
+        )}
       </div>
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-        {filtered.map((reel, idx) => (
+        {visible.map((reel, idx) => (
           <Fragment key={reel.id}>
             <Link
               to={`/reels/${reel.id}`}
@@ -148,12 +191,12 @@ export function Reels() {
                   {(authorPower(reel) != null && authorPower(reel)! > 0) && (
                     <> · PL {authorPower(reel)}</>
                   )}
-                  {' • '}{reel.clip_ids?.length ?? 0} clips
+                  {' • '}{reelFeedMediaLabel(reel)}
                 </p>
               </div>
             </Link>
             {/* Inline ad after every 6 reels — feels native to the feed. */}
-            {(idx + 1) % 6 === 0 && idx !== filtered.length - 1 && (
+            {(idx + 1) % 6 === 0 && idx !== visible.length - 1 && (
               <div className="md:col-span-2 lg:col-span-3">
                 <AdSlot slotId="reels-list-inline" shape="leaderboard" />
               </div>
@@ -161,13 +204,28 @@ export function Reels() {
           </Fragment>
         ))}
       </div>
+      {hasMore && (
+        <div className="flex flex-col items-center gap-2 py-8">
+          <button
+            type="button"
+            onClick={() => setRequestedLimit((current) => current + REELS_PAGE_SIZE)}
+            disabled={loadingMore}
+            className="px-5 py-2 rounded-lg border border-accent text-accent font-semibold hover:bg-accent/10 disabled:opacity-50"
+          >
+            {loadingMore ? 'Loading…' : query.trim() ? 'Load more reels to search' : 'Load more'}
+          </button>
+          <p className="text-xs text-gray-500">
+            Showing {visible.length} of {reels.length} loaded reels
+          </p>
+        </div>
+      )}
       {reels.length === 0 && (
         <div className="text-center py-16 text-gray-400">
           <p>No reels yet. Create the first one!</p>
           <Link to="/reels/create" className="mt-4 inline-block text-accent hover:underline">Create Reel</Link>
         </div>
       )}
-      {reels.length > 0 && filtered.length === 0 && (
+      {reels.length > 0 && visible.length === 0 && (
         <div className="text-center py-16 text-gray-400">
           <p>No reels match “{query}”.</p>
         </div>

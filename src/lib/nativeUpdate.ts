@@ -1,7 +1,28 @@
 export const DEFAULT_ANDROID_APK_URL =
-  'https://storage.googleapis.com/reelone-498406-downloads/TKO-latest.apk'
+  'https://github.com/Gio300/StrikerClips/releases/latest/download/app-debug.apk'
 
 export const DEFAULT_MOBILE_VERSION_URL = 'https://tko.cam/mobile-version.json'
+
+/**
+ * Pick the direct Android binary, when this page is allowed to offer one.
+ *
+ * A configured URL is an explicit per-deploy decision and always wins. The
+ * shared fallback APK is TKO's `app.killcam` package, so it is valid only on
+ * TKO itself. A white-label league without its own configured binary must fall
+ * through to the browser's PWA install flow; otherwise an SSL member installs
+ * TKO and gets TKO's name, splash, colors, storage, and update line.
+ */
+export function androidInstallUrl(
+  isAndroid: boolean,
+  leagueBrandName?: string | null,
+  configuredUrl?: string | null,
+): string | null {
+  if (!isAndroid) return null
+  const configured = String(configuredUrl ?? '').trim()
+  if (configured) return configured
+  if (String(leagueBrandName ?? '').trim()) return null
+  return DEFAULT_ANDROID_APK_URL
+}
 
 export interface NativeVersionManifest {
   versionCode: number

@@ -131,7 +131,7 @@ describe('redeem-code — a concurrent double-redeem yields exactly one winner',
       if (m.body?.user?.user_metadata?.tko_host === true) hosts++
     }
     expect(hosts).toBe(1)
-  })
+  }, 15_000)
 
   it('20 profiles redeeming ONE tier code at once: exactly one gets the tier', async () => {
     const app = makeApp()
@@ -149,5 +149,5 @@ describe('redeem-code — a concurrent double-redeem yields exactly one winner',
       if (m.body?.user?.user_metadata?.reelone_tier === 'pro') carrying++
     }
     expect(carrying).toBe(1)
-  })
+  }, 15_000)
 })

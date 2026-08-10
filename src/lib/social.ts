@@ -1,5 +1,6 @@
 import { supabase } from './supabase'
 import type { Activity, Profile } from '@/types/database'
+import { deletePostImage, isSafePostImageUrl, uploadPostImage } from '@/lib/postMedia'
 
 export const MAX_POST_LENGTH = 3000
 export const MAX_COMMENT_LENGTH = 1000
@@ -18,6 +19,15 @@ export interface SocialComment {
   author: SocialProfile | null
 }
 
+export interface SocialPostAttachment {
+  id: string
+  post_id: string
+  type: 'image' | 'reel'
+  url_or_id: string
+  sort_order: number | null
+  created_at: string | null
+}
+
 export interface SocialPost {
   id: string
   user_id: string
@@ -28,6 +38,7 @@ export interface SocialPost {
   likeCount: number
   likedByViewer: boolean
   comments: SocialComment[]
+  attachments: SocialPostAttachment[]
 }
 
 export interface SocialActivity extends Activity {
@@ -178,13 +189,18 @@ export async function loadPostsForAuthors(
   const postIds = posts.map((post) => post.id)
   if (postIds.length === 0) return []
 
-  const [likesResult, commentsResult] = await Promise.all([
+  const [likesResult, commentsResult, attachmentsResult] = await Promise.all([
     supabase.from('post_likes').select('*').in('post_id', postIds),
     supabase
       .from('post_comments')
       .select('*')
       .in('post_id', postIds)
       .order('created_at', { ascending: true }),
+    supabase
+      .from('post_attachments')
+      .select('*')
+      .in('post_id', postIds)
+      .order('sort_order', { ascending: true }),
   ])
 
   const likes = likesResult.error
@@ -199,6 +215,12 @@ export async function loadPostsForAuthors(
         body: string
         created_at: string | null
       }[])
+  const attachments = attachmentsResult.error
+    ? []
+    : ((attachmentsResult.data ?? []) as SocialPostAttachment[])
+      .filter((attachment) => (
+        attachment.type === 'image' && isSafePostImageUrl(attachment.url_or_id)
+      ))
 
   const profiles = await loadProfiles([
     ...posts.map((post) => post.user_id),
@@ -219,6 +241,7 @@ export async function loadPostsForAuthors(
         ...comment,
         author: profiles.get(comment.user_id) ?? null,
       })),
+    attachments: attachments.filter((attachment) => attachment.post_id === post.id),
   }))
 }
 
@@ -258,9 +281,13 @@ export async function loadNewsFeed(viewerId: string): Promise<NewsFeedData> {
   return { audience, posts, activities }
 }
 
-export async function createPost(userId: string, body: string): Promise<SocialPost> {
+export async function createPost(
+  userId: string,
+  body: string,
+  imageFile?: File | null,
+): Promise<SocialPost> {
   const text = body.trim()
-  if (!text) throw new Error('Write something before posting.')
+  if (!text && !imageFile) throw new Error('Write something or add a picture before posting.')
   if (text.length > MAX_POST_LENGTH) {
     throw new Error(`Posts must be ${MAX_POST_LENGTH.toLocaleString()} characters or fewer.`)
   }
@@ -272,6 +299,27 @@ export async function createPost(userId: string, body: string): Promise<SocialPo
     .single()
   throwIfError(error, 'Could not publish your post.')
   if (!data) throw new Error('The server did not return the new post.')
+  const postId = String((data as { id?: string }).id || '')
+  let uploadedUrl: string | null = null
+  let attachment: SocialPostAttachment | null = null
+  try {
+    if (imageFile) {
+      uploadedUrl = await uploadPostImage(imageFile, postId)
+      const attachmentResult = await supabase
+        .from('post_attachments')
+        .insert({ post_id: postId, type: 'image', url_or_id: uploadedUrl, sort_order: 0 })
+        .select()
+        .single()
+      throwIfError(attachmentResult.error, 'Could not attach the image to your post.')
+      if (!attachmentResult.data) throw new Error('The server did not return the image attachment.')
+      attachment = attachmentResult.data as SocialPostAttachment
+    }
+  } catch (attachmentError) {
+    if (uploadedUrl) await deletePostImage(uploadedUrl).catch(() => undefined)
+    await supabase.from('post_attachments').delete().eq('post_id', postId)
+    await supabase.from('posts').delete().eq('id', postId)
+    throw attachmentError
+  }
   const profiles = await loadProfiles([userId])
   return {
     ...(data as SocialPost),
@@ -279,10 +327,26 @@ export async function createPost(userId: string, body: string): Promise<SocialPo
     likeCount: 0,
     likedByViewer: false,
     comments: [],
+    attachments: attachment ? [attachment] : [],
   }
 }
 
 export async function deletePost(postId: string): Promise<void> {
+  const { data: rawAttachments } = await supabase
+    .from('post_attachments')
+    .select('*')
+    .eq('post_id', postId)
+  const attachments = (rawAttachments ?? []) as SocialPostAttachment[]
+  await Promise.allSettled(
+    attachments
+      .filter((attachment) => attachment.type === 'image' && isSafePostImageUrl(attachment.url_or_id))
+      .map((attachment) => deletePostImage(attachment.url_or_id)),
+  )
+  const { error: attachmentsError } = await supabase
+    .from('post_attachments')
+    .delete()
+    .eq('post_id', postId)
+  throwIfError(attachmentsError, 'Could not delete the post image.')
   const { error } = await supabase.from('posts').delete().eq('id', postId)
   throwIfError(error, 'Could not delete the post.')
 }
@@ -322,5 +386,33 @@ export async function createPostComment(
   return {
     ...(data as SocialComment),
     author: profiles.get(userId) ?? null,
+  }
+}
+
+export async function updatePostComment(
+  commentId: string,
+  userId: string,
+  body: string,
+): Promise<SocialComment> {
+  const text = body.trim()
+  if (!text) throw new Error('Write a comment first.')
+  if (text.length > MAX_COMMENT_LENGTH) {
+    throw new Error(`Comments must be ${MAX_COMMENT_LENGTH.toLocaleString()} characters or fewer.`)
+  }
+  const { data, error } = await supabase
+    .from('post_comments')
+    .update({ body: text })
+    .eq('id', commentId)
+    .eq('user_id', userId)
+    .select()
+    .single()
+  throwIfError(error, 'Could not update the comment.')
+  if (!data) throw new Error('Could not find your comment to update.')
+  return {
+    ...(data as SocialComment),
+    // The comment card already has the author profile. Do not turn a successful
+    // body update into a visible failure just because a second profile read had
+    // a transient problem; the caller preserves its existing author below.
+    author: null,
   }
 }

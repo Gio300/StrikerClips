@@ -5,7 +5,7 @@ import { useAuth } from '@/hooks/useAuth'
 import { ClipFinder } from '@/components/ClipFinder'
 import { isYouTubeConnectConfigured } from '@/lib/youtubeConnect'
 import { prettyClip } from '@/lib/clipLabel'
-import { BRAND } from '@/lib/brand'
+import { useLeagueTheme } from '@/components/LeagueThemeProvider'
 import type { UserYoutubeLink } from '@/types/database'
 
 /**
@@ -19,6 +19,8 @@ import type { UserYoutubeLink } from '@/types/database'
  */
 export function Connect() {
   const { user } = useAuth()
+  const { league } = useLeagueTheme()
+  const brandName = league?.name || 'TKO'
   const [links, setLinks] = useState<UserYoutubeLink[]>([])
   const canOAuth = isYouTubeConnectConfigured()
 
@@ -52,16 +54,19 @@ export function Connect() {
   return (
     <div className="p-4 sm:p-6 lg:p-8 max-w-3xl mx-auto space-y-6">
       <div>
-        <h1 className="text-2xl font-bold mb-1">Connect accounts</h1>
+        <h1 className="text-2xl font-bold mb-1">YouTube footage</h1>
         <p className="text-gray-400">
-          Link YouTube so {BRAND.name} can pull <em>your</em> uploads for reels — no link hunting.
+          Save individual YouTube videos so {brandName} can use them when you build a reel.
         </p>
+        <Link to="/settings#youtube" className="mt-3 inline-flex rounded-lg border border-accent/40 px-3 py-2 text-sm font-semibold text-accent">
+          Check or change my connected channel
+        </Link>
         {canOAuth ? (
-          <p className="text-xs text-leaf mt-2">One-tap YouTube connect is available on this build.</p>
+          <p className="text-xs text-leaf mt-2">You can also pick videos from your connected channel below.</p>
         ) : (
           <p className="text-xs text-gray-500 mt-2">
-            One-tap connect turns on the moment tko.cam has its Google client ID. Until then, paste your
-            clip links below.
+            Paste a YouTube watch, Shorts, or live-video link below. This saves footage; it does not replace
+            the connected channel in Settings.
           </p>
         )}
       </div>
@@ -72,10 +77,10 @@ export function Connect() {
       />
 
       <div>
-        <h2 className="text-lg font-semibold mb-3">Your saved sources</h2>
+        <h2 className="text-lg font-semibold mb-3">Your saved videos</h2>
         {links.length === 0 ? (
           <p className="text-gray-500 text-sm">
-            No saved sources yet. Connect YouTube or add a link above.
+            No saved videos yet. Add a YouTube video link above.
           </p>
         ) : (
           <div className="space-y-2">

@@ -183,7 +183,6 @@ export function PhysicalMerch() {
         {view === 'shop' && (
           <Catalog
             products={catalog}
-            config={config}
             busy={busy}
             onCheckout={(next) => setCheckout(next)}
             onRun={run}
@@ -530,13 +529,11 @@ function TextField({
 
 function Catalog({
   products,
-  config,
   busy,
   onCheckout,
   onRun,
 }: {
   products: PhysicalProduct[]
-  config: PhysicalMerchConfig | null
   busy: string | null
   onCheckout: (checkout: NonNullable<CheckoutState>) => void
   onRun: (label: string, action: () => Promise<string | null>) => Promise<void>
@@ -579,22 +576,7 @@ function Catalog({
         </div>
       ) : (
         <div className="mt-5 grid gap-4 sm:grid-cols-2">
-          {products.filter((product) => product.status === 'approved' || product.status === 'active').map((product) => {
-            const selectedVariant = product.variants.find(
-              (variant) => variant.id === (selections[product.id] || product.variants[0]?.id),
-            )
-            const checkoutAvailable = config?.simulated === true || (
-              config?.checkout_ready === true
-              && Boolean(selectedVariant?.provider_variant_id)
-            )
-            const unavailableCopy = !config
-              ? 'Checking checkout readiness…'
-              : !config.checkout_ready
-                ? 'Checkout is paused while TKO finishes connecting manufacturing and automatic fulfillment. No order or charge will be created.'
-                : !selectedVariant?.provider_variant_id
-                  ? 'This size and color is not connected to manufacturing yet. Choose another option or check back soon.'
-                  : null
-            return (
+          {products.filter((product) => product.status === 'approved' || product.status === 'active').map((product) => (
             <article
               data-testid="product-card"
               key={product.id}
@@ -625,20 +607,14 @@ function Catalog({
                   data-testid="buy-product"
                   type="button"
                   onClick={() => buy(product)}
-                  disabled={busy != null || !checkoutAvailable}
+                  disabled={busy != null}
                   className="mt-3 flex w-full items-center justify-center gap-2 rounded-lg bg-accent px-4 py-2.5 text-sm font-semibold text-dark disabled:opacity-40"
                 >
                   Buy inside TKO <ChevronRight size={16} />
                 </button>
-                {unavailableCopy && (
-                  <p data-testid="checkout-unavailable" className="mt-2 text-xs leading-5 text-kunai">
-                    {unavailableCopy}
-                  </p>
-                )}
               </div>
             </article>
-            )
-          })}
+          ))}
         </div>
       )}
     </section>
@@ -698,7 +674,7 @@ function CheckoutPanel({
         </div>
       ) : (
         <div className="mt-4 rounded-lg border border-kunai/30 bg-kunai/10 p-3 text-sm text-kunai">
-          Stripe is enabled but the publishable key or Checkout client secret is missing.
+          Secure checkout is temporarily unavailable. Your order was not charged.
         </div>
       )}
       </div>

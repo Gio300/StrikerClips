@@ -4,6 +4,7 @@ import {
   loadTheme,
   saveTheme,
   normalizeAccent,
+  adoptLeagueKit,
   type ThemeStorage,
 } from './broadcastTheme'
 
@@ -87,5 +88,52 @@ describe('broadcastTheme — load/save', () => {
     const saved = saveTheme('k', { accent: 'garbage' }, s)
     expect(saved.accent).toBe(DEFAULT_THEME.accent)
     expect(loadTheme('k', s).accent).toBe(DEFAULT_THEME.accent)
+  })
+})
+
+describe('broadcastTheme — adoptLeagueKit (league defaults for live overlays)', () => {
+  const ssl = {
+    colors: { primary: '#484878' },
+    logoUrl: 'https://cdn.example/ssl-logo.png',
+  }
+
+  it('no league → the theme passes through untouched', () => {
+    expect(adoptLeagueKit(DEFAULT_THEME, null)).toEqual(DEFAULT_THEME)
+    expect(adoptLeagueKit(DEFAULT_THEME, undefined)).toEqual(DEFAULT_THEME)
+  })
+
+  it('a never-customized theme adopts the league accent + logo', () => {
+    const t = adoptLeagueKit({ ...DEFAULT_THEME }, ssl)
+    expect(t.accent).toBe('#484878')
+    expect(t.logoUrl).toBe('https://cdn.example/ssl-logo.png')
+    // Nothing else moves — teams/names stay the host's own.
+    expect(t.teamA).toBe(DEFAULT_THEME.teamA)
+    expect(t.tournamentName).toBe(DEFAULT_THEME.tournamentName)
+  })
+
+  it('explicit host overrides always win', () => {
+    const custom = { ...DEFAULT_THEME, accent: '#2f81f7', logoUrl: 'https://host.example/me.png' }
+    const t = adoptLeagueKit(custom, ssl)
+    expect(t.accent).toBe('#2f81f7')
+    expect(t.logoUrl).toBe('https://host.example/me.png')
+  })
+
+  it('reads server-shaped league rows (logo_url) too', () => {
+    const t = adoptLeagueKit({ ...DEFAULT_THEME }, { logo_url: 'https://cdn.example/row.png' })
+    expect(t.logoUrl).toBe('https://cdn.example/row.png')
+    expect(t.accent).toBe(DEFAULT_THEME.accent) // no league primary given
+  })
+
+  it('a TKO-orange league primary or junk color is a no-op', () => {
+    expect(adoptLeagueKit({ ...DEFAULT_THEME }, { colors: { primary: '#ff7a18' } }))
+      .toEqual(DEFAULT_THEME)
+    expect(adoptLeagueKit({ ...DEFAULT_THEME }, { colors: { primary: 'not-a-color' } }))
+      .toEqual(DEFAULT_THEME)
+  })
+
+  it('is pure — the input theme object is not mutated', () => {
+    const input = { ...DEFAULT_THEME }
+    adoptLeagueKit(input, ssl)
+    expect(input).toEqual(DEFAULT_THEME)
   })
 })

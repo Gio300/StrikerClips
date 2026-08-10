@@ -5,11 +5,24 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
 	<key>CFBundleDisplayName</key>
-        <string>TKO</string>
+        <string>Shinobi Striker League</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
 	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>CFBundleURLName</key>
+			<string>com.shinobistrikerleague.app.auth</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>shinobistrikerleague</string>
+			</array>
+		</dict>
+	</array>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
@@ -23,15 +36,13 @@
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>NSCameraUsageDescription</key>
-	<string>TKO uses the camera when you choose to contribute a live angle or record a match.</string>
+	<string>Shinobi Striker League uses the camera when you choose to contribute a live angle or record a match.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>TKO uses the microphone when you choose to broadcast, record commentary, or join a live match.</string>
+	<string>Shinobi Striker League uses the microphone when you choose to broadcast, record commentary, or join a live match.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
-	<string>TKO accesses selected photos and videos so you can upload clips, avatars, and creator artwork.</string>
+	<string>Shinobi Striker League accesses selected photos and videos so you can upload clips, avatars, and creator artwork.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
-	<string>TKO saves exported clips to your photo library only when you ask it to.</string>
-	<key>ITSAppUsesNonExemptEncryption</key>
-	<false/>
+	<string>Shinobi Striker League saves exported clips to your photo library only when you ask it to.</string>
 	<key>UILaunchStoryboardName</key>
 	<string>LaunchScreen</string>
 	<key>UIMainStoryboardFile</key>

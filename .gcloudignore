@@ -3,6 +3,7 @@
 node_modules
 android
 appicons
+artifacts
 dist
 dist-site
 src-tauri/target
@@ -22,3 +23,18 @@ _*
 !public/videos/*-web.mp4
 !public/videos/*.jpg
 /local-downloads/
+
+.claude/
+# Deployment archives and local QA captures are never runtime inputs. Keeping
+# them out of Cloud Build makes a source deploy small and prevents an old SSL
+# artifact from being copied into a backend image by accident.
+*.zip
+ios/
+rec/
+.codex-*
+test-results/
+*.tsbuildinfo
+deploy.err
+rec_log.txt
+ABSOLUTE
+explicitly

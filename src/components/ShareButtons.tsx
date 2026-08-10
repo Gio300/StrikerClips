@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { canonicalCurrentUrl } from '@/lib/canonicalUrl'
 
 type ShareButtonsProps = {
   url?: string
@@ -15,7 +16,9 @@ type ShareButtonsProps = {
  */
 export function ShareButtons({ url, title, className = '' }: ShareButtonsProps) {
   const [copied, setCopied] = useState(false)
-  const shareUrl = url ?? (typeof window !== 'undefined' ? window.location.href : '')
+  // Default to the CURRENT page, canonicalized to a public origin — the raw
+  // window.location.href is a dead link from the installed app (localhost).
+  const shareUrl = url ?? canonicalCurrentUrl()
   const shareTitle = title?.trim() ? title : 'Check out this TKO clip'
 
   const enc = encodeURIComponent

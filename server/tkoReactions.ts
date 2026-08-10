@@ -77,17 +77,22 @@ function choose(
   return selected
 }
 
-export function selectVideoReactions(seed: string): Array<{
+export function selectVideoReactions(seed: string, maxCount = 3): Array<{
   reaction: TkoReaction
   fraction: number
 }> {
+  const count = Math.max(0, Math.min(3, Math.floor(maxCount)))
+  if (count === 0) return []
   const random = seededRandom(stableSeed(seed))
   const used = new Set<string>()
-  return [
+  const full = [
     { reaction: choose(['opening', 'live', 'hype'], random, used), fraction: 0.10 },
     { reaction: choose(['knockout', 'replay', 'hype'], random, used), fraction: 0.45 },
     { reaction: choose(['victory', 'closing', 'mvp'], random, used), fraction: 0.92 },
   ]
+  if (count === 1) return [full[1]]
+  if (count === 2) return [full[1], full[2]]
+  return full
 }
 
 async function existingAudio(path: string): Promise<boolean> {
@@ -136,7 +141,8 @@ async function synthesizeReaction(
   return target
 }
 
-export async function buildVideoReactionAudio(seed: string): Promise<ReactionAudio[]> {
+export async function buildVideoReactionAudio(seed: string, maxCount = 3): Promise<ReactionAudio[]> {
+  if (maxCount <= 0) return []
   const apiKey = process.env.TKO_ELEVENLABS_API_KEY || process.env.ELEVENLABS_API_KEY
   if (!apiKey) {
     console.warn('[reaction] no ElevenLabs key; fallback worker will keep game audio only')
@@ -145,7 +151,7 @@ export async function buildVideoReactionAudio(seed: string): Promise<ReactionAud
   const cacheDir = process.env.TKO_REACTION_CACHE_DIR || join(tmpdir(), 'tko-reaction-cache')
   await mkdir(cacheDir, { recursive: true })
   const output: ReactionAudio[] = []
-  for (const selected of selectVideoReactions(seed)) {
+  for (const selected of selectVideoReactions(seed, maxCount)) {
     try {
       const file = await synthesizeReaction(selected.reaction, cacheDir, apiKey)
       output.push({ ...selected, file })

@@ -5,8 +5,6 @@ import {
   Bot,
   ChevronRight,
   Clapperboard,
-  Crown,
-  Download,
   FileText,
   Gem,
   Hammer,
@@ -20,14 +18,17 @@ import {
   Plus,
   Radio,
   Search,
+  ShieldCheck,
   Shirt,
   ShoppingBag,
   Sparkles,
   Swords,
   Ticket,
   Trophy,
+  TvMinimalPlay,
   UserRound,
   UsersRound,
+  WalletCards,
   X,
   type LucideIcon,
 } from 'lucide-react'
@@ -35,8 +36,9 @@ import { useAuth } from '@/hooks/useAuth'
 import { supabase } from '@/lib/supabase'
 import { useUnreadNotifications } from '@/hooks/useUnreadNotifications'
 import { InstallAppButton } from '@/components/InstallAppButton'
-import { CreateIntentPicker } from '@/components/CreateIntentPicker'
 import { IS_MOBILE_STORE_BUILD } from '@/lib/storeBuild'
+import { CreateIntentPicker } from '@/components/CreateIntentPicker'
+import { useLeagueTheme } from '@/components/LeagueThemeProvider'
 
 type PrimaryNavItem = {
   to: string
@@ -62,7 +64,12 @@ type SheetItem = {
 
 export function BottomNav() {
   const { user } = useAuth()
+  const { league } = useLeagueTheme()
+  const brandName = league?.name || 'TKO'
   const { count: unreadCount } = useUnreadNotifications()
+  // The install label now lives on InstallAppButton itself (further down this
+  // sheet), which defaults to the active league's -- so the sheet no longer
+  // needs its own copy of it.
   const navigate = useNavigate()
   const location = useLocation()
   const [createOpen, setCreateOpen] = useState(false)
@@ -71,7 +78,7 @@ export function BottomNav() {
   useEffect(() => {
     setCreateOpen(false)
     setMoreOpen(false)
-  }, [location.pathname])
+  }, [location.pathname, location.hash])
 
   useEffect(() => {
     if (!createOpen && !moreOpen) return
@@ -100,18 +107,22 @@ export function BottomNav() {
   }
 
   const explore: SheetItem[] = [
-    { to: '/chat', label: 'Connect (Chat)', Icon: MessageCircleMore },
+    { to: '/messages', label: 'Chats', Icon: MessageCircleMore },
     { to: '/clans', label: 'Clans & crews', Icon: UsersRound },
     { to: '/conquest', label: 'Conquest map', Icon: Swords },
     { to: '/live', label: 'Live', Icon: Radio },
     { to: '/discover', label: 'Player search', Icon: Search },
-    { to: '/rankings', label: 'Power rankings', Icon: Crown },
     { to: '/profile', label: 'My profile', Icon: UserRound },
   ]
 
   const studio: SheetItem[] = user
     ? [
         { to: '/connect', label: 'Connected apps', Icon: Link2 },
+        { to: '/settings#youtube', label: 'Change YouTube URL', Icon: TvMinimalPlay },
+        ...(IS_MOBILE_STORE_BUILD
+          ? [{ to: '/settings', label: 'Account settings', Icon: WalletCards }]
+          : [{ to: '/settings#payouts', label: 'Connect Stripe / get paid', Icon: WalletCards }]),
+        { to: '/privacy-settings', label: 'Privacy', Icon: ShieldCheck },
         { to: '/rewards', label: 'Artifact collection', Icon: Gem },
         { to: '/forge', label: 'Forge an item', Icon: Hammer },
         { to: '/notifications', label: 'Notifications', Icon: Bell, badge: unreadCount },
@@ -127,9 +138,17 @@ export function BottomNav() {
       : []),
     { to: '/oracle', label: 'Oracle calls', Icon: Bot },
     { to: '/redeem', label: 'Redeem pass', Icon: Ticket },
-    ...(!IS_MOBILE_STORE_BUILD
-      ? [{ to: '/marketing', label: 'Install TKO', Icon: Download }]
-      : []),
+    // NO INSTALL ROW HERE. Operator 2026-08-07: "shouldn't be taken to TKO.cam
+    // to download app.. should just be able to download right from the more
+    // link.. that should start the download."
+    //
+    // This row used to route to /marketing, which is a PITCH PAGE, not an
+    // install -- so tapping "Install <league>" left the app, landed on TKO's
+    // sales copy, and asked the member to find the button again. The real
+    // installer (InstallAppButton, further down this same sheet) fires the
+    // browser's own prompt for the manifest of the host you are already on, so
+    // a league member installs the LEAGUE. One affordance, and it is the one
+    // that works.
     { to: '/help', label: 'Help center', Icon: HelpCircle },
     { to: '/legal', label: 'Terms & privacy', Icon: FileText },
   ]
@@ -141,7 +160,7 @@ export function BottomNav() {
       )}
 
       {moreOpen && (
-        <div className="fixed inset-0 z-[70] sm:hidden" role="dialog" aria-modal="true" aria-label="TKO menu">
+        <div className="fixed inset-0 z-[70] sm:hidden" role="dialog" aria-modal="true" aria-label={`${brandName} menu`}>
           <button
             type="button"
             aria-label="Close menu"
@@ -172,7 +191,7 @@ export function BottomNav() {
 
               <SheetGroup label="Explore" items={explore} />
               {studio.length > 0 && <SheetGroup label="Studio" items={studio} />}
-              <SheetGroup label="TKO" items={account} />
+              <SheetGroup label="Account" items={account} />
 
               {!IS_MOBILE_STORE_BUILD && (
                 <InstallAppButton variant="subtle" className="mt-3 block w-full [&>button]:w-full" />

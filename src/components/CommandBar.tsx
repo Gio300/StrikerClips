@@ -3,7 +3,10 @@ import { useLocation, useNavigate } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/hooks/useAuth'
 import { useAskTko } from './AskTkoContext'
+import { ChatFab } from './ChatFab'
+import { bankAnswer } from '@/lib/answerBank'
 import { NinjaIcon, type NinjaIconName } from '@/components/ui/NinjaIcon'
+import { useLeagueTheme } from '@/components/LeagueThemeProvider'
 import {
   GUIDES,
   getGuide,
@@ -14,7 +17,6 @@ import {
   isLastStep,
   type Guide,
 } from '@/lib/guides'
-import { IS_MOBILE_STORE_BUILD } from '@/lib/storeBuild'
 
 /**
  * CommandBar — the "Ask TKO" GUIDED ASSISTANT.
@@ -41,17 +43,15 @@ import { IS_MOBILE_STORE_BUILD } from '@/lib/storeBuild'
 
 type QA = {
   test: RegExp
-  answer: (ctx: { power: number; signedIn: boolean }) => string
+  answer: (ctx: { power: number; signedIn: boolean; brandName: string }) => string
 }
 type ReplySource = 'gemini' | 'offline' | null
 
 const KB: QA[] = [
   {
     test: /\b(what can you do|what do you do|who are you|what are you|help)\b/,
-    answer: () =>
-      IS_MOBILE_STORE_BUILD
-        ? 'I answer questions about TKO — your power level, tournaments, stat checks, clips, going live, clans, and Physical Forge. Or pick a step-by-step guide above and I’ll walk you through it.'
-        : 'I answer questions about TKO — your power level, tournaments, stat checks, clips, going live, and the membership tiers. Or pick a step-by-step guide above and I\'ll walk you through it.',
+    answer: ({ brandName }) =>
+      `I answer questions about ${brandName} — your power level, tournaments, stat checks, clips, going live, and the membership tiers. Or pick a step-by-step guide above and I'll walk you through it.`,
   },
   {
     test: /\b(power ?level|my rank|how strong|my score)\b/,
@@ -60,10 +60,12 @@ const KB: QA[] = [
   },
   {
     test: /\b(tier|tiers|pricing|price|cost|membership|subscription|plan|perk|perks|pay)\b/,
+    // A THROTTLED CALLER SEES THIS INSTEAD OF THE MODEL, so a stale price here
+    // is quoted to precisely the users nobody can see. The $1.99 Ad-Free rung
+    // was retired; it is still honoured for everyone who holds it, so the
+    // answer says both rather than pretending it never existed.
     answer: () =>
-      IS_MOBILE_STORE_BUILD
-        ? 'This mobile build does not offer digital memberships or other digital purchases. Features already available on your signed-in account remain available.'
-        : 'Tiers: Free ($0) = watch, clip, and chat. Ad-Free ($1.99/mo) removes ads. Pro ($4.99/mo) adds profile livestreaming and full clip tools. Elite ($9.99/mo) adds clan streams, tournament hosting, and the control room. Legend ($29.99/mo) adds front-page placement, advanced AI, and creator support subscriptions.',
+      'Tiers: Free ($0) = watch, clip, and chat. Pro ($4.99/mo) removes ads and adds profile livestreaming and full clip tools. Elite ($9.99/mo) adds clan streams, tournament hosting, and the control room. Legend ($29.99/mo) adds front-page placement, advanced AI, and creator support subscriptions. The old $1.99 Ad-Free tier is no longer sold — if you already have it, it keeps working exactly as before.',
   },
   {
     test: /\b(tournaments?|brackets?|compete)\b/,
@@ -85,9 +87,7 @@ const KB: QA[] = [
   {
     test: /\b(go live|live ?stream|streaming|broadcast)\b/,
     answer: () =>
-      IS_MOBILE_STORE_BUILD
-        ? 'If live access is already enabled for your account, choose Live → Go Live to start from your profile, clan page, or an eligible event.'
-        : 'Going live is a paid perk. You choose where it lands — your profile, your clan page, or the front page — with higher placements on higher tiers. Find it under Live → Go Live, or open the "Go live" guide above.',
+      'Going live is a paid perk. You choose where it lands — your profile, your clan page, or the front page — with higher placements on higher tiers. Find it under Live → Go Live, or open the "Go live" guide above.',
   },
   {
     test: /\b(clan|chat|board)\b/,
@@ -112,9 +112,7 @@ const KB: QA[] = [
   {
     test: /\b(forge|make an artifact|upload.*art|my art|create an artifact)\b/,
     answer: () =>
-      IS_MOBILE_STORE_BUILD
-        ? 'Forge lets you turn your own art into a collectible or use Physical Forge to create a made-to-order shirt. Digital marketplace selling and digital prices are unavailable in this mobile build.'
-        : 'Forge is where you turn your OWN art into an artifact: open Forge (⚒️ in the menu), upload your image, we render it into a framed, shining artifact, then you name it, pick a rarity, attach a power, and set a price. Selling needs a connected Stripe account so you get paid.',
+      'Forge is where you turn your OWN art into an artifact: open Forge (⚒️ in the menu), upload your image, we render it into a framed, shining artifact, then you name it, pick a rarity, attach a power, and set a price. Selling needs a connected Stripe account so you get paid.',
   },
   {
     test: /\b(gift|starter pass|gift a sub|share.*code)\b/,
@@ -133,22 +131,35 @@ const KB: QA[] = [
   },
 ]
 
-export function answerFor(text: string, power: number, signedIn: boolean): string {
+export function answerFor(text: string, power: number, signedIn: boolean, brandName = 'TKO'): string {
   const t = text.toLowerCase().trim()
   const hit = KB.find((q) => q.test.test(t))
-  if (hit) return hit.answer({ power, signedIn })
-  return IS_MOBILE_STORE_BUILD
-    ? 'I can tell you about your power level, tournaments, stat checks, making clips, artifacts, Physical Forge, going live, and clans — or you can pick a step-by-step guide above. What would you like to do?'
-    : 'I can tell you about your power level, tournaments, stat checks, making clips, artifacts and forging, going live, clans, and the membership tiers — or pick a step-by-step guide above. What would you like to do?'
+  if (hit) return hit.answer({ power, signedIn, brandName })
+  // SECOND PASS, not a replacement. The table above stays authoritative for
+  // everything it already answers; src/lib/answerBank.ts covers what it does
+  // not — the walkthroughs generated from guides.ts, the tier feature lists
+  // generated from tiers.ts, and the device-clock fix for clips that will not
+  // group. It is shared with the chat surfaces, which had no local answers at
+  // all. It returns null unless it is confident, so this can only ever turn the
+  // generic catch-all below into a real answer, never replace a better one.
+  const banked = bankAnswer(t, { power, signedIn })
+  if (banked) return banked
+  return 'I can tell you about your power level, tournaments, stat checks, making clips, artifacts and forging, going live, clans, and the membership tiers — or pick a step-by-step guide above. What would you like to do?'
 }
 
 // ─────────────────────────────────────────────────────────────────────────
 //  Component
 // ─────────────────────────────────────────────────────────────────────────
 
+/**
+ * The global closed state is the one chat button. Walkthroughs can still open
+ * this existing guide panel from the pinned Ask TKO conversation.
+ */
 export function CommandBar() {
   const { user, profile } = useAuth()
-  const { mode, guideId, open, minimize, close, setGuide } = useAskTko()
+  const { display } = useLeagueTheme()
+  const brandName = display.productName
+  const { mode, guideId, minimize, close, setGuide } = useAskTko()
   const location = useLocation()
   const navigate = useNavigate()
 
@@ -168,10 +179,19 @@ export function CommandBar() {
   const [thinking, setThinking] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
   const panelRef = useRef<HTMLDivElement>(null)
+  const chatHistoryRef = useRef<Array<{ role: 'user' | 'assistant'; text: string }>>([])
 
   const ask = useCallback(async (text: string) => {
     const q = text.trim()
     if (!q) return
+    const remember = (answer: string) => {
+      const next: Array<{ role: 'user' | 'assistant'; text: string }> = [
+        ...chatHistoryRef.current,
+        { role: 'user', text: q },
+        { role: 'assistant', text: answer },
+      ]
+      chatHistoryRef.current = next.slice(-8)
+    }
     setTyped('')
     setReply('')
     setReplySource(null)
@@ -182,6 +202,7 @@ export function CommandBar() {
       const { data } = await supabase.functions.invoke('ask', {
         body: {
           question: q,
+          history: chatHistoryRef.current,
           clientContext: {
             signedIn,
             path: location.pathname,
@@ -198,19 +219,25 @@ export function CommandBar() {
         ? response.answer
         : null
       if (ans && ans.trim()) {
-        setReply(ans)
+        const answer = ans.trim()
+        setReply(answer)
         setReplySource('gemini')
+        remember(answer)
       } else {
-        setReply(answerFor(q, power, signedIn))
+        const answer = answerFor(q, power, signedIn, brandName)
+        setReply(answer)
         setReplySource('offline')
+        remember(answer)
       }
     } catch {
-      setReply(answerFor(q, power, signedIn))
+      const answer = answerFor(q, power, signedIn, brandName)
+      setReply(answer)
       setReplySource('offline')
+      remember(answer)
     } finally {
       setThinking(false)
     }
-  }, [location.pathname, power, signedIn])
+  }, [brandName, location.pathname, power, signedIn])
 
   // Lock body scroll + move focus into the panel while it's expanded.
   useEffect(() => {
@@ -240,72 +267,20 @@ export function CommandBar() {
 
   // ── FAB pill (closed) ──────────────────────────────────────────────────────
   if (mode === 'closed') {
-    return (
-      <button
-        aria-label="Ask TKO — get guided help"
-        title="Ask TKO"
-        onClick={() => open(null)}
-        className="fixed bottom-[calc(4.75rem+env(safe-area-inset-bottom))] right-4 sm:bottom-5 z-50 flex items-center gap-2 rounded-full bg-gradient-kunai text-white shadow-glow px-4 py-2.5 transition-transform hover:scale-105 active:scale-95"
-      >
-        <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="1.8" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" d="M8 10h8M8 14h5M21 12a8 8 0 01-11.6 7.1L4 20l1-4.3A8 8 0 1121 12z" />
-        </svg>
-        <span className="text-sm font-semibold">Ask TKO</span>
-      </button>
-    )
+    return <ChatFab />
   }
 
   // ── Docked PiP-style card (min) ─────────────────────────────────────────────
   if (mode === 'min') {
-    const total = activeGuide?.steps.length ?? 0
-    const label = activeGuide ? activeGuide.title : 'Ask TKO'
-    const sub = activeGuide ? `Step ${clampStepIndex(step, total) + 1} of ${total}` : 'Tap to get help'
-    return (
-      <div
-        className="fixed z-[69] right-3 bottom-[calc(4.75rem+env(safe-area-inset-bottom))] sm:bottom-4 w-[232px] rounded-xl border border-kunai/40 bg-dark-card shadow-2xl overflow-hidden animate-slide-up"
-        role="dialog"
-        aria-label={`Ask TKO minimized: ${label}`}
-      >
-        <div className="flex items-center gap-1 px-2 py-1.5 bg-dark-elevated border-b border-dark-border">
-          <NinjaIcon name={(activeGuide?.icon as NinjaIconName) ?? 'sparkle'} size={15} className="shrink-0 text-kunai" />
-          <span className="min-w-0 flex-1 truncate text-xs font-semibold text-white">{label}</span>
-          <button
-            type="button"
-            onClick={() => open()}
-            aria-label="Maximize Ask TKO"
-            title="Maximize"
-            className="shrink-0 h-6 w-6 flex items-center justify-center rounded text-gray-300 hover:text-kunai hover:bg-dark-border/50"
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" aria-hidden>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M4 14v6h6M20 10V4h-6M14 4h6v6M10 20H4v-6" />
-            </svg>
-          </button>
-          <button
-            type="button"
-            onClick={close}
-            aria-label="Close Ask TKO"
-            title="Close"
-            className="shrink-0 h-6 w-6 flex items-center justify-center rounded text-gray-300 hover:text-white hover:bg-dark-border/50"
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" aria-hidden>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M6 6l12 12M18 6L6 18" />
-            </svg>
-          </button>
-        </div>
-        <button type="button" onClick={() => open()} className="block w-full text-left px-3 py-2.5 hover:bg-dark-elevated/50">
-          <p className="text-xs text-gray-400">{sub}</p>
-          <p className="text-sm font-medium text-white mt-0.5">Tap to continue →</p>
-        </button>
-      </div>
-    )
+    return <ChatFab />
   }
 
   // ── Expanded panel (open) ───────────────────────────────────────────────────
   return (
-    <div className="fixed inset-0 z-[75]" role="dialog" aria-modal="true" aria-label="Ask TKO guided help">
+    <div className="fixed inset-0 z-[75]" role="dialog" aria-modal="true" aria-label={`${display.assistantName} guided help`}>
       {/* Backdrop — tap to minimize (keeps the guide alive in the dock). */}
       <button
-        aria-label="Minimize Ask TKO"
+        aria-label={`Minimize ${display.assistantName} help`}
         onClick={minimize}
         className="absolute inset-0 bg-black/60 backdrop-blur-sm animate-fade-in"
       />
@@ -330,7 +305,7 @@ export function CommandBar() {
             </button>
           ) : (
             <span className="shrink-0 inline-flex items-center gap-1.5 text-sm font-semibold text-white">
-              <NinjaIcon name="sparkle" size={16} className="text-kunai" /> Ask TKO
+              <NinjaIcon name="sparkle" size={16} className="text-kunai" /> {display.assistantName} help
             </span>
           )}
           <div className="min-w-0 flex-1 text-center">
@@ -382,6 +357,7 @@ export function CommandBar() {
               thinking={thinking}
               onAsk={ask}
               inputRef={inputRef}
+              brandName={brandName}
             />
           )}
         </div>
@@ -499,6 +475,7 @@ function GuidePickerAndChat({
   thinking,
   onAsk,
   inputRef,
+  brandName,
 }: {
   suggested: Guide | undefined
   onPick: (id: string) => void
@@ -509,6 +486,7 @@ function GuidePickerAndChat({
   thinking: boolean
   onAsk: (text: string) => void
   inputRef: React.RefObject<HTMLInputElement>
+  brandName: string
 }) {
   const others = suggested ? GUIDES.filter((g) => g.id !== suggested.id) : GUIDES
 
@@ -541,7 +519,7 @@ function GuidePickerAndChat({
       {/* Free-text Q&A */}
       <div className="pt-1">
         <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-          <p className="text-[11px] uppercase tracking-widest text-gray-500">Ask the TKO AI</p>
+          <p className="text-[11px] uppercase tracking-widest text-gray-500">Ask the assistant</p>
           <span
             className={`inline-flex items-center gap-1.5 text-[10px] font-medium ${
               replySource === 'offline' ? 'text-amber-300' : 'text-cyan-300'
@@ -555,7 +533,7 @@ function GuidePickerAndChat({
             />
             {replySource === 'offline'
               ? 'Offline guide response'
-              : 'Gemini 2.5 Flash + live TKO data'}
+              : `Gemini 2.5 Flash + live ${brandName} data`}
           </span>
         </div>
         {thinking && (
@@ -565,7 +543,7 @@ function GuidePickerAndChat({
               <span className="animate-bounce [animation-delay:0.15s]">●</span>
               <span className="animate-bounce [animation-delay:0.3s]">●</span>
             </span>
-            <span className="ml-2">Ask TKO is thinking…</span>
+            <span className="ml-2">The assistant is thinking…</span>
           </div>
         )}
         {!thinking && reply && (

@@ -7,15 +7,33 @@ interface ImportMetaEnv {
   readonly VITE_REAL_BACKEND?: string
   /** Absolute origin of the Express API for non-same-origin builds (the APK). */
   readonly VITE_API_BASE?: string
+  /** Pins a white-label native binary to one league, regardless of WebView URL. */
+  readonly VITE_NATIVE_LEAGUE_SLUG?: string
+  /** Registered native URL scheme used for the one-time account handoff. */
+  readonly VITE_NATIVE_DEEP_LINK_SCHEME?: string
+  /** Removes web-only commerce and update paths from App Store / Play builds. */
+  readonly VITE_MOBILE_STORE_BUILD?: string
   readonly VITE_CREATION_AD_SECONDS?: string
   readonly VITE_DEV_PREMIUM?: string
   readonly VITE_ADSENSE_CLIENT?: string
   readonly VITE_ADSENSE_CREATE_GATE?: string
   readonly VITE_ADSENSE_EXPORT_GATE?: string
+  /** Ad-unit id for the single in-chat strip (slot id 'chat-inline'). */
+  readonly VITE_ADSENSE_CHAT_INLINE?: string
+  /** Seconds between in-chat creative swaps. Default 45, clamped to 20..600. */
+  readonly VITE_AD_CHAT_ROTATE_SECONDS?: string
+  /**
+   * GIF picker credentials. Set AT MOST ONE; Tenor wins when both are present.
+   * Absent → the GIF button does not render and chat is untouched.
+   */
+  readonly VITE_TENOR_KEY?: string
+  readonly VITE_GIPHY_KEY?: string
   readonly VITE_FACEBOOK_APP_ID?: string
   readonly VITE_BASE_PATH?: string
   /** Per-build stamp injected by vite.buildId.ts; drives the update prompt. */
   readonly VITE_BUILD_ID?: string
+  /** Epoch milliseconds paired with VITE_BUILD_ID for stale-edge protection. */
+  readonly VITE_BUILD_AT?: string
   readonly VITE_DOWNLOAD_WIN?: string
   readonly VITE_DOWNLOAD_MAC?: string
   readonly VITE_DOWNLOAD_LINUX?: string

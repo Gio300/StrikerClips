@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
 import { CollapsibleSection } from '@/components/CollapsibleSection'
 import { AvailabilityHint, Avatar } from '@/components/ui'
+import { PlayerMetaLine } from '@/components/PlayerMetaLine'
 import { useIdentityAvailability } from '@/hooks/useIdentityAvailability'
 import { CLAN_TAG_MAX, formatTag } from '@/lib/identity'
 import {
@@ -14,7 +15,8 @@ import {
   MAX_CLAN_MEMBERS,
   type ClanRole,
 } from '@/lib/clans'
-import type { Server } from '@/types/database'
+import type { ArtifactRarity, Server } from '@/types/database'
+import { ClanOrganizerPanel } from '@/components/ClanOrganizerPanel'
 
 /**
  * ClanSettingsPanel — leader/officer clan management, gated by the permission
@@ -42,6 +44,9 @@ type MemberRow = {
   role: ClanRole
   username: string
   avatarUrl: string | null
+  powerLevel: number | null
+  title: string | null
+  titleRarity: ArtifactRarity | null
 }
 
 const ROLE_LABEL: Record<ClanRole, string> = {
@@ -55,14 +60,17 @@ export function ClanSettingsPanel({
   server,
   viewerId,
   onChanged,
+  standalone = false,
 }: {
   server: Server
   viewerId: string
   onChanged?: () => void
+  standalone?: boolean
 }) {
   const serverId = server.id
   const navigate = useNavigate()
   const [viewerRole, setViewerRole] = useState<ClanRole | null>(null)
+  const [roleLoaded, setRoleLoaded] = useState(false)
   const [members, setMembers] = useState<MemberRow[]>([])
   const [flash, setFlash] = useState<string | null>(null)
 
@@ -102,33 +110,55 @@ export function ClanSettingsPanel({
       role: (r.role as ClanRole) ?? 'member',
       username: r.user_id.slice(0, 8),
       avatarUrl: null,
+      powerLevel: null,
+      title: null,
+      titleRarity: null,
     }))
     // Best-effort username + picture hydration (works on mock + real; join
     // strings aren't reliable on the mock client, so we resolve profiles
     // separately).
     const ids = named.map((m) => m.user_id)
     if (ids.length) {
-      const { data: profs } = await supabase
+      const enrichedProfiles = await supabase
         .from('profiles')
-        .select('id, username, avatar_url')
+        .select('id, username, avatar_url, power_level, equipped_tag_text, equipped_tag_rarity')
         .in('id', ids)
+      const basicProfiles = enrichedProfiles.error
+        ? await supabase.from('profiles').select('id, username, avatar_url, power_level').in('id', ids)
+        : null
+      const profs = enrichedProfiles.error ? basicProfiles?.data ?? [] : enrichedProfiles.data ?? []
       const byId = new Map(
-        (profs ?? []).map((p) => [
+        profs.map((p) => [
           p.id as string,
-          { username: p.username as string, avatarUrl: (p.avatar_url as string | null) ?? null },
+          {
+            username: p.username as string,
+            avatarUrl: (p.avatar_url as string | null) ?? null,
+            powerLevel: typeof p.power_level === 'number' ? p.power_level : null,
+            title: 'equipped_tag_text' in p ? (p.equipped_tag_text as string | null) ?? null : null,
+            titleRarity: 'equipped_tag_rarity' in p
+              ? (p.equipped_tag_rarity as ArtifactRarity | null) ?? null
+              : null,
+          },
         ]),
       )
       named = named.map((m) => ({
         ...m,
         username: byId.get(m.user_id)?.username ?? m.username,
         avatarUrl: byId.get(m.user_id)?.avatarUrl ?? null,
+        powerLevel: byId.get(m.user_id)?.powerLevel ?? null,
+        title: byId.get(m.user_id)?.title ?? null,
+        titleRarity: byId.get(m.user_id)?.titleRarity ?? null,
       }))
     }
     // Sort strongest rank first for a readable roster.
     named.sort((a, b) => rankLevel(b.role) - rankLevel(a.role))
     setMembers(named)
-    setViewerRole(named.find((m) => m.user_id === viewerId)?.role ?? null)
-  }, [serverId, viewerId])
+    setViewerRole(
+      named.find((m) => m.user_id === viewerId)?.role
+        ?? (viewerId === server.owner_id ? 'leader' : null),
+    )
+    setRoleLoaded(true)
+  }, [server.owner_id, serverId, viewerId])
 
   useEffect(() => {
     void loadMembers()
@@ -138,8 +168,13 @@ export function ClanSettingsPanel({
   const canEdit = viewerRole ? can(viewerRole, 'edit_settings') : false
   const canModerate =
     viewerRole ? can(viewerRole, 'kick') || can(viewerRole, 'promote') : false
+  if (!roleLoaded) {
+    return standalone ? <p className="text-sm text-gray-500">Loading clan permissions...</p> : null
+  }
   if (!viewerRole || (!canEdit && !canModerate && !can(viewerRole, 'toggle_recruiting'))) {
-    return null
+    return standalone
+      ? <p className="border border-dark-border p-4 text-sm text-gray-400">Only a clan leader or officer can open these management controls.</p>
+      : null
   }
 
   async function saveSettings() {
@@ -236,6 +271,8 @@ export function ClanSettingsPanel({
           {flash}
         </div>
       )}
+
+      <ClanOrganizerPanel serverId={serverId} viewerId={viewerId} viewerRole={viewerRole} />
 
       {/* Recruiting quick-toggle (Leader/Officer/Recruiter). */}
       {can(viewerRole, 'toggle_recruiting') && (
@@ -417,15 +454,23 @@ export function ClanSettingsPanel({
               >
                 <Avatar src={m.avatarUrl} name={m.username} seed={m.user_id} size={28} />
                 <div className="min-w-0 flex-1">
-                  <p className="text-sm text-white truncate">
+                  <p className="truncate text-sm text-white">
                     {/* Members wear the clan tag, the way they do in-game. */}
                     {server.clan_tag && (
                       <span className="text-accent mr-1">{formatTag(server.clan_tag)}</span>
                     )}
-                    {m.username}
+                    <Link to={`/profile/${m.user_id}`} className="hover:text-accent hover:underline">
+                      {m.username}
+                    </Link>
                     {isSelf && ' (you)'}
                   </p>
-                  <p className="text-[11px] text-gray-500">{ROLE_LABEL[m.role]}</p>
+                  <PlayerMetaLine
+                    prefix={ROLE_LABEL[m.role]}
+                    title={m.title}
+                    titleRarity={m.titleRarity}
+                    powerLevel={m.powerLevel}
+                    className="mt-0.5 max-w-full"
+                  />
                 </div>
                 {roleOptions.length > 0 && (
                   <select

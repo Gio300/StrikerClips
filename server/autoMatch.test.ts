@@ -216,6 +216,9 @@ describe('auto-match — server entitlement gate', () => {
   it('(d) ENTITLED user (paid content tier + YouTube) → runs and enqueues', async () => {
     const { pool, res } = await twoAngleMatch(async (pool, trigger) => {
       await entitleForAutoMerge(pool, trigger.id)
+      // This test isolates the entitlement gate, so both angles explicitly opt
+      // into general reuse instead of relying on the account privacy default.
+      await pool.query("update profiles set reel_usage_privacy='anyone'")
     })
     expect(res.body.ok).toBe(true)
     expect(res.body.gated).toBeUndefined()

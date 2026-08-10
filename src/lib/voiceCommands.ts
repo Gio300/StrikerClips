@@ -23,7 +23,7 @@ const NAV: { rx: RegExp; path: string; say: string }[] = [
   { rx: /\b(boards?|servers?|chat)\b/, path: '/boards', say: 'Boards' },
   { rx: /\b(browser|playstation|xbox|post (a )?clip)\b/, path: '/browser', say: 'Browser' },
   { rx: /\b(live|stream)\b/, path: '/live', say: 'Live' },
-  { rx: /\b(rankings?|leaderboards?|power)\b/, path: '/rankings', say: 'Rankings' },
+  { rx: /\b(rankings?|leaderboards?|power)\b/, path: '/profile', say: 'My profile' },
   { rx: /\b(profile|my account)\b/, path: '/profile', say: 'Profile' },
   { rx: /\b(redeem|pass|code)\b/, path: '/redeem', say: 'Redeem' },
   { rx: /\bdashboard\b/, path: '/dashboard', say: 'Dashboard' },

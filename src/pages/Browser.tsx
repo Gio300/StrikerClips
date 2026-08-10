@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { Capacitor } from '@capacitor/core'
 import { Browser as CapBrowser } from '@capacitor/browser'
 import { useClipTray } from '@/hooks/useClipTray'
+import { isStashable } from '@/lib/clipTray'
 import { extractYouTubeId } from '@/lib/youtubeApi'
 
 /**
@@ -100,7 +101,10 @@ export function Browser() {
 
   const sendClipToTko = () => {
     const url = clip.trim()
-    if (!url) return
+    if (!isStashable(url)) {
+      flash('Paste a full https:// clip link first')
+      return
+    }
     stash({ url, source: 'browser' })
     flash('Sent to TKO ✓')
   }
@@ -139,7 +143,7 @@ export function Browser() {
         </button>
       </div>
       {stashed && (
-        <div className="px-3 py-1.5 text-xs text-accent bg-accent/10 border-b border-accent/20">{stashed}</div>
+        <div role="status" className="px-3 py-1.5 text-xs text-accent bg-accent/10 border-b border-accent/20">{stashed}</div>
       )}
 
       {!current ? (
@@ -167,7 +171,7 @@ export function Browser() {
               <input
                 value={clip}
                 onChange={(e) => setClip(e.target.value)}
-                placeholder="https://youtu.be/…  or  tko.cam/reels/…"
+                placeholder="https://youtu.be/… or https://tko.cam/reels/…"
                 className="flex-1 min-w-[200px] px-3 py-2 rounded-lg bg-dark border border-dark-border text-white text-sm focus:outline-none focus:border-kunai"
               />
               <button onClick={sendClipToTko} className="px-4 py-2 rounded-lg bg-accent text-dark text-sm font-semibold">

@@ -34,7 +34,9 @@ import {
   resolveParticipantsFromVideoIds,
 } from '@/lib/reelParticipants'
 import { prettyClip } from '@/lib/clipLabel'
-import { encodeLayoutMarker } from '@/lib/reelLayout'
+import { savedYouTubeClips } from '@/lib/savedYouTubeClips'
+import { encodeLayoutMarker, type ReelKitPicks } from '@/lib/reelLayout'
+import { fetchMemberLeague, leagueKitFor, type LeagueConfig } from '@/lib/leagueConfig'
 import { moveListItem } from '@/lib/reelEditor'
 import { recordActivity } from '@/lib/activity'
 import { CreationSponsorGate } from '@/components/CreationSponsorGate'
@@ -113,6 +115,28 @@ export function CreateHighlight() {
   const [inviteFriends, setInviteFriends] = useState(false)
   const [inviteSlots, setInviteSlots] = useState<number>(4)
 
+  // ── League template kit ────────────────────────────────────────────────────
+  // The member's league asset manifest (intro/outro/banner/music — see
+  // src/lib/leagueAssets.ts) drives the pickers below; unaffiliated members get
+  // the TKO house kit. '' everywhere = "factory pick" (the renderer's own
+  // rotation), so a member who ignores this section gets exactly today's output.
+  const [memberLeague, setMemberLeague] = useState<LeagueConfig | null>(null)
+  const [kitIntro, setKitIntro] = useState('')
+  const [kitOutro, setKitOutro] = useState('')
+  const [kitBanner, setKitBanner] = useState('')
+  const [kitMusic, setKitMusic] = useState('') // track FILE name from the kit
+
+  useEffect(() => {
+    let cancelled = false
+    if (!user?.id) { setMemberLeague(null); return }
+    fetchMemberLeague(user.id)
+      .then((league) => { if (!cancelled) setMemberLeague(league) })
+      .catch(() => { /* fail-soft — TKO house kit */ })
+    return () => { cancelled = true }
+  }, [user?.id])
+
+  const leagueKit = useMemo(() => leagueKitFor(memberLeague), [memberLeague])
+
   const [aiAnalyzing, setAiAnalyzing] = useState<number | null>(null)
   const [suggestionsByIdx, setSuggestionsByIdx] = useState<Record<number, HighlightMoment[]>>({})
   const [category, setCategory] = useState<HighlightCategoryId>('all')
@@ -132,9 +156,11 @@ export function CreateHighlight() {
   // with any OCR-read result signatures overlaid.
   const clipMetaPool = useMemo<ClipMeta[]>(() => {
     const byId = new Map<string, ClipMeta>()
-    for (const m of demoMatchAngles()) byId.set(m.clipId, m)
+    if (uid === 'anon') for (const m of demoMatchAngles()) byId.set(m.clipId, m)
     for (const v of loadLibrary(uid)) if (!byId.has(v.id)) byId.set(v.id, libraryVideoToMeta(v, username))
-    for (const c of demoSquad().clips) if (!byId.has(c.id)) byId.set(c.id, squadClipToMeta(c))
+    if (uid === 'anon') {
+      for (const c of demoSquad().clips) if (!byId.has(c.id)) byId.set(c.id, squadClipToMeta(c))
+    }
     return [...byId.values()].map((m) =>
       resultByVideoId[m.clipId]
         ? { ...m, resultSignature: { ...m.resultSignature, ...resultByVideoId[m.clipId] } }
@@ -145,7 +171,7 @@ export function CreateHighlight() {
   const titleByVideoId = useMemo<Record<string, string>>(() => {
     const map: Record<string, string> = {}
     for (const v of loadLibrary(uid)) map[v.id] = v.title
-    for (const c of demoSquad().clips) if (!map[c.id]) map[c.id] = c.title
+    if (uid === 'anon') for (const c of demoSquad().clips) if (!map[c.id]) map[c.id] = c.title
     return map
   }, [uid])
 
@@ -220,7 +246,7 @@ export function CreateHighlight() {
       .select('*')
       .eq('user_id', user.id)
       .order('created_at', { ascending: false })
-      .then(({ data }) => setSavedLinks(data ?? []))
+      .then(({ data }) => setSavedLinks(savedYouTubeClips(data ?? [])))
   }, [user?.id])
 
   // ── Don't-lose-progress: a small per-user draft in localStorage ────────────
@@ -514,6 +540,20 @@ export function CreateHighlight() {
 
     setSaving(true)
 
+    // The member's league template picks. Persisted in the layout marker (see
+    // ReelKitPicks in src/lib/reelLayout.ts) so the Loras render factory can
+    // read them off the reel row later — the browser doesn't render intros/
+    // outros/banners itself. Only non-default picks are recorded.
+    const kitPicks: ReelKitPicks = {}
+    if (kitIntro) kitPicks.intro = kitIntro
+    if (kitOutro) kitPicks.outro = kitOutro
+    if (kitBanner) kitPicks.banner = kitBanner
+    if (kitMusic) kitPicks.music = kitMusic
+    if (Object.keys(kitPicks).length > 0 && memberLeague?.slug) {
+      kitPicks.league = memberLeague.slug
+    }
+    const hasKitPicks = Object.keys(kitPicks).length > 0
+
     try {
       let combinedUrl: string | null = null
 
@@ -533,11 +573,20 @@ export function CreateHighlight() {
         if (uploadErr) throw uploadErr
         const { data: urlData } = supabase.storage.from('videos').getPublicUrl(path)
         combinedUrl = urlData.publicUrl
-      } else if (allYoutube && (layout !== 'concat' || inviteFriends)) {
-        // YouTube multi-angle OR pending invites: no MP4 to upload — encode
-        // layout (and optional invite slot count) into the URL column so we
-        // don't depend on the (yet-to-apply) `reels.layout` column.
-        combinedUrl = encodeLayoutMarker(layout, inviteFriends ? { slots: inviteSlots } : undefined)
+      } else if (allYoutube && (layout !== 'concat' || inviteFriends || hasKitPicks)) {
+        // YouTube multi-angle OR pending invites OR league-kit picks: no MP4 to
+        // upload — encode layout (and optional invite slot count + template
+        // picks) into the URL column so we don't depend on the (yet-to-apply)
+        // `reels.layout` column. A bare-concat marker decodes back to the same
+        // behavior as a null URL (resolveLayout → 'concat', not playable), so
+        // recording kit picks this way changes nothing for existing readers.
+        // NOTE for uploads: the MP4 URL owns that column, so kit picks can't
+        // persist there — those reels are browser-rendered and never hit the
+        // Loras factory anyway.
+        combinedUrl = encodeLayoutMarker(layout, {
+          ...(inviteFriends ? { slots: inviteSlots } : {}),
+          ...(hasKitPicks ? { kit: kitPicks } : {}),
+        })
       }
 
       const clipIds: string[] = []
@@ -947,6 +996,59 @@ export function CreateHighlight() {
           </div>
         )}
 
+        {/* ── League template kit: intro / outro / banner / music picks ─────── */}
+        {clips.length > 0 && (
+          <section className="rounded-lg border border-dark-border bg-dark-card p-4">
+            <h2 className="font-semibold text-white">
+              {memberLeague?.name || 'TKO'} template kit
+            </h2>
+            <p className="mt-1 text-xs text-gray-500">
+              Brand the produced video with your league&apos;s intro, outro, banner, and
+              music. &ldquo;Factory pick&rdquo; keeps the rotating default.
+            </p>
+            <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+              {(
+                [
+                  { label: 'Intro', value: kitIntro, set: setKitIntro, options: leagueKit.intros },
+                  { label: 'Outro', value: kitOutro, set: setKitOutro, options: leagueKit.outros },
+                  { label: 'Banner', value: kitBanner, set: setKitBanner, options: leagueKit.banners },
+                ] as const
+              ).map((picker) => (
+                <label key={picker.label} className="text-xs text-gray-500">
+                  {picker.label}
+                  <select
+                    value={picker.value}
+                    onChange={(event) => picker.set(event.target.value)}
+                    className="mt-1 h-9 w-full rounded-lg border border-dark-border bg-dark px-2 text-sm text-white outline-none focus:border-kunai"
+                  >
+                    <option value="">Factory pick (rotates)</option>
+                    {picker.options.map((opt) => (
+                      <option key={opt.id} value={opt.id}>{opt.label}</option>
+                    ))}
+                  </select>
+                </label>
+              ))}
+              <label className="text-xs text-gray-500">
+                Music
+                <select
+                  value={kitMusic}
+                  onChange={(event) => setKitMusic(event.target.value)}
+                  className="mt-1 h-9 w-full rounded-lg border border-dark-border bg-dark px-2 text-sm text-white outline-none focus:border-kunai"
+                >
+                  <option value="">Factory pick (rotates)</option>
+                  {leagueKit.music.map((opt) => (
+                    <option key={opt.file} value={opt.file}>{opt.label}</option>
+                  ))}
+                </select>
+              </label>
+            </div>
+            <p className="mt-2 text-xs text-gray-600">
+              Applied when the video factory renders your reel; the in-browser preview is
+              unchanged.
+            </p>
+          </section>
+        )}
+
         {/* Same-match bunch: the other angles of a clip already in the reel. */}
         {bunchSuggestions.length > 0 && (
           <div className="rounded-xl border border-accent/40 bg-accent/5 p-4">
@@ -1101,7 +1203,7 @@ export function CreateHighlight() {
 
         {savedLinks.length > 0 && (
           <div>
-            <label className="block text-sm text-gray-400 mb-2">From my saved YouTube links</label>
+            <label className="block text-sm text-gray-400 mb-2">From my saved YouTube videos</label>
             <div className="space-y-2">
               {savedLinks.map((link) => (
                 <div key={link.id} className="flex items-center gap-2 flex-wrap">

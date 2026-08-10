@@ -35,6 +35,7 @@
 
 import { backend, callFn } from './backend'
 import { applyWalletSnapshot } from './wallet'
+import { resolveArtifactArt } from './officialArtifactArt'
 
 export type AssetKind = 'jersey' | 'banner' | 'emote' | 'badge_skin'
 export type SellerType = 'official' | 'creator' | 'clan'
@@ -84,7 +85,7 @@ const SEED_ASSETS: DigitalAsset[] = [
     id: 'seed-akatsuki-jersey',
     name: 'Akatsuki Home Jersey',
     teamName: 'Akatsuki',
-    imageUrl: 'https://placehold.co/400x400/1a1a2e/e94560?text=Akatsuki',
+    imageUrl: resolveArtifactArt('seed-akatsuki-jersey'),
     priceTokens: 250,
     kind: 'jersey',
     sellerType: 'official',
@@ -96,7 +97,7 @@ const SEED_ASSETS: DigitalAsset[] = [
     id: 'seed-leaf-village-jersey',
     name: 'Hidden Leaf Away Jersey',
     teamName: 'Hidden Leaf',
-    imageUrl: 'https://placehold.co/400x400/0f3460/16db93?text=Hidden+Leaf',
+    imageUrl: resolveArtifactArt('seed-leaf-village-jersey'),
     priceTokens: 200,
     kind: 'jersey',
     sellerType: 'official',
@@ -108,7 +109,7 @@ const SEED_ASSETS: DigitalAsset[] = [
     id: 'seed-sand-jersey',
     name: 'Sand Siblings Pro Kit',
     teamName: 'Sand Siblings',
-    imageUrl: 'https://placehold.co/400x400/2d1b0e/f9c74f?text=Sand',
+    imageUrl: resolveArtifactArt('seed-sand-jersey'),
     priceTokens: 300,
     kind: 'jersey',
     sellerType: 'official',
@@ -145,7 +146,7 @@ export function rowToAsset(r: AssetRow): DigitalAsset {
     id: String(r.id),
     name: String(r.name ?? ''),
     teamName: String(r.team_name ?? ''),
-    imageUrl: String(r.image_url ?? ''),
+    imageUrl: resolveArtifactArt(String(r.id), String(r.image_url ?? '')),
     priceTokens: Math.max(0, Number(r.price_tokens ?? 0)),
     priceCents: Math.max(0, Math.round(Number(r.price_cents ?? 0))),
     cashEnabled: r.cash_enabled === true,

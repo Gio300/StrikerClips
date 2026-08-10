@@ -9,6 +9,13 @@ import { newDb, DataType } from 'pg-mem'
 import { randomUUID } from 'node:crypto'
 import { createApp } from './app'
 import { PHYSICAL_MERCH_DDL } from './physicalMerchSchema'
+import { MEDIA_EVIDENCE_DDL } from './mediaEvidenceSchema'
+import { CHAT_FOUNDATION_STATEMENTS } from './chatFoundationSchema'
+import { PUSH_SCHEMA_STATEMENTS } from './pushSchema'
+import { AUTH_SECURITY_STATEMENTS } from './authSecuritySchema'
+import { ORGANIZER_DDL } from './organizerSchema'
+import { ONBOARDING_DDL } from './onboardingSchema'
+import { CONTENT_REPORTS_DDL } from './contentReportsSchema'
 
 // Build the in-memory database and return a live pg Pool bound to it. Exposed
 // so the full-stack E2E server (server/e2eServer.ts) can serve the real built
@@ -53,7 +60,29 @@ export function makeDb() {
       avatar_url text, bio text, power_level integer default 0, country text,
       oracle_points integer not null default 0,
       auto_link_mode text not null default 'auto',
-      auto_merge_opt_out boolean not null default false
+      auto_detect_live boolean not null default true,
+      auto_merge_opt_out boolean not null default false,
+      reel_usage_privacy text not null default 'followers_of_followers'
+    );
+    create table king_ratings (
+      user_id uuid primary key, rating integer not null default 1000,
+      matches integer not null default 0, wins integer not null default 0,
+      updated_at timestamptz not null default now()
+    );
+    create table king_matches (
+      id uuid primary key default gen_random_uuid(),
+      player_a uuid not null, player_b uuid not null,
+      proposals_a jsonb default '[]', proposals_b jsonb default '[]',
+      agreed_time timestamptz, winner_id uuid,
+      report_a_winner_id uuid, report_b_winner_id uuid,
+      status text not null default 'proposing',
+      created_at timestamptz not null default now()
+    );
+    create index idx_king_matches_open on king_matches(status);
+    create table follows (
+      id uuid primary key default gen_random_uuid(),
+      follower_id uuid not null, following_id uuid not null,
+      created_at timestamptz default now(), unique(follower_id, following_id)
     );
     create table posts (
       id uuid primary key default gen_random_uuid(), user_id uuid not null,
@@ -84,7 +113,9 @@ export function makeDb() {
     create table dm_messages (
       id uuid primary key default gen_random_uuid(), conversation_id uuid not null,
       user_id uuid not null, content text not null default '',
-      created_at timestamptz default now()
+      created_at timestamptz default now(),
+      -- Structural @mentions + reply-to (server/ensureSchema.ts, chat slice).
+      mentions jsonb not null default '[]', reply_to uuid
     );
     create index idx_dm_messages_conversation on dm_messages(conversation_id, created_at);
     create index idx_dm_participants_user on dm_participants(user_id);
@@ -122,7 +153,15 @@ export function makeDb() {
       id uuid primary key default gen_random_uuid(), name text not null, owner_id uuid,
       kind text not null default 'open', treasury_tokens integer not null default 0,
       join_fee_tokens integer not null default 0, dues_tokens integer not null default 0,
-      total_points integer default 0, created_at timestamptz default now()
+      max_members integer not null default 100,
+      is_recruiting boolean not null default false,
+      total_points integer default 0,
+      -- Production has this (db/schema.sql:142, plus the idempotent
+      -- add-column-if-not-exists at :1502). It was missing here, so a clan's
+      -- TAG was untestable -- which matters now that the render roster reads it
+      -- to stop Coach Dee inventing clan names.
+      clan_tag text,
+      created_at timestamptz default now()
     );
     create table clan_dues_payments (
       id uuid primary key default gen_random_uuid(), server_id uuid not null, user_id uuid not null,
@@ -138,9 +177,72 @@ export function makeDb() {
       id uuid primary key default gen_random_uuid(), server_id uuid not null, user_id uuid not null,
       role text not null default 'member', joined_at timestamptz default now()
     );
+    -- Legacy clan boards remain part of the real player journey. Keep these in
+    -- the full-stack harness so creating a clan can prove that its default
+    -- #general channel exists instead of silently exercising a missing table.
+    create table channels (
+      id uuid primary key default gen_random_uuid(), server_id uuid not null,
+      name text not null, type text default 'text', created_at timestamptz default now(),
+      unique(server_id, name)
+    );
+    create table messages (
+      id uuid primary key default gen_random_uuid(), channel_id uuid not null,
+      user_id uuid not null, content text not null default '', clip_id uuid,
+      created_at timestamptz default now()
+    );
+    create table leagues (
+      id uuid primary key default gen_random_uuid(),
+      slug text unique not null, name text not null, domain text,
+      colors jsonb not null default '{}', logo_url text, tagline text,
+      music jsonb not null default '{}',
+      video_ownership text not null default 'tko',
+      tier text not null default 'starter', owner_id uuid,
+      -- League URL identity, rung 3 (src/lib/leagueUrls.ts, LEAGUE_URL_DDL in
+      -- server/leagueUrl.ts). The domain column above stays the DISPLAY value;
+      -- these are the claimed SERVING domain and its TXT ownership challenge.
+      custom_domain text unique, custom_domain_token text,
+      custom_domain_status text not null default 'none',
+      custom_domain_verified_at timestamptz,
+      -- LEAGUE BILLING: tier says WHICH plan, plan_status says whether it was
+      -- PAID for. Both are webhook-only (PRIVILEGE_COLS in server/app.ts).
+      plan_status text not null default 'none',
+      plan_since timestamptz, plan_expires_at timestamptz,
+      stripe_subscription_id text, stripe_customer_id text,
+      created_at timestamptz default now(), updated_at timestamptz default now()
+    );
+    create table league_plan_purchases (
+      id uuid primary key default gen_random_uuid(),
+      user_id uuid not null, league_id uuid,
+      league_slug text not null, league_name text not null default '',
+      plan text not null, status text not null default 'pending',
+      stripe_checkout_session_id text unique, stripe_subscription_id text,
+      stripe_customer_id text,
+      amount_cents integer not null default 0, currency text not null default 'usd',
+      paid_at timestamptz,
+      created_at timestamptz default now(), updated_at timestamptz default now()
+    );
+    create table league_leads (
+      id uuid primary key default gen_random_uuid(),
+      email text not null, plan text not null,
+      league_name text not null default '', league_slug text not null default '',
+      user_id uuid, note text,
+      source text not null default 'enterprise',
+      status text not null default 'new',
+      created_at timestamptz default now(), updated_at timestamptz default now()
+    );
+    create table league_members (
+      id uuid primary key default gen_random_uuid(),
+      league_id uuid not null, user_id uuid not null,
+      role text not null default 'member', joined_at timestamptz default now(),
+      unique(league_id, user_id)
+    );
     create table tournaments (
       id uuid primary key default gen_random_uuid(), name text not null, created_by uuid,
-      format text not null default 'standard', created_at timestamptz default now()
+      description text, rules text,
+      format text not null default 'standard', status text not null default 'open',
+      league_slug text not null default 'tko',
+      start_at timestamptz, end_at timestamptz,
+      created_at timestamptz default now()
     );
     create table tournament_admins (
       id uuid primary key default gen_random_uuid(), tournament_id uuid not null, user_id uuid not null,
@@ -151,6 +253,15 @@ export function makeDb() {
       team_name text, team_server_id uuid, status text not null default 'pending',
       agreed_to_rules_at timestamptz, invited_by uuid, created_at timestamptz default now()
     );
+    create table stat_check_submissions (
+      id uuid primary key default gen_random_uuid(), user_id uuid not null,
+      video_url text not null, character_name text, description text,
+      status text not null default 'pending',
+      tournament_id uuid, invited_admin_id uuid,
+      reviewed_by uuid, reviewed_at timestamptz, review_notes text,
+      creator_decision text, creator_notes text, creator_decided_at timestamptz,
+      created_at timestamptz default now()
+    );
     create table tournament_registrations (
       id uuid primary key default gen_random_uuid(), tournament_id uuid not null, user_id uuid not null,
       streamed boolean not null default false, no_mod_ack boolean not null default false,
@@ -160,6 +271,8 @@ export function makeDb() {
       id uuid primary key default gen_random_uuid(), tournament_id uuid not null,
       player_a uuid not null, player_b uuid, scheduled_at timestamptz,
       status text not null default 'scheduled', winner uuid, round integer, bracket_slot integer,
+      media jsonb,
+      decided_at timestamptz, media_updated_at timestamptz,
       created_at timestamptz default now()
     );
     create unique index uq_tournament_battle_bracket_slot
@@ -198,6 +311,10 @@ export function makeDb() {
       -- earned/granted items and are NEVER stakeable (Oracle Rule 3). Defaults to
       -- 'forge' so existing forged (Legend monthly) artifacts stay bettable.
       origin text not null default 'forge',
+      -- Unified-forge paid extras (src/lib/forgeTiers.ts): creator-authored
+      -- powers (Pro+) and the bundled shirt reference (Legend). Written only by
+      -- /api/fn/forge-artifact-save; PRIVILEGE_COLS on the generic data API.
+      powers jsonb not null default '[]', shirt_ref text,
       used_at timestamptz, created_at timestamptz default now()
     );
     create table territories (
@@ -370,12 +487,18 @@ export function makeDb() {
     );
     create table chat_messages (
       id uuid primary key default gen_random_uuid(), channel_id uuid not null, user_id uuid,
-      body text not null default '', created_at timestamptz default now()
+      body text not null default '', created_at timestamptz default now(),
+      mentions jsonb not null default '[]', reply_to uuid
     );
     create table reels (
       id uuid primary key default gen_random_uuid(), user_id uuid not null,
       title text not null default '', clip_ids uuid[] default '{}',
-      combined_video_url text, thumbnail text, created_at timestamptz default now()
+      combined_video_url text, thumbnail text,
+      -- Front-page visibility + factory provenance (db/schema.sql, and the boot
+      -- DDL in server/index.ts). promoted defaults TRUE so an ordinary reel is
+      -- unaffected; the video factory writes false for free-member weeklies.
+      promoted boolean not null default true, league_slug text,
+      created_at timestamptz default now()
     );
     create table reel_participants (
       id uuid primary key default gen_random_uuid(), reel_id uuid not null,
@@ -395,13 +518,71 @@ export function makeDb() {
       background_url text,
       team_a text,
       team_b text,
+      score_a integer not null default 0,
+      score_b integer not null default 0,
+      score_revision integer not null default 0,
       layout text not null default 'auto',
+      host_feed_status text not null default 'live',
+      source text not null default 'manual',
+      external_stream_id text,
+      detected_live_at timestamptz,
+      host_action_level integer,
+      host_action_at timestamptz,
+      host_fight_detected boolean not null default false,
+      host_fight_mode text,
+      host_fight_at timestamptz,
+      host_view jsonb,
       updated_at timestamptz default now(), created_at timestamptz default now()
+    );
+    create table auto_live_discoveries (
+      id uuid primary key default gen_random_uuid(), user_id uuid not null,
+      provider text not null default 'youtube', external_stream_id text not null,
+      channel_url text not null, watch_url text not null, title text,
+      status text not null default 'live', detection_method text not null,
+      confidence real not null default 0, live_stream_id uuid,
+      first_seen_at timestamptz not null default now(), last_seen_at timestamptz not null default now(),
+      ended_at timestamptz, details jsonb not null default '{}',
+      unique(user_id, provider, external_stream_id)
+    );
+    create table shadow_match_analyses (
+      id uuid primary key default gen_random_uuid(), source_fingerprint text not null unique,
+      source_kind text not null default 'footage_group', source_ref text,
+      status text not null default 'queued', match_signature text,
+      game text not null default 'shinobi_striker', mode text,
+      verdict jsonb not null default '{}', confidence real not null default 0,
+      evidence_quality real not null default 0, analyzer text not null default 'local',
+      model text, analyzer_version text, evidence jsonb not null default '[]',
+      analysis jsonb not null default '{}', error text,
+      created_at timestamptz not null default now(), updated_at timestamptz not null default now(),
+      completed_at timestamptz
+    );
+    create table shadow_match_participants (
+      id uuid primary key default gen_random_uuid(), analysis_id uuid not null,
+      profile_id uuid, detected_name text not null, team text,
+      outcome text not null default 'unknown', kills integer, deaths integer, assists integer,
+      confidence real not null default 0, evidence jsonb not null default '{}',
+      unique(analysis_id, detected_name)
     );
     create table live_stream_angles (
       id uuid primary key default gen_random_uuid(),
       live_stream_id uuid not null, user_id uuid,
-      label text, youtube_url text, created_at timestamptz default now()
+      label text, youtube_url text,
+      status text not null default 'live',
+      action_level integer,
+      action_at timestamptz,
+      fight_detected boolean not null default false,
+      fight_mode text,
+      fight_at timestamptz,
+      created_at timestamptz default now()
+    );
+    create table live_director_state (
+      live_stream_id uuid primary key,
+      mode text not null default 'auto',
+      angle_ids jsonb not null default '[]',
+      last_action text not null default 'status',
+      last_payload jsonb not null default '{}',
+      revision bigint not null default 0,
+      updated_at timestamptz not null default now()
     );
     create table live_stream_invites (
       id uuid primary key default gen_random_uuid(),
@@ -416,7 +597,8 @@ export function makeDb() {
       stream_id uuid not null,
       user_id uuid,
       content text not null,
-      created_at timestamptz default now()
+      created_at timestamptz default now(),
+      mentions jsonb not null default '[]', reply_to uuid
     );
     create table live_groups (
       id uuid primary key default gen_random_uuid(), name text not null, creator_id uuid,
@@ -496,7 +678,10 @@ export function makeDb() {
     -- isAutoMergeEntitled).
     create table user_youtube_links (
       id uuid primary key default gen_random_uuid(), user_id uuid not null,
-      url text not null, title text, created_at timestamptz default now()
+      url text not null, title text, created_at timestamptz default now(),
+      -- Persisted UC… channel-id cache (server/youtubeChannel.ts) so the
+      -- scanners resolve a @handle once instead of every cycle.
+      channel_id text
     );
     -- ---- artifact tags (a clan tag a user EQUIPS to show off everywhere) ----
     create table artifact_tags (
@@ -521,6 +706,12 @@ export function makeDb() {
       correct boolean, resolved_at timestamptz,
       created_at timestamptz not null default now(), unique (user_id, match_ref)
     );
+    -- ---- CHAT FOUNDATION ----
+    -- NOT declared here. tournament_messages, chat_reactions, the mentions /
+    -- reply_to columns, the created_at NOT NULL constraint and the
+    -- (room, created_at) composites are applied below by the REAL migration
+    -- (server/chatFoundationSchema.ts), so a broken migration fails a test
+    -- instead of surfacing in production. See the loop at the end of makeDb.
     -- ---- TKO-BETA tester chat membership ----
     create table chat_space_members (
       id uuid primary key default gen_random_uuid(),
@@ -566,6 +757,21 @@ export function makeDb() {
       created_at timestamptz not null default now(),
       unique (match_ref, user_id)
     );
+    create table oracle_live_rounds (
+      id uuid primary key default gen_random_uuid(),
+      stream_id uuid not null,
+      match_ref text not null unique,
+      status text not null default 'open',
+      choices jsonb not null default '[]',
+      opened_by uuid not null,
+      opened_at timestamptz not null default now(),
+      locks_at timestamptz not null,
+      winning_choice text,
+      losing_choice text,
+      resolved_at timestamptz,
+      updated_at timestamptz not null default now()
+    );
+    create index oracle_live_rounds_stream_idx on oracle_live_rounds(stream_id, opened_at);
     -- Per-stream minimum bet the streamer/organizer sets in their control room.
     create table oracle_stream_config (
       stream_id uuid primary key,
@@ -592,6 +798,75 @@ export function makeDb() {
     insert into redeem_codes (code, tier, months, max_uses) values ('KILLCAM-TEST-CODE','pro',1,1);
   `)
   db.public.none(PHYSICAL_MERCH_DDL)
+  db.public.none(MEDIA_EVIDENCE_DDL)
+  db.public.none(ORGANIZER_DDL)
+  db.public.none(ONBOARDING_DDL)
+  db.public.none(CONTENT_REPORTS_DDL)
+  // THE REAL CHAT MIGRATION, RUN FOR REAL. Every statement server/ensureSchema.ts
+  // applies at boot is applied here too, in the same order, against the same
+  // tables — so a statement that cannot execute (a typo, a stray control
+  // character, a clause the database refuses) fails a TEST rather than being
+  // discovered in production by a chat room that quietly stopped moving.
+  //
+  // Note the tables above deliberately already carry `mentions`, `reply_to` and
+  // the dm composite index: that makes this run the SECOND-run, already-migrated
+  // path, which is the one that executes on every boot forever after.
+  //
+  // Unlike the boot path this THROWS. At boot a refused statement is a degraded
+  // feature; in a test it is a defect, and it names itself.
+  //
+  // Applied as ONE batch on the happy path — makeDb runs in a beforeEach across
+  // the whole server suite, and thirty separate round trips per test is a cost
+  // the suite feels. A failure replays them one at a time to name the culprit,
+  // which is the only moment precision is worth anything.
+  //
+  // INDEX CREATION IS THE ONE THING LEFT OUT, and only here. pg-mem maintains an
+  // index on every insert, and four more composites on the message tables turn
+  // the concurrency simulation (server/chaos.test.ts) from ~18s of work into
+  // ~60s — a self-inflicted timeout, in a function that runs in a beforeEach for
+  // the entire server suite. Those statements are still EXECUTED in test:
+  // server/chatFoundationSchema.test.ts applies every statement in the list,
+  // indexes included, against a database this function built. What the rest of
+  // the suite needs from the migration is the SHAPE — tables, columns,
+  // constraints — and that is applied here in full.
+  const shape = CHAT_FOUNDATION_STATEMENTS.filter((st) => !/^create index/i.test(st.sql) && process.env.SKIP_CHAT_DDL !== '1')
+  try {
+    db.public.none(shape.map((statement) => statement.sql).join(';\n'))
+  } catch {
+    for (const statement of shape) {
+      try {
+        db.public.none(statement.sql)
+      } catch (error: any) {
+        throw new Error(
+          `[testHarness] chat foundation statement "${statement.name}" failed: ${error?.message || error}`,
+        )
+      }
+    }
+  }
+  // THE PUSH MIGRATION, RUN FOR REAL, for the same reason as the chat one above:
+  // a statement that cannot execute should fail a TEST, not be discovered in
+  // production by a phone that never buzzes. Same index caveat, same treatment —
+  // the shape is what the suite needs; server/pushSchema.test.ts applies every
+  // statement including the index against a database this function built.
+  const pushShape = PUSH_SCHEMA_STATEMENTS.filter((st) => !/^create index/i.test(st.sql))
+  for (const statement of pushShape) {
+    try {
+      db.public.none(statement.sql)
+    } catch (error: any) {
+      throw new Error(
+        `[testHarness] push schema statement "${statement.name}" failed: ${error?.message || error}`,
+      )
+    }
+  }
+  for (const statement of AUTH_SECURITY_STATEMENTS) {
+    try {
+      db.public.none(statement.sql)
+    } catch (error: any) {
+      throw new Error(
+        `[testHarness] auth security statement "${statement.name}" failed: ${error?.message || error}`,
+      )
+    }
+  }
   const pg = (db.adapters as any).createPg()
   return new pg.Pool()
 }
@@ -617,5 +892,8 @@ export async function entitleForAutoMerge(pool: any, userId: string, tier: strin
   })()
   meta.reelone_tier = tier
   await pool.query('update users set user_metadata=$1 where id=$2', [JSON.stringify(meta), userId])
+  // Auto-match tests exercise the open grouping engine, not social privacy.
+  // Opt these fixtures into the pre-privacy behavior explicitly.
+  await pool.query("update profiles set reel_usage_privacy='anyone' where id=$1", [userId])
   await pool.query('insert into user_youtube_links (user_id, url) values ($1,$2)', [userId, 'https://www.youtube.com/@tester'])
 }

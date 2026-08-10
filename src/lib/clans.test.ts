@@ -3,8 +3,10 @@ import {
   MAX_CLAN_MEMBERS,
   PLATFORM_FEE,
   can,
+  canLeaveClan,
   canManageMember,
   canAssignRank,
+  isClanManagerRole,
   rankLevel,
   spotsLeft,
   isFull,
@@ -77,6 +79,22 @@ describe('clans — permission matrix (can)', () => {
       expect(can('recruiter', a)).toBe(false)
       expect(can('member', a)).toBe(false)
     }
+  })
+
+  it('limits the management dashboard to leader/officer', () => {
+    expect(isClanManagerRole('leader')).toBe(true)
+    expect(isClanManagerRole('officer')).toBe(true)
+    expect(isClanManagerRole('recruiter')).toBe(false)
+    expect(isClanManagerRole('member')).toBe(false)
+    expect(isClanManagerRole(null)).toBe(false)
+  })
+
+  it('allows non-leader members to leave while keeping the leader anchored', () => {
+    expect(canLeaveClan('leader')).toBe(false)
+    expect(canLeaveClan('officer')).toBe(true)
+    expect(canLeaveClan('recruiter')).toBe(true)
+    expect(canLeaveClan('member')).toBe(true)
+    expect(canLeaveClan(null)).toBe(false)
   })
 })
 

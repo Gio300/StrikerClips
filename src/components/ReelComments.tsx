@@ -6,6 +6,7 @@ import { topBadge, type BadgeMeta } from '@/lib/badges'
 import { BadgeChip } from '@/components/BadgeChip'
 import { effectiveDisplayName } from '@/lib/founder'
 import { Avatar } from '@/components/ui'
+import { ReportContentButton } from '@/components/ReportContentButton'
 
 /**
  * ReelComments — a comment thread pinned under a reel/video.
@@ -238,10 +239,17 @@ export function ReelComments({
                 ) : (
                   <span className="text-gray-500 font-semibold mr-2">deleted</span>
                 )}
-                <span className="text-gray-200 break-words whitespace-pre-wrap">{c.content}</span>
+                <span data-user-content className="text-gray-200 break-words whitespace-pre-wrap">{c.content}</span>
                 <span className="block text-[11px] text-gray-600 mt-0.5">
                   {new Date(c.created_at).toLocaleString()}
                 </span>
+                <ReportContentButton
+                  reporterId={user?.id}
+                  targetOwnerId={c.user_id}
+                  targetType="reel_comment"
+                  targetId={c.id}
+                  className="mt-1 -ml-2"
+                />
               </div>
             </li>
           ))}

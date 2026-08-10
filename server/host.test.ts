@@ -55,7 +55,7 @@ describe('host_commentaries — the "with host" version lane', () => {
     expect(g.status).toBe(200)
     expect(g.body.tier).toBe('creator')
     expect(g.body.host).not.toBe(true)
-  })
+  }, 15_000)
 
   it('a plain (free) user cannot create a host commentary', async () => {
     const r = await db(app, alice, {

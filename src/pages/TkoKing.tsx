@@ -8,9 +8,10 @@ import { Avatar } from '@/components/ui'
 import { useAskTko } from '@/components/AskTkoContext'
 import { PitMeetup } from '@/components/PitMeetup'
 import { KingLadderPanel } from '@/components/KingLadderPanel'
+import { useLeagueTheme } from '@/components/LeagueThemeProvider'
+import { kingDisplayName } from '@/lib/displayBrand'
 import { isYouTubeLinked } from '@/lib/youtubeLink'
 import { notify } from '@/lib/notifications'
-import { IS_MOBILE_STORE_BUILD } from '@/lib/storeBuild'
 import { startTrialMeta, TRIAL_DAYS } from '@/lib/trial'
 import { ensureKing } from '@/lib/kingTournament'
 import {
@@ -57,6 +58,8 @@ type Battle = TournamentBattle & { a_name?: string; b_name?: string }
 
 export function TkoKing() {
   const { user, refreshUser } = useAuth()
+  const { display } = useLeagueTheme()
+  const kingName = kingDisplayName(display)
   const [tournament, setTournament] = useState<Tournament | null>(null)
   const [registrations, setRegistrations] = useState<Registration[]>([])
   const [battles, setBattles] = useState<Battle[]>([])
@@ -118,12 +121,12 @@ export function TkoKing() {
   useEffect(() => { reload() /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [user?.id])
 
   if (loading) {
-    return <div className="p-6 max-w-4xl mx-auto animate-pulse text-gray-400">Loading TKO King…</div>
+    return <div className="p-6 max-w-4xl mx-auto animate-pulse text-gray-400">Loading {kingName}…</div>
   }
 
   return (
     <div className="p-4 sm:p-6 lg:p-8 max-w-4xl mx-auto">
-      <KingHeader />
+      <KingHeader kingName={kingName} />
 
       {/* THE way in: the never-ending, auto-matched ladder. Register anytime,
           climb the ranks, take the crown. This leads the page so it's never in
@@ -136,9 +139,14 @@ export function TkoKing() {
       <NextBattles battles={battles} now={now} />
 
       {!user && (
-        <div className="mt-6 rounded-xl border border-dark-border bg-dark-card p-6 text-center">
-          <Link to="/login" className="text-accent hover:underline">Sign in</Link>
-          <span className="text-gray-400"> to enter the ladder and climb toward King.</span>
+        <div className="mt-6 rounded-xl border border-accent/30 bg-dark-card p-5">
+          <p className="text-xs font-bold uppercase tracking-wider text-accent">Permanent ladder · open now</p>
+          <p className="mt-2 text-sm text-gray-300">
+            Sign in, enter once, and {display.productName} will match you with a player near your rank. The seasonal crown event below has separate dates.
+          </p>
+          <Link to="/login" className="mt-4 inline-flex rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-dark">
+            Sign in to enter the ladder
+          </Link>
         </div>
       )}
 
@@ -146,7 +154,7 @@ export function TkoKing() {
           flavor and special prizes, never a gate to play. Kept secondary in a
           collapsible so the ladder is unambiguously the way to compete. */}
       <div className="mt-6">
-        <CollapsibleSection id="king-season-events" label={`Season events · ${season.label}`}>
+        <CollapsibleSection id="king-season-events" label={`Seasonal crown event · ${season.label}`}>
           <div className="rounded-xl border border-kunai/40 bg-kunai/5 p-4 text-sm">
             <p className="text-gray-200">{season.action}</p>
             {season.nextLabel && (
@@ -156,7 +164,7 @@ export function TkoKing() {
               </p>
             )}
             <Link to="/king/board" className="inline-block mt-3 text-kunai hover:underline font-semibold">
-              View the crowned board →
+              View the seasonal board →
             </Link>
             {phase === 'enroll' && isScheduledEnrollmentOpen(now) &&
               (!tournament || isEnrollmentOpen(tournament, now)) && !myReg && user && tournament && (
@@ -218,7 +226,7 @@ export function TkoKing() {
 
       {host && (
         <p className="mt-6 text-[11px] text-gray-600">
-          You have host powers on the TKO King (founder host code or creator). You can run battles at any time.
+          You have host powers on the {kingName} (founder host code or creator). You can run battles at any time.
         </p>
       )}
     </div>
@@ -272,12 +280,12 @@ function NextBattles({ battles, now }: { battles: Battle[]; now: number }) {
   )
 }
 
-function KingHeader() {
+function KingHeader({ kingName }: { kingName: string }) {
   return (
     <div>
       <div className="flex items-center gap-2">
         <span className="text-2xl">👑</span>
-        <h1 className="text-2xl font-bold">TKO King</h1>
+        <h1 className="text-2xl font-bold">{kingName}</h1>
       </div>
       <p className="text-gray-400 mt-1">{KING_TAGLINE}</p>
     </div>
@@ -298,6 +306,8 @@ function RegisterFlow({
   refreshUser: () => Promise<void> | void
 }) {
   const { user } = useAuth()
+  const { display } = useLeagueTheme()
+  const kingName = kingDisplayName(display)
   const { open: openAskTko } = useAskTko()
   const [hasYoutube, setHasYoutube] = useState(false)
   const [hasStatCheck, setHasStatCheck] = useState(false)
@@ -375,7 +385,7 @@ function RegisterFlow({
     notify({
       userId: user.id,
       kind: 'tournament_started',
-      title: 'You entered the TKO King pit 👑',
+      title: `You entered the ${kingName} pit 👑`,
       body: 'Your free month of membership is active. Schedule your battles anytime — we\'ll remind you before each one.',
       link: '/king',
       relatedId: tournament.id,
@@ -396,7 +406,7 @@ function RegisterFlow({
         onClick={() => openAskTko('tko-king')}
         className="mb-3 text-xs text-accent hover:underline"
       >
-        Need help? Ask TKO to walk you through it →
+        Need help? {display.assistantName} to walk you through it →
       </button>
 
       {/* Push the free week HARD */}
@@ -549,6 +559,8 @@ function BattlesSection({
   now: number
   onChanged: () => void
 }) {
+  const { display } = useLeagueTheme()
+  const kingName = kingDisplayName(display)
   const [pa, setPa] = useState('')
   const [pb, setPb] = useState('')
   const [creating, setCreating] = useState(false)
@@ -581,8 +593,8 @@ function BattlesSection({
     setPa(''); setPb('')
     if (data) {
       // Reminder scaffolding: tell both Shinobi a battle awaits.
-      notify({ userId: pa, kind: 'tournament_started', title: 'New TKO King battle', body: `You're matched vs @${nameOf(pb)}. Pick your time.`, link: '/king', relatedId: tournament.id })
-      notify({ userId: pb, kind: 'tournament_started', title: 'New TKO King battle', body: `You're matched vs @${nameOf(pa)}. Pick your time.`, link: '/king', relatedId: tournament.id })
+      notify({ userId: pa, kind: 'tournament_started', title: `New ${kingName} battle`, body: `You're matched vs @${nameOf(pb)}. Pick your time.`, link: '/king', relatedId: tournament.id })
+      notify({ userId: pb, kind: 'tournament_started', title: `New ${kingName} battle`, body: `You're matched vs @${nameOf(pa)}. Pick your time.`, link: '/king', relatedId: tournament.id })
       onChanged()
     }
   }
@@ -596,7 +608,7 @@ function BattlesSection({
       notify({
         userId: uid,
         kind: 'tournament_started',
-        title: 'Your TKO King battle is scheduled ⏰',
+        title: `Your ${kingName} battle is scheduled ⏰`,
         body: `${nameOf(b.player_a)} vs ${nameOf(b.player_b)} — ${when}. Be present at the stat check or forfeit.`,
         link: '/king',
         relatedId: tournament.id,
@@ -626,14 +638,7 @@ function BattlesSection({
       }
       if (grant && !grant.alreadyOwned) {
         const copy = prizeNotification(grant.asset)
-        notify({
-          userId: winner,
-          kind: 'generic',
-          title: copy.title,
-          body: copy.body,
-          link: IS_MOBILE_STORE_BUILD ? '/profile' : '/shop',
-          relatedId: tournament.id,
-        })
+        notify({ userId: winner, kind: 'generic', title: copy.title, body: copy.body, link: '/shop', relatedId: tournament.id })
       }
     }
   }

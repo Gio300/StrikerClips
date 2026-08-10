@@ -13,7 +13,6 @@ import {
   Wallet,
   type LucideIcon,
 } from 'lucide-react'
-import { IS_MOBILE_STORE_BUILD } from '@/lib/storeBuild'
 
 type Accent = 'kunai' | 'chakra' | 'trust' | 'leaf' | 'accent'
 
@@ -30,6 +29,16 @@ type Feature = {
 
 const BASE = import.meta.env.BASE_URL || '/'
 const asset = (path: string) => `${BASE}${path.replace(/^\/+/, '')}`
+
+/**
+ * OPERATOR RULE: this build must NOT ship or serve video files — YouTube is the
+ * storage layer. Video sources live in media_source/videos/ (excluded from the
+ * Vite build; see media_source/README.md) and stream from the tko.cam origin
+ * until they have YouTube uploads to embed. Small poster/feature IMAGES still
+ * come from public/ via asset().
+ */
+const MEDIA_BASE = 'https://tko.cam/'
+const video = (path: string) => `${MEDIA_BASE}${path.replace(/^\/+/, '')}`
 
 const FEATURES: Feature[] = [
   {
@@ -83,14 +92,14 @@ const FEATURES: Feature[] = [
     appPath: '/clans',
   },
   {
-    title: 'Stat checks and power rankings',
+    title: 'Stat checks and fair play',
     eyebrow: 'Verified competition',
-    body: 'Capture the player loadout and clothing boosts at Sakura Inn, attach the verified build to the match, and use it for eligibility, seeding, and rankings.',
+    body: 'Capture the player loadout and clothing boosts at Sakura Inn, attach the verified build to the match, and use it for tournament eligibility and fair play review.',
     image: 'features/stat-checks.jpg',
     alt: 'Shinobi Striker Sakura Inn loadout with TKO verification of clothing boosts and tournament eligibility',
     icon: BarChart3,
     accent: 'accent',
-    appPath: '/rankings',
+    appPath: '/stat-check',
   },
   {
     title: 'Forge artifacts',
@@ -192,8 +201,8 @@ export function MarketingFeatureShowcase({
               preload="metadata"
               poster={asset('features/synchronized-squad.jpg')}
             >
-              <source src={asset('videos/tko-public-live-demo-1080p.mp4')} type="video/mp4" />
-              <source src={asset('videos/tko-automatch-demo.mp4')} type="video/mp4" />
+              <source src={video('videos/tko-public-live-demo-1080p.mp4')} type="video/mp4" />
+              <source src={video('videos/tko-automatch-demo.mp4')} type="video/mp4" />
             </video>
           </div>
           <div className="flex flex-col justify-center border-t border-dark-border p-6 lg:border-l lg:border-t-0">
@@ -216,9 +225,7 @@ export function MarketingFeatureShowcase({
         </div>
 
         <div className="grid gap-5 md:grid-cols-2">
-          {FEATURES.filter(
-            (feature) => !IS_MOBILE_STORE_BUILD || feature.appPath !== '/shop',
-          ).map((feature) => (
+          {FEATURES.map((feature) => (
             <FeatureCard key={feature.title} feature={feature} appHref={appHref} />
           ))}
         </div>

@@ -10,7 +10,6 @@ import {
   type CreatorStats,
   type GoalKind,
 } from '@/lib/creatorGoals'
-import { IS_MOBILE_STORE_BUILD } from '@/lib/storeBuild'
 
 /**
  * PROFILE "STATS" TAB — a read-friendly surface for creator goals + stats that
@@ -31,10 +30,12 @@ export function ProfileCreatorTab({
   userId,
   isOwnProfile,
   isPremium,
+  powerLevel,
 }: {
   userId: string
   isOwnProfile: boolean
   isPremium: boolean
+  powerLevel: number
 }) {
   const [goals, setGoals] = useState<CreatorGoal[]>([])
   const [stats, setStats] = useState<CreatorStats | null>(null)
@@ -75,32 +76,32 @@ export function ProfileCreatorTab({
   // Free / ad_free on your OWN profile — compact upgrade nudge.
   if (isOwnProfile && !isPremium) {
     return (
-      <div className="rounded-2xl border border-accent/30 bg-dark-card p-6 text-center">
-        <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full border border-accent/40 bg-accent/10">
-          <LockIcon className="h-6 w-6 text-accent" />
-        </div>
-        <h2 className="text-lg font-bold text-white">
-          {IS_MOBILE_STORE_BUILD ? 'Creator goals and stats unavailable' : 'Unlock creator goals & stats'}
-        </h2>
-        <p className="mt-2 text-sm text-gray-400">
-          {IS_MOBILE_STORE_BUILD
-            ? 'This feature is not available in the mobile app.'
-            : 'Set live follower / sub / donation goals your viewers can rally behind, and watch your real-time creator stats. Available on a paid streaming plan.'}
-        </p>
-        {!IS_MOBILE_STORE_BUILD && (
+      <div className="space-y-4">
+        <PowerEvidenceCard powerLevel={powerLevel} />
+        <div className="rounded-2xl border border-accent/30 bg-dark-card p-6 text-center">
+          <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full border border-accent/40 bg-accent/10">
+            <LockIcon className="h-6 w-6 text-accent" />
+          </div>
+          <h2 className="text-lg font-bold text-white">Unlock creator goals &amp; stats</h2>
+          <p className="mt-2 text-sm text-gray-400">
+            Set live follower / sub / donation goals your viewers can rally behind, and watch your
+            real-time creator stats. Available on a paid streaming plan.
+          </p>
           <Link
             to="/upgrade"
             className="mt-4 inline-flex rounded-lg bg-accent px-5 py-2.5 text-sm font-semibold text-dark"
           >
             Upgrade to unlock
           </Link>
-        )}
+        </div>
       </div>
     )
   }
 
   return (
     <div className="space-y-6">
+      <PowerEvidenceCard powerLevel={powerLevel} />
+
       {/* ── STATS STRIP (own + paid only) ─────────────────────────────────── */}
       {showStats && (
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
@@ -183,6 +184,32 @@ export function ProfileCreatorTab({
         )}
       </section>
     </div>
+  )
+}
+
+function PowerEvidenceCard({ powerLevel }: { powerLevel: number }) {
+  return (
+    <section className="rounded-xl border border-dark-border bg-dark-card p-5">
+      <div className="flex items-end justify-between gap-3">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-wider text-gray-500">Power level</p>
+          <p className="mt-1 text-3xl font-bold tabular-nums text-white">{Math.max(0, powerLevel).toLocaleString()}</p>
+        </div>
+        <span className="rounded-md border border-leaf/30 bg-leaf/10 px-2 py-1 text-[11px] font-semibold text-leaf">
+          Verified activity only
+        </span>
+      </div>
+      <p className="mt-3 text-sm leading-6 text-gray-400">
+        Power is recalculated from verified match outcomes, produced multi-angle videos,
+        verified combat stats, eligible battles detected from your connected YouTube, and
+        Oracle points. Screenshots and manual result forms do not add power.
+      </p>
+      <p className="mt-2 text-xs leading-5 text-gray-500">
+        A recalculation can lower the total when legacy or unverified points are removed, or when
+        a verified loss or death is added. That is intentional—the displayed number follows the
+        current evidence instead of preserving an inflated older total.
+      </p>
+    </section>
   )
 }
 

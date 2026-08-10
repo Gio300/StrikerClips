@@ -1,9 +1,12 @@
+import type { CSSProperties } from 'react'
 import { BrandLogo } from '@/components/BrandLogo'
+import { LegalLinks } from '@/components/LegalFooter'
 import { BRAND } from '@/lib/brand'
 import { VideoShowcase } from '@/components/VideoShowcase'
 import { InstallAppButton } from '@/components/InstallAppButton'
 import { MarketingFeatureShowcase } from '@/components/MarketingFeatureShowcase'
 import { PublicAskTko } from '@/components/PublicAskTko'
+import { TKO_NEUTRAL_BOARD_VARS } from '@/lib/leagueTheme'
 
 /**
  * TKO.cam marketing landing page.
@@ -29,28 +32,41 @@ function appHref(path = '/'): string {
 
 export function Marketing() {
   return (
-    <div className="min-h-screen bg-dark text-gray-100">
+    // TKO_NEUTRAL_BOARD_VARS re-skins this whole page to the neutral blue
+    // brand board (the same board /leagues wears in the app), overriding the
+    // stock orange index.css defaults — the operator's 2026-08 restyle now
+    // reaches the root marketing bundle too, not just the app surfaces.
+    <div
+      className="min-h-screen bg-dark text-ink"
+      style={TKO_NEUTRAL_BOARD_VARS as CSSProperties}
+    >
       {/* HEADER */}
       <header className="sticky top-0 z-30 backdrop-blur bg-dark/70 border-b border-dark-border">
-        {/* Thin blue "gives back" trim. */}
-        <div className="h-0.5 bg-trust" aria-hidden />
+        {/* Thin seafoam "gives back" trim (board highlight hue). */}
+        <div className="h-0.5 bg-chakra" aria-hidden />
         <div className="max-w-6xl mx-auto px-6 py-3 flex items-center justify-between gap-4">
           <a href="#top" className="flex items-center gap-2.5">
-            <BrandLogo as="span" variant="horizontal" className="text-lg" />
+            <BrandLogo as="span" variant="horizontal" className="text-lg" tko />
           </a>
           <nav className="flex items-center gap-2 text-sm">
-            <a href="#features" className="hidden sm:block text-gray-300 hover:text-white px-3 py-1.5">
+            <a href="#features" className="hidden sm:block text-ink-muted hover:text-ink px-3 py-1.5">
               Features
             </a>
-            <a href="#showcase" className="hidden sm:block text-gray-300 hover:text-white px-3 py-1.5">
+            <a href="#showcase" className="hidden sm:block text-ink-muted hover:text-ink px-3 py-1.5">
               Watch
             </a>
-            <a href="#get" className="hidden sm:block text-gray-300 hover:text-white px-3 py-1.5">
+            <a href="#leagues" className="hidden sm:block text-ink-muted hover:text-ink px-3 py-1.5">
+              Grow your league
+            </a>
+            <a href="#get" className="hidden sm:block text-ink-muted hover:text-ink px-3 py-1.5">
               Get the app
             </a>
+            {/* No `label`: the button names whatever this ADDRESS installs.
+                The header lockup stays TKO (`tko` on BrandLogo above) because
+                this page pitches TKO — but the install itself is the league's
+                on a league domain, and saying otherwise is the bug. */}
             <InstallAppButton
               mode="open-or-install"
-              label="Install TKO"
               appHref={appHref('/')}
             />
           </nav>
@@ -62,15 +78,17 @@ export function Marketing() {
         <div
           className="absolute inset-0 -z-10"
           style={{
+            // White top glow + pale-cyan corner wash — the blueprint-board
+            // treatment (was the legacy orange kunai glow).
             backgroundImage:
-              'radial-gradient(70% 60% at 50% -10%, rgba(255,122,24,0.20) 0%, transparent 60%), radial-gradient(40% 50% at 85% 0%, rgba(47,129,247,0.14) 0%, transparent 70%)',
+              'radial-gradient(70% 60% at 50% -10%, rgb(var(--league-dark-card) / 0.9) 0%, transparent 60%), radial-gradient(40% 50% at 85% 0%, rgb(var(--league-kunai) / 0.12) 0%, transparent 70%)',
           }}
         />
         <div className="max-w-4xl mx-auto px-6 pt-20 pb-16 md:pt-28 md:pb-20 text-center">
           <div className="flex justify-center mb-8">
-            <BrandLogo as="h1" variant="mark" className="text-6xl md:text-7xl" />
+            <BrandLogo as="h1" variant="mark" className="text-6xl md:text-7xl" tko />
           </div>
-          <div className="inline-flex items-center gap-2 mb-6 pill-kunai whitespace-nowrap">
+          <div className="inline-flex items-center gap-2 mb-6 pill-accent whitespace-nowrap">
             <span className="live-dot" /> {BRAND.tagline}
           </div>
           <h2 className="text-4xl md:text-6xl font-bold leading-[1.05] mb-6 tracking-tight">
@@ -78,23 +96,28 @@ export function Marketing() {
             <br />
             <span className="brand-gradient">knockout.</span> One cam.
           </h2>
-          <p className="text-lg text-gray-400 max-w-2xl mx-auto mb-8">
+          <p className="text-lg text-ink-muted max-w-2xl mx-auto mb-8">
             TKO turns a stack of squad clips into one cinematic, multi-angle reel — then runs your
-            brackets, powers your clan, and lets an in-app AI direct the whole thing. The tournament
-            platform that gives back.
+            brackets, powers your clan, and gives your league its own branded app on its own
+            domain. The league growth system that gives back.
           </p>
           <div className="flex flex-wrap justify-center gap-3">
-            {/* Real PWA install, when the browser can offer one. Silent
-                otherwise (already installed, or no install path at all). */}
-            <InstallAppButton label="Install TKO" />
+            {/* PRIMARY CTA — the league-growth funnel (operator 2026-08-03:
+                the root of tko.cam sells "make your league site"). Install /
+                open-the-app paths live in the header and the #get section. */}
+            <a href={appHref('/make-a-league')} className="btn-primary text-base px-7 py-3">
+              Grow your league
+            </a>
             <a href={appHref('/')} className="btn-ghost text-base px-7 py-3">
-              Open in browser
+              Open the app
             </a>
             <a href="#showcase" className="btn-ghost text-base px-7 py-3">
               Watch the reel
             </a>
           </div>
-          <p className="text-xs text-gray-500 mt-4">Android app or browser. Pick either and start.</p>
+          <p className="text-xs text-ink-muted mt-4">
+            Running a league? Start there. Just playing? The app runs on Android or in the browser.
+          </p>
         </div>
       </section>
 
@@ -104,21 +127,54 @@ export function Marketing() {
       {/* VIDEO SHOWCASE */}
       <VideoShowcase />
 
+      {/* GROW YOUR LEAGUE — the league-generator funnel (operator 2026-08-02:
+          tko.cam is the marketing/signup site to make your league site). */}
+      <section id="leagues" className="border-t border-dark-border bg-dark-card/30">
+        <div className="max-w-4xl mx-auto px-6 py-16 text-center">
+          <div className="text-xs uppercase tracking-wider text-accent mb-3">Run a league?</div>
+          <h2 className="text-3xl md:text-4xl font-bold tracking-tight mb-4">
+            <span className="brand-gradient">Grow your league</span> on TKO.
+          </h2>
+          <p className="text-ink-muted max-w-2xl mx-auto mb-6">
+            TKO is a league growth system: your players upload clips, the machine cuts branded
+            multi-angle highlights, and your league gets its own app on its own domain — your
+            colors, your logo, your anthem. Style it in minutes, no editor required.
+          </p>
+          <div className="flex flex-wrap justify-center gap-3 mb-4">
+            <a href={appHref('/make-a-league')} className="btn-primary text-base px-7 py-3">
+              Make your league
+            </a>
+            <a
+              href="https://shinobistrikerleague.com"
+              target="_blank"
+              rel="noreferrer"
+              className="btn-ghost text-base px-7 py-3"
+            >
+              See the flagship live
+            </a>
+          </div>
+          <p className="text-xs text-ink-muted">
+            shinobistrikerleague.com is this exact app wearing one league&apos;s brand — yours is
+            next.
+          </p>
+        </div>
+      </section>
+
       {/* GIVES BACK BANNER */}
       <section className="border-t border-dark-border bg-dark-card/30">
         <div className="max-w-4xl mx-auto px-6 py-16 text-center">
-          <div className="text-xs uppercase tracking-wider text-trust mb-3">Why TKO is different</div>
+          <div className="text-xs uppercase tracking-wider text-chakra mb-3">Why TKO is different</div>
           <h2 className="text-3xl md:text-4xl font-bold tracking-tight mb-4">
-            The tournament platform that <span className="text-trust">gives back.</span>
+            The tournament platform that <span className="text-chakra">gives back.</span>
           </h2>
-          <p className="text-gray-400 max-w-2xl mx-auto mb-6">
+          <p className="text-ink-muted max-w-2xl mx-auto mb-6">
             The Oracle rewards prestige, not wagers — no cash, no gambling, ever. Clans and creators
             share in the platform, and the tools that used to need a full production crew now run on one
             AI director. TKO exists so the people who build the scene keep more of it.
           </p>
-          <div className="flex flex-wrap justify-center gap-6 text-sm text-gray-300">
-            <span className="flex items-center gap-2"><span className="text-leaf">●</span> Clans that earn</span>
-            <span className="flex items-center gap-2"><span className="text-trust">●</span> Prestige, not wagering</span>
+          <div className="flex flex-wrap justify-center gap-6 text-sm text-ink-muted">
+            <span className="flex items-center gap-2"><span className="text-chakra">●</span> Clans that earn</span>
+            <span className="flex items-center gap-2"><span className="text-accent">●</span> Prestige, not wagering</span>
             <span className="flex items-center gap-2"><span className="text-chakra">●</span> AI director included</span>
           </div>
         </div>
@@ -128,7 +184,7 @@ export function Marketing() {
       <section id="get" className="border-t border-dark-border">
         <div className="max-w-4xl mx-auto px-6 py-16 text-center">
           <h2 className="text-3xl md:text-4xl font-bold tracking-tight mb-3">Get into the app</h2>
-          <p className="text-gray-400 max-w-2xl mx-auto mb-8">
+          <p className="text-ink-muted max-w-2xl mx-auto mb-8">
             Install the Android app directly. If your device cannot install the APK, continue in the browser.
           </p>
           <div className="flex flex-wrap justify-center items-start gap-4 mb-6">
@@ -136,7 +192,7 @@ export function Marketing() {
                 what the in-app update prompt can then keep current. Falls back
                 to Add-to-Home-Screen instructions on iOS, and renders nothing
                 at all where no install is possible — never a dead button. */}
-            <InstallAppButton label="Install TKO" />
+            <InstallAppButton />
             <a href={appHref('/')} className="btn-primary text-base px-7 py-3">
               Open the web app
             </a>
@@ -150,27 +206,31 @@ export function Marketing() {
             <StoreBadge kind="play" />
             <StoreBadge kind="apple" />
           </div>
-          <p className="text-xs text-gray-500 mt-4">Coming soon to Google Play and the App Store.</p>
+          <p className="text-xs text-ink-muted mt-4">Coming soon to Google Play and the App Store.</p>
         </div>
       </section>
 
       {/* FOOTER */}
       <footer className="border-t border-dark-border">
-        <div className="max-w-6xl mx-auto px-6 py-10 flex flex-col md:flex-row md:items-center md:justify-between gap-6 text-sm text-gray-500">
+        <div className="max-w-6xl mx-auto px-6 py-10 flex flex-col md:flex-row md:items-center md:justify-between gap-6 text-sm text-ink-muted">
           <div className="flex items-center gap-2">
-            <BrandLogo as="span" variant="horizontal" className="text-sm" />
+            <BrandLogo as="span" variant="horizontal" className="text-sm" tko />
             <span className="hidden sm:inline">· {BRAND.tagline}</span>
           </div>
           <nav className="flex flex-wrap gap-x-5 gap-y-2">
-            <a href={appHref('/')} className="hover:text-white">Open in browser</a>
-            <a href={appHref('/legal')} className="hover:text-white">Legal &amp; Agreements</a>
-            <a href={appHref('/terms')} className="hover:text-white">Terms</a>
-            <a href={appHref('/privacy')} className="hover:text-white">Privacy</a>
-            <a href={appHref('/data-deletion')} className="hover:text-white">Data Deletion</a>
+            <a href={appHref('/')} className="hover:text-ink">Open in browser</a>
+            <a href={appHref('/make-a-league')} className="hover:text-ink">Grow your league</a>
+            <a href={appHref('/legal')} className="hover:text-ink">Legal &amp; Agreements</a>
           </nav>
         </div>
-        <div className="max-w-6xl mx-auto px-6 pb-8 text-xs text-gray-600">
-          © {new Date().getFullYear()} {BRAND.name} · {BRAND.domain}
+        {/* The legal row rides the copyright band, spelled out in full and
+            underlined. This bundle is the landing page of the standalone
+            marketing site, so it is a compliance surface in its own right;
+            `appHref` aims the links at the deployed app when the site is
+            hosted separately. See src/components/LegalFooter.tsx. */}
+        <div className="max-w-6xl mx-auto px-6 pb-8 flex flex-col gap-3 text-xs text-ink-muted sm:flex-row sm:items-center sm:justify-between">
+          <span>© {new Date().getFullYear()} {BRAND.name} · {BRAND.domain}</span>
+          <LegalLinks hrefFor={appHref} />
         </div>
       </footer>
 

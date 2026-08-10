@@ -41,6 +41,7 @@
 import { backend, callFn } from './backend'
 import { predictionQuota } from './tiers'
 import { grantAsset, noteGranted, rowToAsset, type DigitalAsset, type AssetStorage } from './assets'
+import { resolveArtifactArt } from './officialArtifactArt'
 
 export type PredictionStatus = 'open' | 'correct' | 'wrong'
 
@@ -154,7 +155,7 @@ export const PREDICTION_REWARDS: DigitalAsset[] = [
     id: 'oracle-reward-crystal-emote',
     name: 'Crystal Ball Emote',
     teamName: 'Oracle',
-    imageUrl: 'https://placehold.co/400x400/2a1a3e/c084fc?text=Oracle+Emote',
+    imageUrl: resolveArtifactArt('oracle-reward-crystal-emote'),
     priceTokens: 0,
     kind: 'emote',
     sellerType: 'official',
@@ -166,7 +167,7 @@ export const PREDICTION_REWARDS: DigitalAsset[] = [
     id: 'oracle-reward-violet-skin',
     name: 'Violet Oracle Badge Skin',
     teamName: 'Oracle',
-    imageUrl: 'https://placehold.co/400x400/1e1b4b/a78bfa?text=Oracle+Skin',
+    imageUrl: resolveArtifactArt('oracle-reward-violet-skin'),
     priceTokens: 0,
     kind: 'badge_skin',
     sellerType: 'official',
@@ -178,7 +179,7 @@ export const PREDICTION_REWARDS: DigitalAsset[] = [
     id: 'oracle-reward-starfall-emote',
     name: 'Starfall Emote',
     teamName: 'Oracle',
-    imageUrl: 'https://placehold.co/400x400/3b2f0b/fde68a?text=Starfall',
+    imageUrl: resolveArtifactArt('oracle-reward-starfall-emote'),
     priceTokens: 0,
     kind: 'emote',
     sellerType: 'official',
@@ -190,7 +191,7 @@ export const PREDICTION_REWARDS: DigitalAsset[] = [
     id: 'oracle-reward-astral-skin',
     name: 'Astral Oracle Badge Skin',
     teamName: 'Oracle',
-    imageUrl: 'https://placehold.co/400x400/0b1e3b/93c5fd?text=Astral',
+    imageUrl: resolveArtifactArt('oracle-reward-astral-skin'),
     priceTokens: 0,
     kind: 'badge_skin',
     sellerType: 'official',

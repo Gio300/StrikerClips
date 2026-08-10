@@ -14,6 +14,7 @@ import { isRealBuildId } from './appVersion'
  */
 
 export const BUILD_META_NAME = 'tko-build'
+export const BUILD_TIME_META_NAME = 'tko-built-at'
 
 export function readMetaBuildId(doc?: Document | null): string {
   try {
@@ -36,8 +37,25 @@ function resolveBuildId(): string {
 
 export const BUILD_ID = resolveBuildId()
 
+function resolveBuiltAt(): number | undefined {
+  const fromEnv = Number(import.meta.env.VITE_BUILD_AT)
+  if (Number.isFinite(fromEnv) && fromEnv > 0) return fromEnv
+  try {
+    const target = typeof document === 'undefined' ? null : document
+    const raw = target
+      ?.querySelector(`meta[name="${BUILD_TIME_META_NAME}"]`)
+      ?.getAttribute('content')
+    const fromMeta = Number(raw)
+    return Number.isFinite(fromMeta) && fromMeta > 0 ? fromMeta : undefined
+  } catch {
+    return undefined
+  }
+}
+
 /** The running build, in the same shape `/version.json` returns. */
-export const RUNNING_VERSION: VersionPayload = { buildId: BUILD_ID }
+const BUILT_AT = resolveBuiltAt()
+export const RUNNING_VERSION: VersionPayload =
+  BUILT_AT === undefined ? { buildId: BUILD_ID } : { buildId: BUILD_ID, builtAt: BUILT_AT }
 
 /** Vite's resolved deploy base: '/' on mobile, '/app/' on the hosted web app. */
 export const APP_BASE = import.meta.env.BASE_URL || '/'

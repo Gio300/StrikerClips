@@ -12,7 +12,6 @@
  * instruction and an OPTIONAL deep-link CTA (e.g. "Open Connect →" to /connect)
  * that takes a confused user straight to the right screen.
  */
-import { IS_MOBILE_STORE_BUILD } from '@/lib/storeBuild'
 
 export type GuideCta = {
   /** Button label, e.g. "Open Connect". */
@@ -66,7 +65,7 @@ const tkoKing: Guide = {
     },
     {
       title: 'Play + report the result',
-      body: 'Play your match, then report who won (verified from your linked YouTube / auto-merge). You\'re re-rated and immediately re-paired. Win enough and you climb toward King — the top-rated Shinobi holds the crown.',
+      body: 'Play your match, then report who won (verified from your linked YouTube / auto-merge). You\'re re-rated and immediately re-paired. This permanent ladder is separate from the seasonal King bracket, which can have its own enrollment dates.',
       cta: { label: 'Open TKO King', to: '/king' },
     },
   ],
@@ -76,26 +75,27 @@ const tkoKing: Guide = {
 const connectYoutube: Guide = {
   id: 'connect-youtube',
   title: 'Connect your YouTube',
-  summary: 'Link your channel so TKO can pull your clips and stream your battles.',
+  summary: 'Connect your channel page so battles and clips can be matched to your account.',
   icon: 'watch',
   steps: [
     {
-      title: 'Open the Connect screen',
-      body: 'Everything for linking accounts lives on the Connect page. Head there to get started.',
-      cta: { label: 'Open Connect', to: '/connect' },
+      title: 'Open YouTube settings',
+      body: 'Open Settings and find YouTube channel. This is the account connection used for your profile, live status, and automatic footage matching.',
+      cta: { label: 'Open YouTube settings', to: '/settings' },
     },
     {
-      title: 'Tap "Connect YouTube"',
-      body: 'If one-tap connect is on, tap the Connect YouTube button and approve access in the Google popup. It only reads your public uploads.',
+      title: 'Use your channel page or @handle',
+      body: 'Paste youtube.com/@yourname, your YouTube channel page, or enter your @handle. A watch, Shorts, or live-video link is footage—not a channel connection—and will be rejected here.',
     },
     {
-      title: 'Or paste a link',
-      body: 'No one-tap yet? No problem — paste any of your YouTube clip links into the box and add it. You can add as many as you like.',
-      cta: { label: 'Open Connect', to: '/connect' },
+      title: 'Confirm the connected channel',
+      body: 'Tap Connect channel or Save change. Do not leave until the page shows the connected channel and a saved confirmation.',
+      cta: { label: 'Open YouTube settings', to: '/settings' },
     },
     {
-      title: 'Check your saved sources',
-      body: 'Anything you connect or paste shows under "Your saved sources", ready to drop into a reel with one tap. You are connected.',
+      title: 'Add individual videos separately',
+      body: 'Use Connect or Create when you want to save a specific YouTube video as reel footage. Eligible public gameplay posted after signup can be picked up automatically; older uploads are not automatically backfilled.',
+      cta: { label: 'Open saved footage', to: '/connect' },
     },
   ],
 }
@@ -126,7 +126,7 @@ const makeClip: Guide = {
     },
     {
       title: 'Create your reel',
-      body: 'Hit Create reel. It stitches in your browser and lands in My Clips, ready to share or enter into tournaments.',
+      body: 'Hit Create reel. My Clips will show whether it is saved, playable, produced, or needs attention. A saved reel is not necessarily a finished rendered video yet.',
       cta: { label: 'Open Create', to: '/highlight/create' },
     },
   ],
@@ -169,7 +169,7 @@ const goLive: Guide = {
 const joinClan: Guide = {
   id: 'join-clan',
   title: 'Join a clan',
-  summary: 'Find a crew that\'s recruiting and join in one tap.',
+  summary: 'Apply to a recruiting clan and wait for a leader to approve you.',
   icon: 'clan',
   steps: [
     {
@@ -178,29 +178,126 @@ const joinClan: Guide = {
       cta: { label: 'Find a clan', to: '/clans/discover' },
     },
     {
-      title: 'Pick a clan',
-      body: 'Each card shows the spots left and the join fee (or "Free to join"). Tap the one you like to join it.',
+      title: 'Pick a clan and apply',
+      body: 'Each card shows open spots and the join fee (or "Free to join"). Open the clan and tap Apply. Applying does not add you immediately.',
     },
-    IS_MOBILE_STORE_BUILD
-      ? {
-          title: 'Choose a free-to-join clan',
-          body: 'Paid clan joins are unavailable in the mobile app. Pick a clan marked “Free to join” to continue.',
-        }
-      : {
-          title: 'Have Tokens ready for paid clans',
-          body: 'Some clans charge a Token fee, split with the clan treasury. If you are short, grab more from the Store, then join.',
-          cta: { label: 'Get Tokens', to: '/store' },
-        },
     {
-      title: 'You\'re in',
-      body: 'Once joined, the card flips to "Joined" and the clan\'s boards and channels open up. Head to Clans & Chat to say hi.',
+      title: 'Have Tokens ready for paid clans',
+      body: 'Some clans charge a Token fee, split with the clan treasury. If you are short, grab more from the Store, then join.',
+      cta: { label: 'Get Tokens', to: '/store' },
+    },
+    {
+      title: 'Wait for approval',
+      body: 'The clan leader or officer must approve your application. Watch Notifications. After acceptance, the clan board and chat open and a manager can add you to a saved roster.',
       cta: { label: 'Open clans', to: '/clans' },
     },
   ],
 }
 
+/** Manage a reusable clan roster and enter it into tournaments. */
+const manageClanRoster: Guide = {
+  id: 'manage-clan-roster',
+  title: 'Build a clan roster',
+  summary: 'Create a reusable lineup, add registered clan members, and enter it in events.',
+  icon: 'clan',
+  steps: [
+    {
+      title: 'Approve the player first',
+      body: 'A player must have an account and be an approved member of your clan before they can be placed on a roster. Open Clan tools and approve any pending applications first.',
+      cta: { label: 'Open clan tools', to: '/clans' },
+    },
+    {
+      title: 'Open My clan rosters',
+      body: 'Clan leaders and officers can manage reusable lineups from Profile → About → My clan rosters, or from Clan tools.',
+      cta: { label: 'Open my profile', to: '/profile' },
+    },
+    {
+      title: 'Create and fill the lineup',
+      body: 'Create a roster, choose its size, then use Add clan member for each slot. Empty slots are not players. Save only after the right names are visible.',
+    },
+    {
+      title: 'Fix or remove a lineup',
+      body: 'Use Remove beside a player to change one slot. Use Delete roster when the whole saved lineup is no longer needed. The app asks for confirmation before deleting it.',
+    },
+    {
+      title: 'Enter the saved roster',
+      body: 'Open the tournament, choose the saved clan roster, and submit it. A tournament entry can be withdrawn before roster lock; organizer changes after that require an audit reason.',
+      cta: { label: 'Open tournaments', to: '/tournaments' },
+    },
+  ],
+}
+
+/** Create and operate an in-clan event or inter-clan tournament. */
+const runTournament: Guide = {
+  id: 'run-tournament',
+  title: 'Create or edit a tournament',
+  summary: 'Choose the event type, invite clans, use saved rosters, and manage entries.',
+  icon: 'trophy',
+  steps: [
+    {
+      title: 'Choose the right event type',
+      body: 'Use Run an in-clan event for your own clan only. Use Host an inter-clan tournament when other clans should be invited or allowed to apply.',
+      cta: { label: 'Open tournaments', to: '/tournaments' },
+    },
+    {
+      title: 'Set the event details',
+      body: 'Give it a clear name, start and end time, rules, roster size, and registration deadline. Review the summary before publishing.',
+    },
+    {
+      title: 'Choose who can enter',
+      body: 'Allow clan applications, invite specific clans, or select already-saved clan rosters. Only registered, approved clan members can occupy roster slots.',
+    },
+    {
+      title: 'Edit from the organizer tools',
+      body: 'Open the tournament and use Organizer tools to edit details, approve or reject entries, and manage invited clans. Every button says the action it performs.',
+    },
+    {
+      title: 'Handle roster changes',
+      body: 'A roster-change perk applies to this tournament only. Choose a finite number of changes or unlimited changes for this event; it never grants unlimited changes to every future tournament.',
+    },
+  ],
+}
+
+/** Explain the player-visible media pipeline and verified power rules. */
+const videoAndPowerStatus: Guide = {
+  id: 'video-and-power-status',
+  title: 'Check clips and power',
+  summary: 'Understand clip status, automatic processing, and verified power changes.',
+  icon: 'watch',
+  steps: [
+    {
+      title: 'Check My Clips for the real status',
+      body: 'Saved means the reel record exists. Playable means it can be watched. Produced means the finished video was rendered. Needs attention or failed means it did not finish and should be retried or reported.',
+      cta: { label: 'Open My Clips', to: '/my-clips' },
+    },
+    {
+      title: 'Know what is automatic',
+      body: 'Eligible public gameplay posted after signup can enter the automatic pipeline. Connecting a channel does not automatically backfill every older upload.',
+    },
+    {
+      title: 'Power uses verified activity',
+      body: 'Power can go up or down from verified match and league activity. Screenshots and manual result forms do not add power by themselves, so a picture cannot be used to inflate a ranking.',
+      cta: { label: 'Open my profile', to: '/profile' },
+    },
+    {
+      title: 'Report a stuck item',
+      body: 'If an eligible battle stays unchanged or a clip remains failed, include the player name, YouTube video link, and approximate match time when you contact support.',
+      cta: { label: 'Open Help', to: '/help' },
+    },
+  ],
+}
+
 /** All guides, in menu order. */
-export const GUIDES: Guide[] = [tkoKing, connectYoutube, makeClip, goLive, joinClan]
+export const GUIDES: Guide[] = [
+  tkoKing,
+  connectYoutube,
+  makeClip,
+  goLive,
+  joinClan,
+  manageClanRoster,
+  runTournament,
+  videoAndPowerStatus,
+]
 
 // ─────────────────────────────────────────────────────────────────────────
 //  Lookup + step helpers (pure, testable)
@@ -256,6 +353,10 @@ export const ROUTE_GUIDE_SUGGESTIONS: { prefix: string; guideId: string }[] = [
   { prefix: '/reels/create', guideId: 'make-clip' },
   { prefix: '/go-live', guideId: 'go-live' },
   { prefix: '/clans/discover', guideId: 'join-clan' },
+  { prefix: '/clans', guideId: 'manage-clan-roster' },
+  { prefix: '/tournaments', guideId: 'run-tournament' },
+  { prefix: '/my-clips', guideId: 'video-and-power-status' },
+  { prefix: '/profile', guideId: 'video-and-power-status' },
 ]
 
 /** Does `pathname` sit at or under `prefix`? (exact, or prefix + "/…") */

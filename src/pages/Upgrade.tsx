@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { Check, CreditCard, ShieldCheck, Sparkles } from 'lucide-react'
 import { useAuth } from '@/hooks/useAuth'
 import { useEntitlements } from '@/hooks/useEntitlements'
+import { ManageSubscriptionPanel } from '@/components/ManageSubscriptionPanel'
 import { FEATURE_LABELS, LEVEL_TIER_NAME } from '@/lib/tiers'
 import {
   requestCheckout,
@@ -26,7 +27,7 @@ import {
 } from '@/lib/trial'
 
 type Tier = {
-  key: '' | 'ad_free' | 'pro' | 'supporter' | 'creator'
+  key: '' | 'pro' | 'supporter' | 'creator'
   name: string
   priceUsd: number
   blurb: string
@@ -36,42 +37,73 @@ type Tier = {
 
 const F = FEATURE_LABELS
 
+/**
+ * THE SHOP. Retired rungs are absent here, not disabled — see RETIRED_TIERS in
+ * server/app.ts.
+ *
+ * `ad_free` ($1.99/mo) was retired in 2026-08: Stripe's flat $0.30 was 15.1
+ * points of an 18.0% total fee at that price, and any SKU under $4.23 pays
+ * Stripe over 10%. $4.99 Pro is the entry paid tier and already includes no
+ * ads. Anyone still HOLDING `ad_free` keeps it — the entitlement, the quota
+ * tables and the renewal path are all untouched; only the sale is gone. Their
+ * plan is named and cancellable in the ManageSubscriptionPanel below.
+ */
 const TIERS: Tier[] = [
   {
     key: '',
     name: 'Free',
     priceUsd: 0,
-    blurb: 'Watch, clip, chat, and build your profile.',
+    blurb: 'Watch, chat, and build your own reels by hand.',
     perks: [F.watch, F.basic_reel, F.clans_chat, F.browser, F.redeem],
-  },
-  {
-    key: 'ad_free',
-    name: 'Ad-Free',
-    priceUsd: 1.99,
-    blurb: 'The free experience without interruptions.',
-    perks: ['No ads anywhere', 'No pre-content ad gate', 'Everything in Free'],
   },
   {
     key: 'pro',
     name: LEVEL_TIER_NAME[1],
     priceUsd: 4.99,
-    blurb: 'For players publishing their best moments.',
-    perks: [F.multi_angle, F.slow_mo, F.music_library, F.no_ad_gate, 'Live stream on your profile'],
+    blurb: 'Fast automatic Shorts without the premium production cost.',
+    perks: [
+      // Ads-off leads the list now that it is no longer sold on its own rung.
+      // hidesAds() has always been true for every paid tier, so this is not a
+      // new promise — it is the old $1.99 promise, stated where people buy.
+      'No ads anywhere',
+      'Automatic vertical Quick Cuts (up to 24 seconds)',
+      'One hype voice moment per cut',
+      'Manual multi-angle director tools',
+      F.slow_mo,
+      F.music_library,
+      F.no_ad_gate,
+      'Live stream on your profile',
+    ],
     highlight: true,
   },
   {
     key: 'supporter',
     name: LEVEL_TIER_NAME[2],
     priceUsd: 9.99,
-    blurb: 'For teams running live rooms and events.',
-    perks: [F.voice_director, F.auto_publish, F.live_studio, 'Stream on your clan page', 'Everything in Pro'],
+    blurb: 'Richer short-form edits for active players and teams.',
+    perks: [
+      'Automatic Enhanced Cuts (up to 42 seconds)',
+      'Two synchronized angles and two voice moments',
+      F.voice_director,
+      F.auto_publish,
+      F.live_studio,
+      'Stream on your clan page',
+      'Everything in Pro',
+    ],
   },
   {
     key: 'creator',
     name: LEVEL_TIER_NAME[3],
     priceUsd: 29.99,
-    blurb: 'For creators growing a real community.',
-    perks: [F.ai_commentary, 'Front-page live placement', 'Creator support subscriptions', 'Everything in Elite'],
+    blurb: 'Full premium match production for serious creators.',
+    perks: [
+      'Full-length Coach Dee strategy cuts',
+      'Up to four synchronized angles',
+      F.ai_commentary,
+      'Front-page live placement',
+      'Creator support subscriptions',
+      'Everything in Elite',
+    ],
   },
 ]
 
@@ -106,6 +138,16 @@ export function Upgrade() {
     }
   }, [])
 
+  // Coming back from the Stripe billing portal. Whatever was changed there
+  // reaches us as a webhook, so re-read the user rather than leaving a cancelled
+  // plan showing as active.
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    if (new URLSearchParams(window.location.search).get('billing') !== 'done') return
+    void refreshUser()
+    setFlash('Billing updated. Changes you made in Stripe are reflected on your account.')
+  }, [refreshUser])
+
   useEffect(() => {
     if (resolvedRef.current) return
     const raw = trialFromUser(user)
@@ -137,7 +179,7 @@ export function Upgrade() {
 
   async function startStripeTrial(tier: Tier) {
     if (!canBuyTier(payments, tier.key)) {
-      showFlash('Payments are not enabled on this deploy. Nothing was charged.')
+      showFlash('Membership checkout is temporarily unavailable. Nothing was charged.')
       return
     }
 
@@ -172,7 +214,7 @@ export function Upgrade() {
 
   async function startCheckout(tier: Tier) {
     if (!canBuyTier(payments, tier.key)) {
-      showFlash('Payments are not enabled on this deploy. Nothing was charged.')
+      showFlash('Membership checkout is temporarily unavailable. Nothing was charged.')
       return
     }
 
@@ -257,7 +299,7 @@ export function Upgrade() {
           ) : (
             <button
               disabled
-              title="Payments are not enabled on this deploy yet"
+              title="Membership checkout is temporarily unavailable"
               className="w-full cursor-not-allowed rounded-lg border border-dark-border bg-dark-elevated px-3 py-2 text-sm font-semibold text-gray-500"
             >
               Unavailable
@@ -277,7 +319,7 @@ export function Upgrade() {
         </div>
         <h1 className="mt-2 text-2xl font-bold text-white sm:text-3xl">Choose the tools you need.</h1>
         <p className="mt-2 max-w-2xl text-sm text-gray-400">
-          Start free, remove interruptions, or unlock the studio, live placement, and creator tools.
+          Start free, or go Pro to drop the ads and unlock the studio, live placement, and creator tools.
         </p>
       </header>
 
@@ -293,7 +335,7 @@ export function Upgrade() {
           <>
             <CreditCard size={18} className="mt-0.5 shrink-0 text-chakra" />
             <p className="text-sm text-gray-400">
-              Payments are not available on this deploy. A{' '}
+              Membership checkout is temporarily unavailable. A{' '}
               <Link to="/redeem" className="text-accent hover:underline">redeem code</Link> can still grant access.
             </p>
           </>
@@ -305,6 +347,11 @@ export function Upgrade() {
           {flash}
         </div>
       )}
+
+      {/* Self-serve cancellation. Sits ABOVE the tier grid on purpose: a
+          subscriber looking for the exit must not have to scroll past four
+          upsells to find it (FTC negative-option rule / state ARL statutes). */}
+      <ManageSubscriptionPanel className="mb-6" returnTo="/upgrade" />
 
       {trialRunning && activeTrial && (
         <div className="mb-6 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-leaf/40 bg-leaf/10 px-4 py-3">
@@ -333,8 +380,8 @@ export function Upgrade() {
           <h2 className="section-heading">Watch and browse</h2>
           <p className="mt-1 text-sm text-gray-500">Simple access for viewers and occasional creators.</p>
         </div>
-        <div className="grid gap-3 lg:grid-cols-2">
-          {TIERS.slice(0, 2).map((tier) => renderTier(tier, true))}
+        <div className="grid gap-3">
+          {TIERS.slice(0, 1).map((tier) => renderTier(tier, true))}
         </div>
       </section>
 
@@ -344,7 +391,7 @@ export function Upgrade() {
           <p className="mt-1 text-sm text-gray-500">The full TKO creation and community ladder.</p>
         </div>
         <div className="grid gap-3 lg:grid-cols-3">
-          {TIERS.slice(2).map((tier) => renderTier(tier))}
+          {TIERS.slice(1).map((tier) => renderTier(tier))}
         </div>
       </section>
 

@@ -1,0 +1,9 @@
+{
+  "slug": "shinobistrikerleague",
+  "appId": "com.shinobistrikerleague.app",
+  "appName": "Shinobi Striker League",
+  "androidDeepLinkScheme": "shinobistrikerleague",
+  "privacyUrl": "https://shinobistrikerleague.com/privacy",
+  "accountDeletionUrl": "https://shinobistrikerleague.com/account/delete",
+  "supportUrl": "https://shinobistrikerleague.com/help"
+}

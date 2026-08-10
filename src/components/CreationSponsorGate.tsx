@@ -64,11 +64,8 @@ export function CreationSponsorGate({ isPremium, onUnlocked }: Props) {
         Free accounts help keep {BRAND.name} running. You can’t submit your reel until this
         finishes
         {!IS_MOBILE_STORE_BUILD && (
-          <>
-            {' '}— or <Link to="/upgrade" className="text-accent hover:underline">upgrade to skip the wait</Link>
-          </>
-        )}
-        .
+          <> — or <Link to="/upgrade" className="text-accent hover:underline">upgrade to skip the wait</Link></>
+        )}.
       </p>
       <div className="min-h-[260px]">
         <AdSlot slotId="create-gate" shape="square" className="w-full" />

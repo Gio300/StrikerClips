@@ -49,6 +49,31 @@ export function splitPrizePool(
   return placements
 }
 
+/**
+ * Split an integer prize pool EVENLY across `winnerCount` placements without
+ * minting or losing a unit — the tie-split used when a tournament hits its end
+ * time with multiple leaders. Every amount differs by at most 1; the leftover
+ * units go to the earliest placements so the result is deterministic.
+ *
+ * (Not expressible through splitPrizePool's basis points: rounding bps like
+ * [3334,3333,3333] drifts amounts apart by far more than one unit on large
+ * pots, which would violate "split evenly".)
+ */
+export function splitPrizePoolEvenly(total: number, winnerCount: number): PrizePlacement[] {
+  if (!Number.isSafeInteger(total) || total < 0) {
+    throw new Error('Prize total must be a non-negative safe integer.')
+  }
+  if (!Number.isSafeInteger(winnerCount) || winnerCount < 1) {
+    throw new Error('At least one winner is required.')
+  }
+  const base = Math.floor(total / winnerCount)
+  const remainder = total - base * winnerCount
+  return Array.from({ length: winnerCount }, (_, index) => ({
+    placement: index + 1,
+    amount: base + (index < remainder ? 1 : 0),
+  }))
+}
+
 export function parsePrizeSplitBps(value: unknown): number[] {
   const raw = Array.isArray(value)
     ? value

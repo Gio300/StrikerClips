@@ -41,6 +41,9 @@ async function seedThreePlayerMatch() {
     signUp(app, 'charlie'),
   ])
   await entitleForAutoMerge(pool, players[2].id)
+  for (const player of players) {
+    await pool.query("update profiles set reel_usage_privacy='anyone' where id=$1", [player.id])
+  }
   const lobby = `consent-${Math.random()}`
   const started = Date.parse('2026-07-24T18:00:00Z')
   const clips: string[] = []

@@ -1,7 +1,6 @@
 import { useState, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
-import { useEntitlements } from '@/hooks/useEntitlements'
-import { hidesAds } from '@/lib/tiers'
+import { useAdsHidden } from '@/hooks/useAdsHidden'
 import { AdSlot } from '@/components/AdSlot'
 import { IS_MOBILE_STORE_BUILD } from '@/lib/storeBuild'
 
@@ -21,14 +20,23 @@ type AdGateProps = {
  * immediately; the point is only that they see an ad first, then the content is
  * revealed in place.
  *
- * Paid users — anyone where hidesAds(tier) is true (ad_free / pro / supporter /
- * creator / founder) — skip the gate entirely and see the content directly.
+ * Anyone entitled to ad-free — a paid MEMBER tier (ad_free / pro / supporter /
+ * creator / founder) OR a member of a league on a plan carrying `member_ad_free`
+ * — skips the gate entirely and sees the content directly (useAdsHidden()).
+ *
+ * While the league half of that answer is still in flight the gate holds a thin
+ * placeholder rather than rendering: showing the interstitial first and hiding
+ * it a moment later would flash an ad at someone who paid not to see one, and
+ * showing the content first and THEN dropping an interstitial over it would
+ * interrupt someone mid-read.
  */
 export function AdGate({ children, slotId = 'feed-inline', label, className = '' }: AdGateProps) {
-  const { tier } = useEntitlements()
-  // Paid (or founder) users never see the gate.
-  const [dismissed, setDismissed] = useState(() => hidesAds(tier))
+  const { adsHidden, resolved } = useAdsHidden()
+  const [closed, setClosed] = useState(false)
+  const dismissed = closed || adsHidden
+  const setDismissed = setClosed
 
+  if (!resolved) return <div className={`h-24 rounded-xl bg-dark-card/40 ${className}`} aria-hidden />
   if (dismissed) return <>{children}</>
 
   return (
@@ -50,9 +58,12 @@ export function AdGate({ children, slotId = 'feed-inline', label, className = ''
       <AdSlot slotId={slotId} shape="square" className="w-full" />
 
       <div className="flex items-center justify-between gap-3 flex-wrap">
+        {/* Prices live in ONE place (src/pages/Upgrade.tsx) and the $1.99
+            Ad-Free rung was retired, so this pitches the destination, not a
+            figure. A CTA quoting a dead price is how the last one drifted. */}
         {!IS_MOBILE_STORE_BUILD && (
           <Link to="/upgrade" className="text-xs text-accent hover:underline">
-            Go Ad-Free for $1.99/mo
+            Go ad-free with Pro
           </Link>
         )}
         <button
@@ -68,8 +79,9 @@ export function AdGate({ children, slotId = 'feed-inline', label, className = ''
 }
 
 /**
- * Site-level house-ad slot that only renders for free users (hidesAds(tier) is
- * false). Paid users get nothing. Drop it anywhere a lightweight banner fits.
+ * Site-level house-ad slot that only renders for free users. Kept as a thin
+ * wrapper for the existing call sites; AdSlot self-gates on the same
+ * useAdsHidden() answer, so this is belt-and-braces rather than the gate.
  */
 export function FreeUserAdSlot({
   slotId = 'feed-inline',
@@ -80,7 +92,7 @@ export function FreeUserAdSlot({
   dismissable?: boolean
   className?: string
 }) {
-  const { tier } = useEntitlements()
-  if (hidesAds(tier)) return null
+  const { adsHidden, resolved } = useAdsHidden()
+  if (!resolved || adsHidden) return null
   return <AdSlot slotId={slotId} shape="banner" dismissable={dismissable} className={className} />
 }

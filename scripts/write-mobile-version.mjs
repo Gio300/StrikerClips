@@ -17,7 +17,7 @@ const manifest = {
   builtAt,
   apkUrl:
     process.env.VITE_DOWNLOAD_ANDROID ||
-    'https://storage.googleapis.com/reelone-498406-downloads/TKO-latest.apk',
+    'https://github.com/Gio300/StrikerClips/releases/latest/download/app-debug.apk',
 }
 
 const output = path.join(root, 'public', 'mobile-version.json')

@@ -27,6 +27,7 @@ import {
   type OBSStreamDestination,
   type OBSProgramSourceStatus,
 } from '@/lib/obs'
+import { apiUrl } from '@/lib/apiBase'
 import { Soundboard } from '@/components/Soundboard'
 import { useAuth } from '@/hooks/useAuth'
 import { useAutoMerge } from '@/hooks/useAutoMerge'
@@ -96,7 +97,7 @@ export function OBSPanel() {
 
     void (async () => {
       const [healthResult, destinationResult, listingResult] = await Promise.all([
-        fetch('/api/health', { headers: { Accept: 'application/json' } })
+        fetch(apiUrl('/health'), { headers: { Accept: 'application/json' } })
           .then((response) => response.ok)
           .catch(() => false),
         status === 'connected'

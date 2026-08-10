@@ -4,7 +4,6 @@ import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/hooks/useAuth'
 import { CreatorPayoutsCard } from '@/components/CreatorPayoutsCard'
 import { donationsEnabled } from '@/lib/featureFlags'
-import { IS_MOBILE_STORE_BUILD } from '@/lib/storeBuild'
 import type { Donation, Reel } from '@/types/database'
 
 /**
@@ -135,9 +134,7 @@ export function Dashboard() {
     <div className="p-4 sm:p-6 lg:p-8 max-w-5xl mx-auto">
       <h1 className="text-2xl font-bold mb-1">Creator Dashboard</h1>
       <p className="text-gray-400 mb-6">
-        {IS_MOBILE_STORE_BUILD
-          ? 'Your reach and creator activity in one place.'
-          : 'Your reach, your tips, your payouts — all in one place.'}
+        Your reach, your tips, your payouts — all in one place.
       </p>
 
       {/* Stat cards */}
@@ -155,19 +152,13 @@ export function Dashboard() {
       <div className="grid lg:grid-cols-3 gap-6">
         {/* Left column — payouts + trend */}
         <div className="lg:col-span-2 space-y-6">
-          {!IS_MOBILE_STORE_BUILD && (
-            <CreatorPayoutsCard paidTotalCents={totalCents} pendingDonations={donations.filter((d) => d.status === 'pending').length} />
-          )}
+          <CreatorPayoutsCard paidTotalCents={totalCents} pendingDonations={donations.filter((d) => d.status === 'pending').length} />
 
           <div className="rounded-xl border border-dark-border bg-dark-card p-5">
             <div className="flex items-baseline justify-between mb-4">
               <h2 className="font-semibold">7-day tip trend</h2>
               <span className="text-xs text-gray-500">
-                {donationsEnabled
-                  ? 'Last 7 days of paid tips'
-                  : IS_MOBILE_STORE_BUILD
-                    ? 'Tip activity is not available in the mobile app.'
-                    : 'Connect Stripe to start receiving tips'}
+                {donationsEnabled ? 'Last 7 days of paid tips' : 'Connect Stripe to start receiving tips'}
               </span>
             </div>
             <Sparkline data={weeklyTotals} />
@@ -179,9 +170,7 @@ export function Dashboard() {
               <p className="text-gray-400 text-sm">
                 No paid tips yet. {donationsEnabled
                   ? 'Share your profile link so fans can support you.'
-                  : IS_MOBILE_STORE_BUILD
-                    ? 'Tip activity is not available in the mobile app.'
-                    : 'Stripe is not configured on this deploy yet — once it is, your tips will appear here.'}
+                  : 'Stripe is not configured on this deploy yet — once it is, your tips will appear here.'}
               </p>
             ) : (
               <ul className="divide-y divide-dark-border">

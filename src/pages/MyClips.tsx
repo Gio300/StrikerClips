@@ -7,12 +7,19 @@ import { thumbUrl } from '@/lib/youtubeConnect'
 import { reelIdsFeaturing } from '@/lib/reelParticipants'
 import { PlayerProducedVideos } from '@/components/PlayerProducedVideos'
 import { AutoMergeStatus } from '@/components/AutoMergeStatus'
+import { reelBadgeLabel, reelStatus } from '@/lib/reelStatus'
+import {
+  detectedBattleLabel,
+  detectedBattleWatchUrl,
+  isVisibleDetectedBattle,
+  type DetectedBattleRow,
+} from '@/lib/detectedBattles'
 import type { Reel, Clip } from '@/types/database'
 
 /**
  * My Clips — everything the signed-in user has made, newest first. This is the
  * "where did my clip go" answer: after a reel finishes it lands here with a
- * "ready" badge (and a one-time "just made" banner right after creation).
+ * truthful saved/playable/produced badge (and a one-time saved banner).
  */
 export function MyClips() {
   const { user } = useAuth()
@@ -22,6 +29,7 @@ export function MyClips() {
   // Reels the user APPEARS in but didn't upload — flagged "you're in it".
   const [featuredIn, setFeaturedIn] = useState<Set<string>>(new Set())
   const [thumbs, setThumbs] = useState<Record<string, string>>({})
+  const [detectedBattles, setDetectedBattles] = useState<DetectedBattleRow[]>([])
   const [loading, setLoading] = useState(true)
   const [banner, setBanner] = useState(!!justCreated)
   const [query, setQuery] = useState('')
@@ -41,13 +49,19 @@ export function MyClips() {
       // multi-angle reel belongs in the list of everyone who appears in it, so
       // we union the reels I uploaded with the reels that list me as a
       // participant (see lib/reelParticipants + the reel_participants table).
-      const [mineRes, featuredIds] = await Promise.all([
+      const [mineRes, featuredIds, detectedRes] = await Promise.all([
         supabase
           .from('reels')
           .select('*')
           .eq('user_id', user.id)
           .order('created_at', { ascending: false }),
         reelIdsFeaturing(user.id),
+        supabase
+          .from('clip_records')
+          .select('id, segment_id, youtube_id, source_start_sec, source_end_sec, duration_sec, boundary_confidence, score_verification_status, mode, map, recorded_at, created_at')
+          .eq('player_id', user.id)
+          .eq('score_verification_status', 'shadow')
+          .order('recorded_at', { ascending: false }),
       ])
       const mine = (mineRes.data ?? []) as Reel[]
       const mineIds = new Set(mine.map((r) => r.id))
@@ -63,6 +77,9 @@ export function MyClips() {
       if (!alive) return
       setFeaturedIn(new Set(featured.map((r) => r.id)))
       setReels(rows)
+      setDetectedBattles(
+        ((detectedRes.data ?? []) as unknown as DetectedBattleRow[]).filter(isVisibleDetectedBattle),
+      )
       setLoading(false)
       // Best-effort thumbnail: first YouTube clip of each reel.
       const firstIds = rows.map((r) => r.clip_ids?.[0]).filter(Boolean) as string[]
@@ -102,13 +119,58 @@ export function MyClips() {
 
       {banner && (
         <div className="mb-5 rounded-lg border border-leaf/40 bg-leaf/10 text-leaf px-4 py-3 text-sm flex items-center gap-2">
-          <span>✓</span> Your clip is ready — it's at the top of the list.
+          <span>✓</span> Your reel is saved — it's at the top of the list.
         </div>
       )}
 
       {/* Auto-merge unlock: ON when YouTube is connected AND a paid tier is
           active; otherwise a prompt to connect / subscribe. */}
       {user && <AutoMergeStatus className="mb-5" />}
+
+      {!loading && detectedBattles.length > 0 && (
+        <section className="mb-7" aria-labelledby="detected-battles-title">
+          <div className="mb-3">
+            <h2 id="detected-battles-title" className="text-lg font-semibold text-white">
+              Detected livestream battles
+            </h2>
+            <p className="mt-1 text-xs text-gray-500">
+              Found automatically in your connected YouTube footage. Screenshots and manual result claims do not qualify for power.
+            </p>
+          </div>
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            {detectedBattles.map((battle) => (
+              <a
+                key={battle.id}
+                href={detectedBattleWatchUrl(battle)}
+                target="_blank"
+                rel="noreferrer"
+                className="group overflow-hidden rounded-xl border border-accent/30 bg-dark-card transition-colors hover:border-accent"
+              >
+                <div className="relative aspect-video bg-dark">
+                  <img
+                    src={thumbUrl(String(battle.youtube_id), 'mq')}
+                    alt=""
+                    className="h-full w-full object-cover"
+                  />
+                  <span className="absolute left-2 top-2 rounded border border-accent/40 bg-dark/90 px-2 py-1 text-[10px] font-bold text-accent">
+                    SYSTEM DETECTED
+                  </span>
+                </div>
+                <div className="p-3">
+                  <h3 className="font-semibold text-white group-hover:text-accent">
+                    {detectedBattleLabel(battle.mode)}
+                  </h3>
+                  <p className="mt-1 text-xs text-gray-500">
+                    {battle.recorded_at ? new Date(battle.recorded_at).toLocaleDateString() : 'Livestream archive'}
+                    {' · '}Watch from {Math.floor(Number(battle.source_start_sec) / 60)}:{String(Math.floor(Number(battle.source_start_sec) % 60)).padStart(2, '0')}
+                  </p>
+                  <p className="mt-2 text-xs text-leaf">Participation counted · result points await verification</p>
+                </div>
+              </a>
+            ))}
+          </div>
+        </section>
+      )}
 
       {!loading && reels.length > 0 && (
         <div className="mb-6">
@@ -124,7 +186,7 @@ export function MyClips() {
 
       {loading ? (
         <div className="py-16 text-center text-accent animate-pulse">Loading your clips…</div>
-      ) : reels.length === 0 ? (
+      ) : reels.length === 0 && detectedBattles.length === 0 ? (
         <div className="py-16 text-center text-gray-400">
           <p>No clips yet.</p>
           <p className="text-sm mt-1">Make your first one — pull from your squad, describe a moment, or paste a link.</p>
@@ -132,7 +194,7 @@ export function MyClips() {
             Create a clip
           </Link>
         </div>
-      ) : (
+      ) : reels.length > 0 ? (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
           {filtered.length === 0 ? (
             <p className="col-span-full py-10 text-center text-gray-400">No clips match “{query}”.</p>
@@ -155,14 +217,14 @@ export function MyClips() {
                   className={`absolute top-2 left-2 text-[10px] font-bold px-1.5 py-0.5 rounded border ${
                     featuredIn.has(reel.id)
                       ? 'bg-chakra/20 text-chakra border-chakra/30'
-                      : 'bg-leaf/20 text-leaf border-leaf/30'
+                      : reelStatus(reel) === 'saved'
+                        ? 'bg-yellow-500/15 text-yellow-200 border-yellow-500/40'
+                        : 'bg-leaf/20 text-leaf border-leaf/30'
                   }`}
                 >
                   {featuredIn.has(reel.id)
                     ? "YOU'RE IN IT"
-                    : i === 0 && justCreated
-                      ? 'JUST MADE'
-                      : 'READY'}
+                    : reelBadgeLabel(reel, i === 0 && !!justCreated)}
                 </span>
               </div>
               <div className="p-3">
@@ -175,7 +237,7 @@ export function MyClips() {
             </Link>
           ))}
         </div>
-      )}
+      ) : null}
 
       {/* Produced multi-angle videos this player appears in (clip_records with a
           youtube_id), joined across everyone in each video. */}

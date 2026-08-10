@@ -3,7 +3,7 @@ import { parseCommand } from './voiceCommands'
 
 describe('parseCommand — navigation', () => {
   it('routes common destinations', () => {
-    expect(parseCommand('go to rankings')).toMatchObject({ kind: 'navigate', path: '/rankings' })
+    expect(parseCommand('go to rankings')).toMatchObject({ kind: 'navigate', path: '/profile' })
     expect(parseCommand('open browser')).toMatchObject({ kind: 'navigate', path: '/browser' })
     expect(parseCommand('show me reels')).toMatchObject({ kind: 'navigate', path: '/reels' })
     expect(parseCommand('tournaments')).toMatchObject({ kind: 'navigate', path: '/tournaments' })

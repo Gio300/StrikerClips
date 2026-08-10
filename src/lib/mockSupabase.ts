@@ -94,6 +94,10 @@ const auth = {
   },
   async signUp(creds: any) { const email = creds?.email; const username = creds?.options?.data?.username ?? creds?.username; const u = makeUser(email, username); session = { user: u, access_token: 'mock' }; seedProfile(u); persist(); emit('SIGNED_IN'); return { data: { user: u, session }, error: null } },
   async signInWithPassword({ email }: any) { const u = makeUser(email); session = { user: u, access_token: 'mock' }; seedProfile(u); persist(); emit('SIGNED_IN'); return { data: { user: u, session }, error: null } },
+  async requestPasswordReset() { return { data: { ok: true }, error: null } },
+  async resetPassword() { return { data: { user: session?.user ?? null, session }, error: null } },
+  async createTransfer(targetOrigin: string, returnPath = '/') { return { data: { ok: true, url: `${targetOrigin}${returnPath}` }, error: null } },
+  async exchangeTransferCode() { return { data: { user: session?.user ?? null, session, return_path: '/' }, error: null } },
   async signInWithOAuth() { const u = makeUser(); session = { user: u, access_token: 'mock' }; seedProfile(u); persist(); emit('SIGNED_IN'); return { data: { provider: 'google', url: '' }, error: null } },
   async signOut() { session = null; persist(); emit('SIGNED_OUT'); return { error: null } },
   async refreshSession() { return { data: { session }, error: null } },
@@ -107,6 +111,7 @@ class Query implements PromiseLike<{ data: any; count: number | null; error: nul
   private payload: any = null
   private orderKey?: { k: string; asc: boolean }
   private limitN?: number
+  private offsetN = 0
   private head = false
   private wantCount = false
   constructor(table: string) {
@@ -129,7 +134,14 @@ class Query implements PromiseLike<{ data: any; count: number | null; error: nul
   like(k: string, v: string) { const re = likeToRegExp(String(v), ''); this.preds.push((r) => re.test(String(r[k] ?? ''))); return this }
   contains() { return this }
   or() { return this } not() { return this } match() { return this } filter() { return this }
-  range() { return this } overlaps() { return this } containedBy() { return this }
+  range(from: number, to: number) {
+    const start = Number.isFinite(from) ? Math.max(0, Math.floor(from)) : 0
+    const end = Number.isFinite(to) ? Math.max(start, Math.floor(to)) : start
+    this.offsetN = start
+    this.limitN = end - start + 1
+    return this
+  }
+  overlaps() { return this } containedBy() { return this }
   textSearch() { return this }
   order(k: string, o?: { ascending?: boolean }) { this.orderKey = { k, asc: o?.ascending !== false }; return this }
   limit(n: number) { this.limitN = n; return this }
@@ -143,17 +155,23 @@ class Query implements PromiseLike<{ data: any; count: number | null; error: nul
     if (this.op === 'update') { out.forEach((r) => Object.assign(r, this.payload)); return out }
     if (this.op === 'delete') { for (const r of out) { const i = this.rows.indexOf(r); if (i >= 0) this.rows.splice(i, 1) } return out }
     if (this.orderKey) out = [...out].sort((a, b) => (a[this.orderKey!.k] > b[this.orderKey!.k] ? 1 : -1) * (this.orderKey!.asc ? 1 : -1))
-    if (this.limitN != null) out = out.slice(0, this.limitN)
+    if (this.offsetN > 0 || this.limitN != null) {
+      out = out.slice(this.offsetN, this.limitN == null ? undefined : this.offsetN + this.limitN)
+    }
     return out
   }
-  single() { return Promise.resolve({ data: this.apply()[0] ?? null, error: null }) }
-  maybeSingle() { return Promise.resolve({ data: this.apply()[0] ?? null, error: null }) }
-  then<R1 = { data: any; count: number | null; error: null }, R2 = never>(
-    res?: ((v: { data: any; count: number | null; error: null }) => R1 | PromiseLike<R1>) | null,
+  // `status` mirrors realSupabase + the hosted PostgrestResponse. The in-memory
+  // store cannot fail, so it is always 200 — but callers that CLASSIFY failures
+  // by status (chat's incremental poll) must see the same shape from all three
+  // backends, or the mock silently exercises a different code path than prod.
+  single() { return Promise.resolve({ data: this.apply()[0] ?? null, error: null, status: 200 }) }
+  maybeSingle() { return Promise.resolve({ data: this.apply()[0] ?? null, error: null, status: 200 }) }
+  then<R1 = { data: any; count: number | null; error: null; status: number }, R2 = never>(
+    res?: ((v: { data: any; count: number | null; error: null; status: number }) => R1 | PromiseLike<R1>) | null,
     rej?: ((reason: any) => R2 | PromiseLike<R2>) | null,
   ): Promise<R1 | R2> {
     const out = this.apply()
-    return Promise.resolve({ data: this.head ? null : out, count: this.wantCount ? out.length : null, error: null }).then(res, rej)
+    return Promise.resolve({ data: this.head ? null : out, count: this.wantCount ? out.length : null, error: null, status: 200 }).then(res, rej)
   }
 }
 
@@ -198,6 +216,58 @@ export const mockSupabase: any = {
           persist(); emit('USER_UPDATED')
         }
         return { data: { ok: true, tier: 'pro', expires_at: expires }, error: null }
+      }
+      // Server-owned DM endpoints (mirror server/app.ts dm-open / dm-group-open /
+      // dm-send shapes) so the mock-backend dev flow can actually chat.
+      if (name === 'dm-open') {
+        const me = String(session?.user?.id || 'mock-user-1')
+        const target = String(opts?.body?.targetUserId ?? '').trim()
+        if (!target) return { data: { ok: false, error: 'This conversation is unavailable.' }, error: null }
+        const convos = (db.dm_conversations ??= [])
+        const parts = (db.dm_participants ??= [])
+        const mine = new Set(parts.filter((p) => p.user_id === me).map((p) => p.conversation_id))
+        const existing = convos.find((c) => !c.name && mine.has(c.id)
+          && parts.some((p) => p.conversation_id === c.id && p.user_id === target)
+          && parts.filter((p) => p.conversation_id === c.id).length === 2)
+        if (existing) return { data: { ok: true, conversation_id: existing.id }, error: null }
+        const now = new Date().toISOString()
+        const convo = { id: uuid(), name: null, created_at: now, updated_at: now }
+        convos.push(convo)
+        parts.push({ conversation_id: convo.id, user_id: me, joined_at: now },
+                   { conversation_id: convo.id, user_id: target, joined_at: now })
+        return { data: { ok: true, conversation_id: convo.id }, error: null }
+      }
+      if (name === 'dm-group-open') {
+        const me = String(session?.user?.id || 'mock-user-1')
+        const now = new Date().toISOString()
+        const convo = { id: uuid(), name: String(opts?.body?.name ?? '').trim() || 'group chat', created_at: now, updated_at: now }
+        ;(db.dm_conversations ??= []).push(convo)
+        const parts = (db.dm_participants ??= [])
+        parts.push({ conversation_id: convo.id, user_id: me, joined_at: now })
+        for (const uname of (opts?.body?.usernames ?? []) as string[]) {
+          const profile = (db.profiles ?? []).find((p) => String(p.username).toLowerCase() === String(uname).toLowerCase())
+          if (profile && profile.id !== me) parts.push({ conversation_id: convo.id, user_id: profile.id, joined_at: now })
+        }
+        return { data: { ok: true, conversation_id: convo.id }, error: null }
+      }
+      if (name === 'dm-send') {
+        const conversationId = String(opts?.body?.conversationId ?? '').trim()
+        const content = String(opts?.body?.content ?? '').trim()
+        if (!conversationId || !content || content.length > 1000) {
+          return { data: { ok: false, error: 'Messages must be between 1 and 1,000 characters.' }, error: null }
+        }
+        // Sender = signed-in mock user, else the userId hint the lib sends along
+        // (the REAL server ignores that field and derives the sender from auth).
+        const sender = String(session?.user?.id || opts?.body?.userId || 'mock-user-1')
+        const participants = (db.dm_participants ?? []).filter((p) => p.conversation_id === conversationId)
+        if (participants.length > 0 && !participants.some((p) => p.user_id === sender)) {
+          return { data: { ok: false, error: 'This conversation is unavailable.' }, error: null }
+        }
+        const message = { id: uuid(), created_at: new Date().toISOString(), conversation_id: conversationId, user_id: sender, content }
+        ;(db.dm_messages ??= []).push(message)
+        const convo = (db.dm_conversations ?? []).find((c) => c.id === conversationId)
+        if (convo) convo.updated_at = message.created_at
+        return { data: { ok: true, message }, error: null }
       }
       const econ = economyFn(name, opts?.body ?? {})
       if (econ) return { data: econ, error: null }

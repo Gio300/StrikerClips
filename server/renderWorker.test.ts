@@ -6,7 +6,13 @@ import { describe, it, expect } from 'vitest'
 import request from 'supertest'
 import { makeDb, entitleForAutoMerge } from './testHarness'
 import { createApp } from './app'
-import { drainQueue, runWorkerOnce, claimNextJob, type RenderAndUpload } from './renderWorker'
+import {
+  assertRenderJobHasCombatEvidence,
+  drainQueue,
+  runWorkerOnce,
+  claimNextJob,
+  type RenderAndUpload,
+} from './renderWorker'
 
 const ADULT_DOB = '1995-06-15'
 
@@ -33,6 +39,9 @@ async function seedMatchJob(app: any, pool: any) {
   const bob = await signUp(app, `b_${Math.random()}@kc.gg`, `bob_${Math.floor(Math.random() * 1e6)}`)
   // Bob is the auto-match trigger; entitle him so the pipeline is not gated off.
   await entitleForAutoMerge(pool, bob.id)
+  for (const player of [alice, bob]) {
+    await pool.query("update profiles set reel_usage_privacy='anyone' where id=$1", [player.id])
+  }
   const t0 = new Date('2026-07-20T18:00:00Z').getTime()
   const lobby = `lobby_${Math.random()}`
   await addClip(app, alice, { player_handle: 'alice', lobby_id: lobby, recorded_at: new Date(t0).toISOString(), duration_sec: 300 })
@@ -46,6 +55,42 @@ async function seedMatchJob(app: any, pool: any) {
 }
 
 describe('render worker — queue → video → notify', () => {
+  it('requires frame-analyzed Shinobi match evidence before a real render can upload', async () => {
+    const pool = makeDb()
+    const app = createApp(pool)
+    await seedMatchJob(app, pool)
+    const row = (await pool.query('select * from render_jobs')).rows[0]
+    const job = {
+      id: String(row.id), match_id: String(row.match_id),
+      clip_ids: row.clip_ids.map(String), participant_ids: row.participant_ids.map(String),
+      attempts: Number(row.attempts),
+    }
+    await expect(assertRenderJobHasCombatEvidence(pool, job)).rejects.toThrow('combat verification failed')
+
+    for (let index = 0; index < job.clip_ids.length; index++) {
+      const clip = (await pool.query('select player_id from clip_records where id=$1', [job.clip_ids[index]])).rows[0]
+      const source = (await pool.query(
+        `insert into media_sources
+           (owner_id,provider,source_kind,external_id,source_url,source_fingerprint,status)
+         values ($1,'youtube','youtube_upload',$2,$3,$4,'complete') returning id`,
+        [clip.player_id, `combat-${index}`, `https://youtu.be/combat-${index}`, `youtube:combat-${index}`],
+      )).rows[0]
+      const segment = (await pool.query(
+        `insert into match_segments
+           (source_id,segment_index,segment_fingerprint,start_sec,end_sec,start_reason,end_reason,boundary_confidence)
+         values ($1,0,$2,0,120,'hud','result',0.95) returning id`,
+        [source.id, `segment:combat-${index}`],
+      )).rows[0]
+      await pool.query(
+        `update clip_records
+            set source_id=$1,segment_id=$2,boundary_confidence=0.95,score_verification_status='shadow'
+          where id=$3`,
+        [source.id, segment.id, job.clip_ids[index]],
+      )
+    }
+    await expect(assertRenderJobHasCombatEvidence(pool, job)).resolves.toBeUndefined()
+  })
+
   it('does not claim a pair before its collection deadline', async () => {
     const pool = makeDb()
     await pool.query(

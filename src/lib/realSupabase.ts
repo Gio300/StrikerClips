@@ -15,6 +15,8 @@
  *   POST /api/auth/signup {email,password,username?} -> {user,token}
  *   POST /api/auth/login  {email,password}           -> {user,token}
  *   GET  /api/auth/me     (Bearer token)             -> {user}
+ *   POST /api/auth/password/forgot|reset             -> recovery flow
+ *   POST /api/auth/transfer/start|exchange            -> one-time origin handoff
  *   POST /api/db          {table,action,columns,filters,order,limit,single,count,values} -> {data,count,error}
  *   POST /api/storage/:bucket {path,name,contentType} -> {path}
  *   POST /api/fn/:name    {...body}                   -> {data,error} (or raw)
@@ -24,16 +26,12 @@
  */
 
 import { API_BASE } from './apiBase'
-
-const TOKEN_KEY = 'kc_token'
+import { currentAuthToken, readAuthToken, writeAuthToken } from './authTokenStorage'
 
 type SupaError = { message: string } | null
 
 function getToken(): string | null {
-  try { return localStorage.getItem(TOKEN_KEY) } catch { return null }
-}
-function setToken(t: string | null) {
-  try { t ? localStorage.setItem(TOKEN_KEY, t) : localStorage.removeItem(TOKEN_KEY) } catch { /* noop */ }
+  return currentAuthToken()
 }
 
 /** Low-level fetch wrapper. Returns { data, error, status } and never throws. */
@@ -71,14 +69,37 @@ let session: { user: any; access_token: string } | null = null
 const listeners: ((event: string, session: any) => void)[] = []
 const emit = (event: string) => listeners.forEach((cb) => cb(event, session))
 
+/**
+ * Does this /auth/me answer prove the TOKEN is bad?
+ *
+ * Only the server rejecting the credential does. `apiFetch` never throws — it
+ * catches its own network error and resolves with `status: 0` — so without this
+ * check every failure looked identical to "signed out", and hydration runs on
+ * EVERY cold start. One tunnel, one dead zone, one Cloud Run cold-start 5xx and
+ * we deleted the user's `kc_token` from localStorage. There is no password
+ * reset in this product (server/app.ts exposes only signup/login/me), so that
+ * user's only route back is remembering their password or making a NEW account
+ * — which starts at power 0. That is the mechanism behind "I lost my power
+ * level"; the account row was never touched.
+ *
+ * Fail CLOSED on identity: keep the token unless told, by the server, that it
+ * is invalid. A stale token costs one more rejected request. A wrongly deleted
+ * one costs the account.
+ */
+function tokenIsRejected(status: number): boolean {
+  return status === 401 || status === 403
+}
+
 /** Promise that resolves once the initial /auth/me hydration has completed. */
 let hydration: Promise<void> = (async () => {
-  const token = getToken()
+  const token = await readAuthToken()
   if (!token) return
-  const { data, error } = await apiFetch('/auth/me', { method: 'GET' })
+  const { data, error, status } = await apiFetch('/auth/me', { method: 'GET' })
   if (error || !data?.user) {
     session = null
-    setToken(null)
+    // Network error, 5xx, 429 -> we simply do not know yet. Keep the token so
+    // the next successful call signs them back in.
+    if (tokenIsRejected(status)) await writeAuthToken(null)
   } else {
     session = { user: data.user, access_token: token }
     emit('SIGNED_IN')
@@ -86,10 +107,13 @@ let hydration: Promise<void> = (async () => {
 })()
 
 async function reauthenticate(): Promise<void> {
-  const token = getToken()
+  const token = await readAuthToken()
   if (!token) { session = null; return }
-  const { data, error } = await apiFetch('/auth/me', { method: 'GET' })
-  if (error || !data?.user) { session = null; setToken(null) }
+  const { data, error, status } = await apiFetch('/auth/me', { method: 'GET' })
+  if (error || !data?.user) {
+    session = null
+    if (tokenIsRejected(status)) await writeAuthToken(null)
+  }
   else session = { user: data.user, access_token: token }
 }
 
@@ -124,10 +148,13 @@ const auth = {
         terms_version: meta.terms_version ?? '',
         privacy_accepted: meta.privacy_accepted === true,
         privacy_version: meta.privacy_version ?? '',
+        youtube_url: meta.youtube_url ?? '',
+        notifications_requested: meta.notifications_requested === true,
+        age_consent_13_plus: meta.age_consent_13_plus === true,
       },
     })
     if (error) return { data: { user: null, session: null }, error }
-    setToken(data.token)
+    await writeAuthToken(data.token)
     session = { user: data.user, access_token: data.token }
     emit('SIGNED_IN')
     return { data: { user: data.user, session }, error: null }
@@ -136,17 +163,50 @@ const auth = {
     const { email, password } = credentials ?? {}
     const { data, error } = await apiFetch('/auth/login', { method: 'POST', body: { email, password } })
     if (error) return { data: { user: null, session: null }, error }
-    setToken(data.token)
+    await writeAuthToken(data.token)
     session = { user: data.user, access_token: data.token }
     emit('SIGNED_IN')
     return { data: { user: data.user, session }, error: null }
+  },
+  async requestPasswordReset(email: string, origin?: string) {
+    const { data, error } = await apiFetch('/auth/password/forgot', {
+      method: 'POST',
+      body: { email, origin: origin || (typeof window !== 'undefined' ? window.location.origin : '') },
+    })
+    return { data, error }
+  },
+  async resetPassword(token: string, password: string) {
+    const { data, error } = await apiFetch('/auth/password/reset', {
+      method: 'POST', body: { token, password },
+    })
+    if (error) return { data: { user: null, session: null }, error }
+    await writeAuthToken(data.token)
+    session = { user: data.user, access_token: data.token }
+    emit('SIGNED_IN')
+    return { data: { user: data.user, session }, error: null }
+  },
+  async createTransfer(targetOrigin: string, returnPath = '/') {
+    const { data, error } = await apiFetch('/auth/transfer/start', {
+      method: 'POST', body: { target_origin: targetOrigin, return_path: returnPath },
+    })
+    return { data, error }
+  },
+  async exchangeTransferCode(code: string, targetOrigin: string) {
+    const { data, error } = await apiFetch('/auth/transfer/exchange', {
+      method: 'POST', body: { code, target_origin: targetOrigin },
+    })
+    if (error) return { data: { user: null, session: null }, error }
+    await writeAuthToken(data.token)
+    session = { user: data.user, access_token: data.token }
+    emit('SIGNED_IN')
+    return { data: { user: data.user, session, return_path: data.return_path }, error: null }
   },
   async signInWithOAuth() {
     // OAuth is not wired into the Express backend yet — surface a clear error.
     return { data: { provider: 'google', url: '' }, error: { message: 'OAuth sign-in is not available on this backend.' } }
   },
   async signOut() {
-    setToken(null)
+    await writeAuthToken(null)
     session = null
     emit('SIGNED_OUT')
     return { error: null }
@@ -186,12 +246,29 @@ function stripEmbeds(cols?: string): string {
   return out || '*'
 }
 
-class Query implements PromiseLike<{ data: any; count: number | null; error: SupaError }> {
+/**
+ * What one query resolves to.
+ *
+ * `status` is the HTTP status the request came back with, and it is NOT
+ * cosmetic: this shim never throws (apiFetch catches its own network error and
+ * resolves with status 0), so the status is the ONLY thing that distinguishes a
+ * failure a caller should retry — 0 offline, 429 rate limited, 5xx, a 400 from
+ * a connection-pool timeout — from one it should give up on. Chat's incremental
+ * poll classifies on exactly this (src/lib/chatMessages.ts classifyPollFailure);
+ * without it, one Wi-Fi hiccup read as "this backend cannot do that" and froze
+ * the room for the life of the mount. The hosted supabase-js client returns
+ * `status` on every PostgrestResponse too, so this matches, rather than
+ * invents, the contract.
+ */
+type QueryResult = { data: any; count: number | null; error: SupaError; status: number }
+
+class Query implements PromiseLike<QueryResult> {
   private action: 'select' | 'insert' | 'update' | 'delete' | 'upsert' = 'select'
   private columns = '*'
   private filters: Filter[] = []
   private orderSpec: { column: string; ascending: boolean } | null = null
   private limitN: number | null = null
+  private offsetN: number | null = null
   private values: any = null
   private isSingle = false
   private count: 'exact' | 'planned' | 'estimated' | null = null
@@ -221,7 +298,13 @@ class Query implements PromiseLike<{ data: any; count: number | null; error: Sup
   // Operators we can't cleanly map to a single {col,op,val} are no-ops.
   or() { return this }
   not() { return this }
-  range() { return this }
+  range(from: number, to: number) {
+    const start = Number.isFinite(from) ? Math.max(0, Math.floor(from)) : 0
+    const end = Number.isFinite(to) ? Math.max(start, Math.floor(to)) : start
+    this.offsetN = start
+    this.limitN = end - start + 1
+    return this
+  }
   overlaps() { return this }
   containedBy() { return this }
   textSearch() { return this }
@@ -241,6 +324,7 @@ class Query implements PromiseLike<{ data: any; count: number | null; error: Sup
       filters: this.filters,
       order: this.orderSpec,
       limit: this.limitN,
+      offset: this.offsetN,
       single: this.isSingle,
       count: this.count,
       head: this.head,
@@ -248,13 +332,16 @@ class Query implements PromiseLike<{ data: any; count: number | null; error: Sup
     }
   }
 
-  private async run(): Promise<{ data: any; count: number | null; error: SupaError }> {
-    const { data: body, error } = await apiFetch('/db', { method: 'POST', body: this.body() })
-    if (error) return { data: null, count: null, error }
+  private async run(): Promise<QueryResult> {
+    const { data: body, error, status } = await apiFetch('/db', { method: 'POST', body: this.body() })
+    // status 0 is apiFetch's "the fetch itself failed" — the network, never the
+    // schema. Carrying it through is what lets a caller retry instead of
+    // concluding the backend does not support the query.
+    if (error) return { data: null, count: null, error, status }
     const data = body && Object.prototype.hasOwnProperty.call(body, 'data') ? body.data : body
     const count = body && body.count != null ? body.count : null
     const innerErr: SupaError = body && body.error ? (typeof body.error === 'string' ? { message: body.error } : body.error) : null
-    return { data, count, error: innerErr }
+    return { data, count, error: innerErr, status }
   }
 
   private static pickOne(data: any): any {
@@ -264,17 +351,19 @@ class Query implements PromiseLike<{ data: any; count: number | null; error: Sup
 
   single() {
     this.isSingle = true
-    return this.run().then((r) => ({ data: Query.pickOne(r.data), error: r.error }))
+    return this.run().then((r) => ({ data: Query.pickOne(r.data), error: r.error, status: r.status }))
   }
   maybeSingle() {
     this.isSingle = true
-    return this.run().then((r) => ({ data: Query.pickOne(r.data), error: r.error }))
+    return this.run().then((r) => ({ data: Query.pickOne(r.data), error: r.error, status: r.status }))
   }
   then<R1 = any, R2 = never>(
-    res?: ((v: { data: any; count: number | null; error: SupaError }) => R1 | PromiseLike<R1>) | null,
+    res?: ((v: QueryResult) => R1 | PromiseLike<R1>) | null,
     rej?: ((reason: any) => R2 | PromiseLike<R2>) | null,
   ): Promise<R1 | R2> {
-    return this.run().then((r) => ({ data: this.head ? null : r.data, count: r.count, error: r.error })).then(res, rej)
+    return this.run()
+      .then((r) => ({ data: this.head ? null : r.data, count: r.count, error: r.error, status: r.status }))
+      .then(res, rej)
   }
 }
 

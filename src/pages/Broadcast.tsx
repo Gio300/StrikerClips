@@ -23,8 +23,10 @@ import {
   loadTheme,
   saveTheme,
   normalizeAccent,
+  adoptLeagueKit,
   type BroadcastTheme,
 } from '@/lib/broadcastTheme'
+import { fetchMemberLeague, type LeagueConfig } from '@/lib/leagueConfig'
 import {
   cameraGrid,
   directorPlan,
@@ -121,7 +123,22 @@ export function Broadcast() {
   const patchTheme = (patch: Partial<BroadcastTheme>) =>
     setTheme((prev) => saveTheme(themeKey, { ...prev, ...patch }))
 
-  const accent = normalizeAccent(theme.accent)
+  // League kit adoption: a host who belongs to a white-label league broadcasts
+  // with their league's accent + logo by default (display-time merge — nothing
+  // is written to the stored theme, and explicit host edits still win).
+  // Fail-soft: with no backend/membership this stays null (stock TKO look).
+  const [memberLeague, setMemberLeague] = useState<LeagueConfig | null>(null)
+  useEffect(() => {
+    let cancelled = false
+    if (!user?.id) { setMemberLeague(null); return }
+    fetchMemberLeague(user.id)
+      .then((league) => { if (!cancelled) setMemberLeague(league) })
+      .catch(() => { /* fail-soft — keep the stock look */ })
+    return () => { cancelled = true }
+  }, [user?.id])
+  const liveTheme = useMemo(() => adoptLeagueKit(theme, memberLeague), [theme, memberLeague])
+
+  const accent = normalizeAccent(liveTheme.accent)
 
   // Player video tiles (cropped YouTube panes).
   const [players, setPlayers] = useState<PlayerScreen[]>([])
@@ -319,9 +336,9 @@ export function Broadcast() {
     <div className="p-4 sm:p-6 max-w-6xl mx-auto" style={rootStyle}>
       {/* ── 1. Header: logo (optional) + tournament name + LIVE badge ──────── */}
       <header className="text-center">
-        {theme.logoUrl && (
+        {liveTheme.logoUrl && (
           <img
-            src={theme.logoUrl}
+            src={liveTheme.logoUrl}
             alt=""
             className="mx-auto mb-3 max-h-16 w-auto object-contain"
             onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none' }}
@@ -412,7 +429,7 @@ export function Broadcast() {
                       />
                     ) : (
                       <TileShell label={feed.label} accent={accent} fill>
-                        <CroppedFrame>
+                        <CroppedFrame overscan={1}>
                           <iframe
                             src={ytEmbedSrc(feed.player.videoId, feedIndex === activeFeeds[0])}
                             title={feed.label}

@@ -6,7 +6,7 @@ import { test, expect, devices, chromium, type Browser, type BrowserContext } fr
 // Several device contexts (iPhone + Pixel profiles) drive the REAL built UI at
 // the same time against one shared backend, so they genuinely coexist. We assert
 // the UI actually renders and the happy path completes, AND we fail on any
-// uncaught page error / console error — the front-end bugs an API test can't see.
+// uncaught page error / console error - the front-end bugs an API test can't see.
 // ===========================================================================
 
 const BASE = process.env.E2E_BASE || 'http://localhost:8799'
@@ -20,23 +20,22 @@ function watch(ctx: BrowserContext, tag: string, errors: string[]) {
   })
 }
 
-async function signUpThroughUI(ctx: BrowserContext, u: { username: string; email: string }) {
+async function signUpThroughUI(ctx: BrowserContext, u: { email: string }) {
   const page = await ctx.newPage()
   await page.goto(`${BASE}/signup`, { waitUntil: 'domcontentloaded' })
-  await page.getByPlaceholder('striker_fan').fill(u.username)
-  await page.getByPlaceholder('you@example.com').fill(u.email)
-  await page.getByPlaceholder('••••••••').first().fill('password123')
+  await page.getByLabel('Email').fill(u.email)
+  await page.getByLabel('Password', { exact: true }).fill('password123')
+  await page.getByLabel('Confirm password').fill('password123')
   // The 13+ and Terms checkboxes gate the submit button.
-  await page.getByRole('checkbox').nth(0).check()
-  await page.getByRole('checkbox').nth(1).check()
-  // Username availability check is async; wait for the submit button to enable.
+  await page.getByLabel('I am 13 or older.').check()
+  await page.getByLabel(/I agree to the Terms of Service and Privacy Policy/).check()
   const submit = page.getByRole('button', { name: /create account/i })
   await expect(submit).toBeEnabled({ timeout: 15_000 })
   await submit.click()
   return page
 }
 
-test.describe('front end — concurrent multi-device clients', () => {
+test.describe('front end - concurrent multi-device clients', () => {
   let browser: Browser
   test.beforeAll(async () => { browser = await chromium.launch() })
   test.afterAll(async () => { await browser.close() })
@@ -55,13 +54,12 @@ test.describe('front end — concurrent multi-device clients', () => {
     // All four sign up simultaneously.
     const uniq = Date.now()
     const pages = await Promise.all(
-      contexts.map((c, i) => signUpThroughUI(c, { username: `dev${i}_${uniq}`, email: `dev${i}_${uniq}@kc.gg` })),
+      contexts.map((c, i) => signUpThroughUI(c, { email: `dev${i}_${uniq}@kc.gg` })),
     )
 
-    // Each must leave /signup for an authenticated view (the app navigates to
-    // `from || '/'` on success) and must not be sitting on an error.
+    // Each must leave /signup and enter the authenticated Ask TKO setup.
     for (let i = 0; i < pages.length; i++) {
-      await expect(pages[i], `${profiles[i].tag} should leave /signup`).not.toHaveURL(/\/signup$/, { timeout: 20_000 })
+      await expect(pages[i], `${profiles[i].tag} should enter setup`).toHaveURL(/\/setup(?:\?|$)/, { timeout: 20_000 })
     }
 
     // Drive a core authenticated page on each and confirm it renders.
@@ -80,14 +78,14 @@ test.describe('front end — concurrent multi-device clients', () => {
     watch(ctx, 'adversary', errs)
     const page = await ctx.newPage()
     await page.goto(`${BASE}/signup`, { waitUntil: 'domcontentloaded' })
-    // Underage DOB + no terms — the submit button must stay disabled and we must
+    // Underage DOB + no terms - the submit button must stay disabled and we must
     // No age attestation (even with Terms accepted) keeps the submit disabled.
     // This is the "guardrail keeps a confused user on
     // track instead of erroring" behavior.
-    await page.getByPlaceholder('striker_fan').fill(`kid_${Date.now()}`)
-    await page.getByPlaceholder('you@example.com').fill(`kid_${Date.now()}@kc.gg`)
-    await page.getByPlaceholder('••••••••').first().fill('password123')
-    await page.getByRole('checkbox').nth(1).check()
+    await page.getByLabel('Email').fill(`kid_${Date.now()}@kc.gg`)
+    await page.getByLabel('Password', { exact: true }).fill('password123')
+    await page.getByLabel('Confirm password').fill('password123')
+    await page.getByLabel(/I agree to the Terms of Service and Privacy Policy/).check()
     const submit = page.getByRole('button', { name: /create account/i })
     await expect(submit).toBeDisabled()
     await expect(page).toHaveURL(/\/signup$/)

@@ -14,13 +14,15 @@ import {
   thumbUrl,
 } from '@/lib/youtubeConnect'
 import { recordYouTubeLink } from '@/lib/youtubeLink'
+import { loadConnectedYouTubeUploads } from '@/lib/youtubeSettings'
 import { parseDescribe, matchLibrary, describeSummary, type LibraryVideo } from '@/lib/describeClip'
 import { demoLibrary } from '@/lib/demoClips'
 import { useClipTray } from '@/hooks/useClipTray'
 import { extractYouTubeId } from '@/lib/youtubeApi'
 import { prettyClip } from '@/lib/clipLabel'
 import { ConnectedBadge } from '@/components/ConnectedBadge'
-import { demoSquad, clipsFor, groupByCategory, ytUrl, CATEGORY_LABEL } from '@/lib/squad'
+import { clipsFor, groupByCategory, ytUrl, CATEGORY_LABEL, type SquadClip, type SquadMember } from '@/lib/squad'
+import { loadSquadData } from '@/lib/squadData'
 
 /**
  * ClipFinder — "connect your YouTube, then just describe the clip."
@@ -44,20 +46,78 @@ export function ClipFinder({
   const { items: tray, remove: removeTray } = useClipTray()
 
   const [library, setLibrary] = useState<LibraryVideo[]>([])
+  const [accountConnected, setAccountConnected] = useState(false)
+  const [loadingAccount, setLoadingAccount] = useState(false)
   const [busy, setBusy] = useState<'connect' | 'add' | null>(null)
   const [err, setErr] = useState('')
   const [manual, setManual] = useState('')
   const [query, setQuery] = useState('')
   const [picked, setPicked] = useState<Set<string>>(new Set())
   const [squadOpen, setSquadOpen] = useState<string | null>(null)
-
-  const squad = useMemo(() => demoSquad(), [])
+  const [squad, setSquad] = useState<{ members: SquadMember[]; clips: SquadClip[] }>({ members: [], clips: [] })
+  const [squadLoading, setSquadLoading] = useState(false)
+  const [squadError, setSquadError] = useState('')
 
   useEffect(() => {
-    setLibrary(loadLibrary(uid))
+    let alive = true
+    setSquadOpen(null)
+    setSquadError('')
+    if (!user?.id) {
+      setSquad({ members: [], clips: [] })
+      setSquadLoading(false)
+      return () => { alive = false }
+    }
+    setSquadLoading(true)
+    void loadSquadData(user.id)
+      .then((value) => { if (alive) setSquad(value) })
+      .catch(() => {
+        if (alive) {
+          setSquad({ members: [], clips: [] })
+          setSquadError('Could not load your clan and followed players right now.')
+        }
+      })
+      .finally(() => { if (alive) setSquadLoading(false) })
+    return () => { alive = false }
+  }, [user?.id])
+
+  useEffect(() => {
+    let alive = true
+    const cached = loadLibrary(uid)
+    setLibrary(cached)
+    setAccountConnected(cached.length > 0)
+    setLoadingAccount(false)
+    setErr('')
+
+    if (!user) return () => { alive = false }
+
+    // localStorage is origin- and device-scoped. The linked YouTube channel is
+    // account data, so restore it from the backend before offering OAuth again.
+    setLoadingAccount(true)
+    void loadConnectedYouTubeUploads()
+      .then(({ channel, videos, warning }) => {
+        if (!alive) return
+        setAccountConnected(Boolean(channel))
+        if (videos.length > 0) {
+          const merged = [
+            ...videos,
+            ...cached.filter((saved) => !videos.some((video) => video.id === saved.id)),
+          ]
+          setLibrary(merged)
+          saveLibrary(uid, merged)
+        }
+        if (warning) setErr(warning)
+      })
+      .catch(() => {
+        if (alive && cached.length === 0) {
+          setErr('Could not load your connected YouTube right now. Try again in a moment.')
+        }
+      })
+      .finally(() => { if (alive) setLoadingAccount(false) })
+
+    return () => { alive = false }
   }, [uid])
 
-  const connected = library.length > 0
+  const connected = accountConnected || library.length > 0
   const canOAuth = isYouTubeConnectConfigured()
 
   async function handleConnect() {
@@ -67,6 +127,7 @@ export function ClipFinder({
       const token = await connectYouTube()
       const vids = await fetchMyUploads(token)
       setLibrary(vids)
+      setAccountConnected(true)
       saveLibrary(uid, vids)
       if (vids.length === 0) setErr('Connected, but your channel has no public uploads yet.')
     } catch (e) {
@@ -90,6 +151,7 @@ export function ClipFinder({
         if (vids.length) {
           const merged = [...vids.filter((f) => !library.some((l) => l.id === f.id)), ...library]
           setLibrary(merged)
+          setAccountConnected(true)
           saveLibrary(uid, merged)
           // ONE source of truth: also record the backend link so every screen
           // (TKO King, auto-merge, Go Live) agrees you're connected.
@@ -118,6 +180,7 @@ export function ClipFinder({
   function disconnect() {
     clearLibrary(uid)
     setLibrary([])
+    setAccountConnected(false)
     setPicked(new Set())
   }
 
@@ -219,14 +282,22 @@ export function ClipFinder({
                 onClick={() => setSquadOpen(on ? null : m.id)}
                 className={`shrink-0 flex flex-col items-center gap-1 ${on ? '' : 'opacity-90'}`}
               >
-                <span className={`w-12 h-12 rounded-full bg-gradient-to-br ${m.tint ?? 'from-accent to-accent'} flex items-center justify-center text-dark font-bold ${on ? 'ring-2 ring-accent' : ''}`}>
-                  {m.name.slice(0, 1)}
+                <span className={`w-12 h-12 rounded-full overflow-hidden bg-gradient-to-br ${m.tint ?? 'from-accent to-accent'} flex items-center justify-center text-dark font-bold ${on ? 'ring-2 ring-accent' : ''}`}>
+                  {m.avatarUrl ? (
+                    <img src={m.avatarUrl} alt="" loading="lazy" className="h-full w-full object-cover" />
+                  ) : m.name.slice(0, 1)}
                 </span>
                 <span className="text-[11px] text-gray-300">{m.name}</span>
               </button>
             )
           })}
         </div>
+
+        {squadLoading && <div className="py-2 text-xs text-gray-500">Loading your squad…</div>}
+        {!squadLoading && !squadError && squad.members.length === 0 && (
+          <div className="py-2 text-xs text-gray-500">No clan or followed players found yet.</div>
+        )}
+        {squadError && <div className="py-2 text-xs text-red-400">{squadError}</div>}
 
         {squadOpen && (
           <div className="mt-3 space-y-3">
@@ -253,11 +324,14 @@ export function ClipFinder({
                 </div>
               </div>
             ))}
+            {clipsFor(squad.clips, squadOpen, uid).length === 0 && (
+              <div className="py-2 text-xs text-gray-500">This player has no produced YouTube reels available yet.</div>
+            )}
           </div>
         )}
       </div>
 
-      {!connected && (
+      {!connected && !loadingAccount && (
         <div className="space-y-3">
           {canOAuth && (
             <button
@@ -321,7 +395,9 @@ export function ClipFinder({
 
           {results.length === 0 ? (
             <div className="text-sm text-gray-500 py-6 text-center">
-              No matches. Try fewer words, or a different name/day.
+              {library.length === 0
+                ? 'Your channel is connected, but no public uploads were returned yet.'
+                : 'No matches. Try fewer words, or a different name/day.'}
             </div>
           ) : (
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
@@ -366,6 +442,10 @@ export function ClipFinder({
             </div>
           )}
         </>
+      )}
+
+      {loadingAccount && library.length === 0 && (
+        <p className="py-4 text-center text-sm text-gray-500">Loading your connected YouTube clips…</p>
       )}
 
       {err && <p className="text-red-400 text-sm">{err}</p>}

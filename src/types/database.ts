@@ -5,11 +5,14 @@ export interface Profile {
   username: string
   avatar_url: string | null
   bio: string | null
+  /** In-game identity confirmed through Ask TKO onboarding. */
+  game_tag?: string | null
   social_links: Json | null
   power_level?: number
   country?: string | null
   dashboard_override?: Json | null
   auto_merge_opt_out?: boolean
+  reel_usage_privacy?: import('@/lib/reelPrivacy').ReelUsePrivacy
   /**
    * The ARTIFACT TAG the user currently has equipped, if any. This is the
    * bought/earned cosmetic pill shown next to their name everywhere (chat,
@@ -51,6 +54,15 @@ export interface Reel {
   // layout is encoded into combined_video_url via `reelone-layout://` (legacy: `clutchlens-layout://`, `shinobi-layout://`).
   // Use `resolveLayout()` from `@/lib/reelLayout` to read this safely.
   layout?: ReelLayout
+  // Front-page visibility (default true). FREE-member auto weekly videos are
+  // written with promoted=false by the trusted factory path: they appear on
+  // the owner's profile and via the share link, never in the front-page feed.
+  // Optional: absent until the `promoted` column migration has been applied —
+  // treat a missing value as promoted (see src/pages/Reels.tsx).
+  promoted?: boolean
+  // League a factory-produced reel was made for (`leagues.slug`). Absent/null on
+  // every ordinary user-created reel; stamped by /api/internal/publish-reel.
+  league_slug?: string | null
   created_at: string
 }
 
@@ -104,6 +116,12 @@ export interface LiveStream {
   is_live: boolean
   tournament_id?: string | null
   show_bracket?: boolean | null
+  background_url?: string | null
+  team_a?: string | null
+  team_b?: string | null
+  score_a?: number | null
+  score_b?: number | null
+  score_revision?: number | null
   created_at: string
 }
 
@@ -263,8 +281,24 @@ export interface ChatChannel {
   created_at: string
 }
 
+/**
+ * The CHAT FOUNDATION columns every message table carries, added idempotently
+ * by server/ensureSchema.ts and consumed by the shared chat primitive:
+ *   • `mentions` — [{user_id, username, start, end}]. The renderer slices the
+ *     body at those offsets rather than re-scanning it for "@name" (see
+ *     src/lib/chatMentions.ts), which is what keeps an email address from
+ *     sprouting a mention chip.
+ *   • `reply_to` — the parent message's id, within the same table.
+ * BOTH ARE OPTIONAL ON PURPOSE: a backend that predates the migration returns
+ * rows without them, and every read path has to survive that unchanged.
+ */
+export interface ChatMessageColumns {
+  mentions?: Json | null
+  reply_to?: string | null
+}
+
 /** A message posted in a chat channel (body, not `content` — distinct table). */
-export interface ChatMessage {
+export interface ChatMessage extends ChatMessageColumns {
   id: string
   channel_id: string
   user_id: string | null
@@ -287,7 +321,7 @@ export interface DmParticipant {
   joined_at: string
 }
 
-export interface DmMessage {
+export interface DmMessage extends ChatMessageColumns {
   id: string
   conversation_id: string
   user_id: string
@@ -362,11 +396,18 @@ export interface Tournament {
   name: string
   description: string | null
   rules: string | null
-  /** Optional clan (server) hosting the tournament. */
-  server_id: string | null
+    /** Optional clan (server) hosting the tournament. */
+    server_id: string | null
+    /** Who may enter: everyone, one clan, or the clans in one village. */
+    entry_scope?: 'public' | 'clan' | 'village'
+    /** Which clans may enter saved rosters: every clan, or organizer-invited clans only. */
+    clan_entry_mode?: 'open' | 'invited_only'
+    /** Village whose members may enter when entry_scope is 'village'. */
+    village_id?: string | null
   /** Tournament start time. */
   start_at: string | null
-  /** Tournament end time (null for open-ended / TBD). */
+  /** Tournament end time. REQUIRED by the creation wizard going forward (the
+   *  end sweep auto-closes past-end tournaments); null only on legacy rows. */
   end_at: string | null
   status: TournamentStatus
   prize_pool: string | null
@@ -387,6 +428,11 @@ export interface Tournament {
   enroll_opens?: string | null
   /** Open-enrollment window end (ISO); scheduling begins after this. */
   enroll_closes?: string | null
+  /**
+   * Which league brand the tournament runs under: 'tko' (default, the house
+   * brand) or a leagues.slug like 'shinobistrikerleague'. Branding only.
+   */
+  league_slug?: string | null
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -424,6 +470,17 @@ export interface TournamentBattle {
   round?: number | null
   /** Stable zero-based position inside the round. */
   bracket_slot?: number | null
+  /** Watch links per side ('a' = player_a, 'b' = player_b): the fighter's live
+   *  stream URL plus their YouTube clip links. Written ONLY through
+   *  /api/fn/tournament-battle-media (see src/lib/battleMedia.ts). */
+  media?: {
+    a?: { live_url?: string | null; clip_urls?: string[] }
+    b?: { live_url?: string | null; clip_urls?: string[] }
+  } | null
+  /** When the winner was recorded (replay timeline; null on pre-column rows). */
+  decided_at?: string | null
+  /** When the watch links last changed (replay timeline; null on pre-column rows). */
+  media_updated_at?: string | null
   created_at: string
 }
 
@@ -466,11 +523,14 @@ export interface TournamentAdmin {
   created_at: string
 }
 
-export type TournamentEntrantStatus = 'pending' | 'accepted' | 'withdrawn'
+export type TournamentEntrantStatus = 'pending' | 'accepted' | 'withdrawn' | 'rejected'
 
 /** A player who has entered a tournament (solo or as part of a team).
  *  Created when the user clicks "Enter" on a tournament and accepts the rules.
- *  An entrant may also be invited by a teammate (status='pending' until accepted). */
+ *  Every entry lands 'pending'; ONLY the tournament host/admin flips it to
+ *  'accepted' (or 'rejected') via /api/fn/tournament-entrant-review — there is
+ *  no self-approval door. A pending row without agreed_to_rules_at is a
+ *  teammate invite that hasn't been accepted yet. */
 export interface TournamentEntrant {
   id: string
   tournament_id: string
@@ -492,12 +552,21 @@ export interface TournamentEntrant {
 // ─────────────────────────────────────────────────────────────────────────
 
 export type NotificationKind =
+  | 'clan_application_received'
+  | 'clan_application_reviewed'
+  | 'clan_roster_invite'
+  | 'clan_roster_invite_accepted'
+  | 'tournament_roster_submitted'
+  | 'tournament_roster_reviewed'
+  | 'tournament_perk_granted'
   | 'tournament_admin_invite'
   | 'tournament_team_invite'
   | 'tournament_started'
   | 'stat_check_review_request'
   | 'stat_check_reviewed'
   | 'stat_check_creator_decision'
+  /** The host approved or rejected your tournament entry (server fn). */
+  | 'tournament_entry_reviewed'
   | 'live_group_invite'
   /** Streams the live-link engine decided belong together were combined. */
   | 'live_link_created'
@@ -508,6 +577,14 @@ export type NotificationKind =
   | 'reel_invite'
   /** "A new multi-angle clip of your match is up — you're in it." */
   | 'reel_participant'
+  | 'direct_message'
+  | 'group_message'
+  | 'oracle_round_open'
+  | 'oracle_round_settled'
+  | 'live_angle_ready'
+  | 'creator_sale'
+  | 'creator_payout'
+  | 'clan_activity'
   | 'follow'
   | 'mention'
   | 'generic'
@@ -529,7 +606,7 @@ export interface Notification {
 //  Live platform — chat, donations, soundboard, auto-upload, CV labels
 // ─────────────────────────────────────────────────────────────────────────
 
-export interface StreamMessage {
+export interface StreamMessage extends ChatMessageColumns {
   id: string
   stream_id: string
   user_id: string | null
@@ -701,7 +778,10 @@ type ProfilesRow = Cols<
      * See src/lib/liveLinkPrefs.ts.
      */
     auto_link_mode: string | null
+    /** Default-on server watcher for the member's connected YouTube channel. */
+    auto_detect_live: boolean
     auto_merge_opt_out: boolean
+    reel_usage_privacy: import('@/lib/reelPrivacy').ReelUsePrivacy
   }
 >
 type ClipsRow = Cols<
@@ -875,6 +955,13 @@ type ClipRecordsRow = {
   mode: string | null
   youtube_id: string | null
   composite_youtube_id: string | null
+  source_id: string | null
+  segment_id: string | null
+  source_start_sec: number | null
+  source_end_sec: number | null
+  segment_index: number | null
+  boundary_confidence: number | null
+  score_verification_status: 'legacy' | 'shadow' | 'verified'
   duration_sec: number | null
   recorded_at: string | null
   ocr_confidence: number | null
@@ -1124,6 +1211,19 @@ type TournamentMessagesRow = {
   user_id: string
   content: string
   created_at: string | null
+  mentions?: Json | null
+  reply_to?: string | null
+}
+
+/** One row of `chat_reactions` — polymorphic over the four message tables. */
+type ChatReactionsRow = {
+  id: string
+  /** Which message table `message_id` points into: stream|tournament|channel|dm. */
+  surface: string
+  message_id: string
+  user_id: string
+  emoji: string
+  created_at: string | null
 }
 
 // ---------------------------------------------------------------------------
@@ -1313,6 +1413,7 @@ export type Database = {
       reel_comments: DbTable<ReelCommentsRow>
       stream_messages: DbTable<StreamMessagesRow>
       tournament_messages: DbTable<TournamentMessagesRow>
+      chat_reactions: DbTable<ChatReactionsRow>
       creator_stripe_accounts: DbTable<CreatorStripeAccountsRow>
       donations: DbTable<DonationsRow>
       creator_goals: DbTable<CreatorGoalsRow>

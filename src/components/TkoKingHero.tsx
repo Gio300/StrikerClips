@@ -1,5 +1,7 @@
 import { Link } from 'react-router-dom'
 import { KING_SCHEDULE, KING_TAGLINE } from '@/lib/tkoKing'
+import { useLeagueTheme } from '@/components/LeagueThemeProvider'
+import { kingDisplayName } from '@/lib/displayBrand'
 
 /**
  * TkoKingHero — PRIME front-page placement for the TKO King.
@@ -10,6 +12,9 @@ import { KING_SCHEDULE, KING_TAGLINE } from '@/lib/tkoKing'
  * events layer on top and live inside the King page, not here.)
  */
 export function TkoKingHero() {
+  const { display } = useLeagueTheme()
+  const kingName = kingDisplayName(display)
+
   return (
     <Link
       to="/king"
@@ -19,7 +24,7 @@ export function TkoKingHero() {
         <span className="text-3xl">👑</span>
         <div className="min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
-            <h2 className="text-xl md:text-2xl font-bold text-white">TKO King</h2>
+            <h2 className="text-xl md:text-2xl font-bold text-white">{kingName}</h2>
             <span className="text-[10px] px-2 py-0.5 rounded-full border border-kunai/50 bg-kunai/10 text-kunai uppercase tracking-wider">
               {KING_SCHEDULE.season}
             </span>

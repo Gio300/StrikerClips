@@ -1,4 +1,3 @@
-import { Capacitor } from '@capacitor/core'
 import { useRef, useState } from 'react'
 
 /**
@@ -9,14 +8,18 @@ import { useRef, useState } from 'react'
  * category now leads with a WRITTEN INTRO — what the reels in it cover and why
  * you'd watch — and the player(s) come after the words.
  *
- * Every entry below is a real, TKO-branded file that exists in public/videos/.
- * There are deliberately NO placeholder slots: a reel either ships or it isn't
- * listed. (The old promo-01…05 "Preview coming soon" cards are gone.)
+ * Every entry below is a real, TKO-branded reel. There are deliberately NO
+ * placeholder slots: a reel either ships or it isn't listed. (The old
+ * promo-01…05 "Preview coming soon" cards are gone.)
  *
- * MEDIA: each `slug` maps to public/videos/<slug>.mp4 + <slug>.jpg (poster).
- * Paths are prefixed with Vite's BASE_URL so they resolve on the root-hosted
- * marketing site ('/videos/…') and, if this component is ever rendered from the
- * app build, under the app base ('/app/videos/…').
+ * MEDIA: each `slug` maps to videos/<slug>.mp4 + <slug>.jpg (poster) under
+ * MEDIA_BASE. OPERATOR RULE: this web/app build must NOT ship or serve video
+ * files — YouTube is the storage layer. The source .mp4/.jpg files live in
+ * media_source/videos/ (kept out of the Vite build; see media_source/README.md
+ * for the upload backlog). Until each reel has its own YouTube upload to embed
+ * (like MAIN_VIDEO below), media streams from the tko.cam origin — the same
+ * absolute origin the native (Capacitor) build has always used — so nothing
+ * here depends on files in dist.
  *
  * PHONE-FIRST: one column by default, two only from `md` up, and every player
  * stays `preload="none"` with native controls — nothing downloads until a
@@ -152,8 +155,13 @@ const MAIN_VIDEO = {
   title: 'TKO Complete Tour',
 } as const
 
-const BASE = import.meta.env.BASE_URL || '/'
-const MEDIA_BASE = Capacitor.isNativePlatform() ? 'https://tko.cam/' : BASE
+/**
+ * Absolute media origin for every platform (web AND native). The build itself
+ * ships no video bytes — see the MEDIA note in the header comment. When a reel
+ * gets uploaded to the TKO YouTube channel (@T.K.O_Games), replace its <video>
+ * card with an embed like MAIN_VIDEO instead of streaming the mp4.
+ */
+const MEDIA_BASE = 'https://tko.cam/'
 /** Full-resolution original — the fallback source and the "open directly" target. */
 const videoSrc = (slug: string) => `${MEDIA_BASE}videos/${slug}.mp4`
 /** 720p mobile encode, tried first so phones don't pull a 30–120 MB file. */

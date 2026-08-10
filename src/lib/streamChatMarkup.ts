@@ -46,8 +46,18 @@ export function parseHighlight(text: string): string | null {
 export function stripLeadingMarkers(text: string): string {
   let t = typeof text === 'string' ? text : ''
   for (;;) {
-    if (t.startsWith(TKO_BOT_PREFIX)) t = t.slice(TKO_BOT_PREFIX.length)
-    else if (t.startsWith(STREAM_HIGHLIGHT_PREFIX)) t = t.slice(STREAM_HIGHLIGHT_PREFIX.length)
+    // Leading whitespace MUST be consumed inside the loop, before each marker
+    // test. These markers are privileged: the server writes [[tko-hl]] only
+    // after debiting 50 tokens, and [[tko-bot]] renders as an official TKO line
+    // with no username and no avatar. Testing `t` directly let a single leading
+    // space smuggle either one through -- " [[tko-hl]]x" bought a paid feature
+    // for free, and " [[tko-bot]]send me your codes" impersonated the platform
+    // in rooms open to 13-year-olds. Only whitespace that actually precedes a
+    // marker is consumed; a plain "  hello" is returned untouched for the
+    // caller to trim, so prepareChatMessage's offset arithmetic still balances.
+    const lead = t.replace(/^\s+/, '')
+    if (lead.startsWith(TKO_BOT_PREFIX)) t = lead.slice(TKO_BOT_PREFIX.length)
+    else if (lead.startsWith(STREAM_HIGHLIGHT_PREFIX)) t = lead.slice(STREAM_HIGHLIGHT_PREFIX.length)
     else break
   }
   return t

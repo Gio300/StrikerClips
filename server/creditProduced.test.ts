@@ -10,7 +10,8 @@ function db() {
     create table user_youtube_links (id serial primary key, user_id text, url text);
     create table clip_records (
       id serial primary key, player_id text, composite_youtube_id text,
-      youtube_id text, outcome text, recorded_at timestamptz default now()
+      youtube_id text, player_handle text, outcome text,
+      recorded_at timestamptz default now()
     );
     insert into profiles (id, username) values ('u-gio','gio'), ('u-jerry','mrjerry');
     insert into user_youtube_links (user_id, url) values
@@ -88,6 +89,39 @@ describe('creditProduced (auto-merge → power level)', () => {
     )
     expect(r.credited).toHaveLength(1)
     expect(r.credited[0].user_id).toBe('u-kissa-new')
+  })
+
+  // The pipeline always sends a handle; dropping it made every participant chip
+  // in the app render the placeholder "player" instead of the gamertag.
+  it('persists the gamertag the pipeline sent, @ stripped and case preserved', async () => {
+    const r = await creditProduced(pool, 'comp-h', [{ handle: '@MrJerrySS' }], recompute)
+    expect(r.credited[0].player_handle).toBe('MrJerrySS')
+    const row = (await pool.query(
+      `select player_handle from clip_records where composite_youtube_id='comp-h'`,
+    )).rows[0]
+    expect(row.player_handle).toBe('MrJerrySS')
+  })
+
+  it('falls back to the TKO username when the angle carries no handle', async () => {
+    const r = await creditProduced(pool, 'comp-u', [{ user_id: 'u-gio' }], recompute)
+    expect(r.credited[0].player_handle).toBe('gio')
+    const row = (await pool.query(
+      `select player_handle from clip_records where composite_youtube_id='comp-u'`,
+    )).rows[0]
+    expect(row.player_handle).toBe('gio')
+  })
+
+  it('backfills the handle onto a row credited before handles were stored', async () => {
+    await pool.query(
+      `insert into clip_records (player_id, composite_youtube_id) values ('u-gio','comp-old')`,
+    )
+    const r = await creditProduced(pool, 'comp-old', [{ handle: 'gio' }], recompute)
+    expect(r.credited[0].created).toBe(false)
+    const rows = (await pool.query(
+      `select player_handle from clip_records where composite_youtube_id='comp-old'`,
+    )).rows
+    expect(rows).toHaveLength(1) // still idempotent — backfilled, not duplicated
+    expect(rows[0].player_handle).toBe('gio')
   })
 
   it('reports unresolved angles instead of crediting a stranger', async () => {

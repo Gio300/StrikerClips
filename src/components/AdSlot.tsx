@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { adConfig } from '@/lib/adConfig'
-import { useEntitlements } from '@/hooks/useEntitlements'
-import { hidesAds } from '@/lib/tiers'
+import { useAdsHidden } from '@/hooks/useAdsHidden'
+import { THIRD_PARTY_AD_TECH_ENABLED } from '@/lib/storeBuild'
 
-type AdShape = 'banner' | 'leaderboard' | 'square' | 'mobile-banner'
+type AdShape = 'banner' | 'leaderboard' | 'square' | 'mobile-banner' | 'strip'
 type AdSlotProps = {
   /** Logical slot id. Used to look up an AdSense slot ID and pick a default house ad. */
   slotId: string
@@ -12,6 +12,12 @@ type AdSlotProps = {
   shape?: AdShape
   /** When true, shows a small ✕ that lets a free user hide this one slot. */
   dismissable?: boolean
+  /**
+   * Bump to swap the creative in place without remounting (the in-chat strip
+   * rotates on a timer — see ChatAdRail.tsx). Folded into the house-ad seed and
+   * into the AdSense refresh effect.
+   */
+  rotation?: number
   className?: string
 }
 
@@ -30,23 +36,33 @@ type AdSlotProps = {
  * different creatives, demonstrating where ads will appear without spamming
  * the same one twice.
  */
-export function AdSlot({ slotId, shape = 'banner', dismissable = false, className = '' }: AdSlotProps) {
+export function AdSlot({
+  slotId,
+  shape = 'banner',
+  dismissable = false,
+  rotation = 0,
+  className = '',
+}: AdSlotProps) {
   const ref = useRef<HTMLModElement>(null)
-  const { tier } = useEntitlements()
   const [dismissed, setDismissed] = useState(false)
-  // Paid tiers (ad_free / pro / supporter / creator + founder) never see ads —
-  // every slot everywhere short-circuits here, so nothing has to remember to
-  // wrap AdSlot in a gate.
-  const adsHidden = hidesAds(tier)
+  // Anyone entitled to ad-free never sees an ad — every slot everywhere
+  // short-circuits here, so nothing has to remember to wrap AdSlot in a gate.
+  // BOTH ladders count (src/lib/adEntitlement.ts): the personal ad_free / pro /
+  // supporter / creator tiers AND membership of (or browsing) a league on a
+  // plan that carries `member_ad_free`. `resolved` is false while the league
+  // answer is still in flight, and we render NOTHING until it lands — a paying
+  // league member must never see an ad flash on page load.
+  const { adsHidden, resolved } = useAdsHidden()
   // AdSense publisher id + per-slot ids come from the single config surface
   // (src/lib/adConfig.ts → VITE_ADSENSE_CLIENT / VITE_ADSENSE_<SLOT>). When both
   // the client and this slot's id are set we serve a real unit; otherwise the
-  // house-ad fallback below renders. Paid users never reach here (FreeUserAdSlot
-  // / AdGate short-circuit on hidesAds()).
+  // house-ad fallback below renders. Entitled users never reach the render at
+  // all — the useAdsHidden() short-circuit below runs first.
   const slotKey = adConfig.slots[slotId]
-  const hasAdsense = Boolean(adConfig.clientId && slotKey)
+  const hasAdsense = THIRD_PARTY_AD_TECH_ENABLED && Boolean(adConfig.clientId && slotKey)
 
   useEffect(() => {
+    if (adsHidden || !resolved) return
     if (!hasAdsense || !ref.current) return
     try {
       const w = window as { adsbygoogle?: unknown[] }
@@ -56,18 +72,20 @@ export function AdSlot({ slotId, shape = 'banner', dismissable = false, classNam
       // AdSense script may not be loaded yet — this just no-ops; we'll still
       // render the AdSense slot tag below so it picks up when available.
     }
-  }, [hasAdsense, slotKey])
+  }, [hasAdsense, slotKey, rotation, adsHidden, resolved])
 
-  // Stable creative per (slotId, mount) so it doesn't flicker on re-render.
-  const creative = useMemo(() => pickCreative(slotId), [slotId])
+  // Stable creative per (slotId, rotation) so it doesn't flicker on re-render
+  // but DOES change when a rotating placement bumps `rotation`.
+  const creative = useMemo(() => pickCreative(slotId, rotation), [slotId, rotation])
   const heightClass = SHAPE_HEIGHT[shape]
 
-  // Paid users (and anyone who dismissed this slot) get nothing.
-  if (adsHidden || dismissed) return null
+  // Entitled users (and anyone who dismissed this slot) get nothing — and
+  // nothing renders at all until the entitlement is actually known.
+  if (!resolved || adsHidden || dismissed) return null
 
   if (hasAdsense) {
     return (
-      <div className={`relative ${heightClass} ${className}`}>
+      <div key={rotation} className={`relative ${heightClass} ${className}`}>
         <span className="absolute -top-2 left-2 z-10 px-1.5 py-0.5 rounded bg-dark text-[10px] uppercase tracking-wide text-gray-500 border border-dark-border">
           Ad
         </span>
@@ -118,6 +136,7 @@ const SHAPE_LABEL: Record<AdShape, string> = {
   'leaderboard': 'Leaderboard ad · 728×90',
   'square': 'Square ad · 300×250',
   'mobile-banner': 'Mobile banner · 320×100',
+  'strip': 'Strip ad · 320×50',
 }
 
 /**
@@ -193,20 +212,21 @@ const CREATIVES: Creative[] = [
     accent: 'kunai',
   },
   {
-    id: 'rankings',
-    to: '/rankings',
-    eyebrow: 'Sponsored · Power level',
-    headline: 'Where do you rank?',
-    body: 'Climb the power-level board with every reel and ranked W you upload.',
-    cta: 'See the rankings',
+    id: 'clips',
+    to: '/my-clips',
+    eyebrow: 'Your battle footage',
+    headline: 'See what the system found',
+    body: 'Review battles detected automatically from your connected livestreams.',
+    cta: 'Open My Clips',
     accent: 'chakra',
   },
 ]
 
-function pickCreative(slotId: string): Creative {
+function pickCreative(slotId: string, rotation = 0): Creative {
   // Deterministic but varied: mix slotId hash with the day so refreshes get a
   // different placement each session, but renders within a session are stable.
-  const seed = (hashCode(slotId) + new Date().getDate()) % CREATIVES.length
+  // `rotation` steps a rotating placement (the in-chat strip) through the pool.
+  const seed = (hashCode(slotId) + new Date().getDate() + rotation) % CREATIVES.length
   return CREATIVES[(seed + CREATIVES.length) % CREATIVES.length]
 }
 
@@ -224,6 +244,9 @@ const SHAPE_HEIGHT: Record<AdShape, string> = {
   'leaderboard': 'min-h-[90px]',
   'square': 'min-h-[260px]',
   'mobile-banner': 'min-h-[100px]',
+  // The chat strip: the 320×50 mobile-leaderboard standard. Deliberately the
+  // shortest unit we serve — it sits under a live message list.
+  'strip': 'min-h-[52px]',
 }
 
 const ACCENT_GRADIENT: Record<Creative['accent'], string> = {
@@ -244,6 +267,8 @@ const ACCENT_BORDER: Record<Creative['accent'], string> = {
 
 function HouseAd({ creative, shape, className }: { creative: Creative; shape: AdShape; className: string }) {
   const isSquare = shape === 'square'
+  // The chat strip is one line tall by design — headline + CTA only.
+  const isStrip = shape === 'strip'
   return (
     <Link
       to={creative.to}
@@ -256,13 +281,13 @@ function HouseAd({ creative, shape, className }: { creative: Creative; shape: Ad
       {/* faint shuriken motif */}
       <div className="pointer-events-none absolute -bottom-6 -right-6 text-[140px] opacity-[0.04] select-none" aria-hidden>✦</div>
 
-      <div className={`relative h-full p-4 flex ${isSquare ? 'flex-col justify-between' : 'items-center gap-4'}`}>
+      <div className={`relative h-full ${isStrip ? 'px-3 py-1.5' : 'p-4'} flex ${isSquare ? 'flex-col justify-between' : 'items-center gap-3'}`}>
         <div className="min-w-0 flex-1">
-          <div className={`text-[11px] uppercase tracking-wide mb-1 ${ACCENT_TEXT[creative.accent]}`}>{creative.eyebrow}</div>
-          <div className="font-semibold text-white truncate">{creative.headline}</div>
-          <div className="text-sm text-gray-400 mt-1 line-clamp-2">{creative.body}</div>
+          <div className={`text-[10px] uppercase tracking-wide ${isStrip ? '' : 'text-[11px] mb-1'} ${ACCENT_TEXT[creative.accent]}`}>{creative.eyebrow}</div>
+          <div className={`font-semibold text-white truncate ${isStrip ? 'text-sm' : ''}`}>{creative.headline}</div>
+          {!isStrip && <div className="text-sm text-gray-400 mt-1 line-clamp-2">{creative.body}</div>}
         </div>
-        <span className={`shrink-0 inline-flex items-center gap-1 px-3 py-1.5 rounded-md border ${ACCENT_BORDER[creative.accent]} ${ACCENT_TEXT[creative.accent]} text-sm font-semibold group-hover:bg-accent/10`}>
+        <span className={`shrink-0 inline-flex items-center gap-1 rounded-md border ${isStrip ? 'px-2 py-1 text-xs' : 'px-3 py-1.5 text-sm'} ${ACCENT_BORDER[creative.accent]} ${ACCENT_TEXT[creative.accent]} font-semibold group-hover:bg-accent/10`}>
           {creative.cta}
           <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.2} d="M14 5l7 7m0 0l-7 7m7-7H3" />

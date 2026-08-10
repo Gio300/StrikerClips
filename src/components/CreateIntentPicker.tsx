@@ -3,9 +3,10 @@ import {
   ChevronRight,
   Film,
   Hammer,
-  PenLine,
+  MessageSquare,
   RadioTower,
   Trophy,
+  UserRound,
   UsersRound,
   type LucideIcon,
 } from 'lucide-react'
@@ -21,10 +22,17 @@ export type CreateIntent = {
 export const CREATE_INTENTS: readonly CreateIntent[] = [
   {
     to: '/profile?tab=wall',
-    label: 'Post to Wall',
-    description: 'Share an update with your followers.',
-    Icon: PenLine,
+    label: 'My Profile',
+    description: 'Post updates, share clips, and manage your wall.',
+    Icon: UserRound,
     iconClassName: 'bg-accent/10 text-accent',
+  },
+  {
+    to: '/messages',
+    label: 'Messages',
+    description: 'Start a direct message or private group thread.',
+    Icon: MessageSquare,
+    iconClassName: 'bg-trust/10 text-trust',
   },
   {
     to: '/highlight/create',

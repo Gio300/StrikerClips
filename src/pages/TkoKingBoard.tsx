@@ -4,6 +4,8 @@ import { supabase } from '@/lib/supabase'
 import { ensureKing } from '@/lib/kingTournament'
 import { CollapsibleSection } from '@/components/CollapsibleSection'
 import { Avatar } from '@/components/ui'
+import { useLeagueTheme } from '@/components/LeagueThemeProvider'
+import { kingDisplayName, kingLadderDisplayName } from '@/lib/displayBrand'
 import {
   KING_SCHEDULE,
   KING_PRIZE_TABLE,
@@ -37,6 +39,9 @@ const dayFmt = (iso: string) =>
   new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
 
 export function TkoKingBoard() {
+  const { display } = useLeagueTheme()
+  const kingName = kingDisplayName(display)
+  const ladderName = kingLadderDisplayName(display)
   const [tournament, setTournament] = useState<Tournament | null>(null)
   const [regs, setRegs] = useState<Reg[]>([])
   const [battles, setBattles] = useState<Bat[]>([])
@@ -108,17 +113,17 @@ export function TkoKingBoard() {
           <span className="text-3xl sm:text-4xl">👑</span>
           <div className="min-w-0">
             <h1 className="text-2xl sm:text-4xl font-black tracking-tight text-white uppercase leading-none">
-              The Board
+              {display.isSsl ? `${kingName} Board` : 'The Board'}
             </h1>
             <p className="text-xs sm:text-sm text-gray-300 mt-1">
-              TKO King · {KING_SCHEDULE.season} · the whole field
+              Seasonal crown event · {KING_SCHEDULE.season} · separate from the always-open ladder
             </p>
           </div>
           <Link
             to="/king"
             className="ml-auto shrink-0 px-3 py-1.5 rounded-lg border border-dark-border text-xs text-gray-300 hover:border-accent/60"
           >
-            ← Back to the pit
+            {display.isSsl ? `← Back to ${ladderName}` : '← Back to King ladder'}
           </Link>
         </div>
 
@@ -145,7 +150,7 @@ export function TkoKingBoard() {
 
         {board.champion && (
           <div className="mt-4 rounded-xl border border-chakra/60 bg-chakra/10 p-4 text-center">
-            <p className="text-[11px] uppercase tracking-widest text-chakra">The TKO King</p>
+            <p className="text-[11px] uppercase tracking-widest text-chakra">The {kingName}</p>
             <p className="text-2xl sm:text-3xl font-black text-white mt-1">@{board.champion.username}</p>
             <p className="text-xs text-gray-400 mt-1">
               {board.champion.wins} wins · {board.champion.roundsCleared} rounds cleared

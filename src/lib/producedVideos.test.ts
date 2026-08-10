@@ -1,13 +1,17 @@
 import { describe, it, expect } from 'vitest'
 import {
+  combineProducedVideo,
   dedupeProducedVideos,
   latestProducedVersions,
+  mergeParticipants,
   mergeProducedVideoSources,
+  producedVideoRoute,
   producedVideoTitle,
   watchUrlFor,
   type ClipRecordLite,
   type ProducedVideo,
 } from './producedVideos'
+import { canonicalShareUrl } from './canonicalUrl'
 
 const rec = (over: Partial<ClipRecordLite>): ClipRecordLite => ({
   composite_youtube_id: null,
@@ -28,6 +32,7 @@ const video = (over: Partial<ProducedVideo>): ProducedVideo => ({
   title: 'Multi-angle match',
   thumbnail: 'thumb',
   watchUrl: 'watch',
+  participants: [],
   playerIds: [],
   handles: [],
   angleCount: 2,
@@ -66,6 +71,31 @@ describe('latestProducedVersions', () => {
     expect(out[0].youtubeId).toBe('new-triple')
     expect(out[0].angleCount).toBe(3)
     expect(out[0].playerIds).toEqual(['p1', 'p2', 'p3'])
+  })
+
+  it('labels each participant with the handle stored on its own angle', () => {
+    const out = latestProducedVersions([
+      {
+        id: 'v1',
+        match_key: 'match-1',
+        version: 1,
+        youtube_id: 'trio',
+        angle_count: 3,
+        participant_ids: ['p1', 'p2', 'p3'],
+        clip_ids: [],
+        source_angles: [
+          { user_id: 'p2', handle: 'Hammy' },
+          { user_id: 'p1', handle: 'kissatronix' },
+        ],
+        reason: 'verified_auto_merge',
+        created_at: '2026-07-25T02:00:00Z',
+      },
+    ])
+    expect(out[0].participants).toEqual([
+      { id: 'p1', handle: 'kissatronix' },
+      { id: 'p2', handle: 'Hammy' },
+      { id: 'p3', handle: null },
+    ])
   })
 
   it('never promotes a superseded upload', () => {
@@ -141,6 +171,99 @@ describe('watchUrlFor', () => {
   })
 })
 
+// A produced video's Share used to send canonicalCurrentUrl() — the PROFILE or
+// feed page the card sat on. There is now a page per video, and Share sends it.
+describe('producedVideoRoute (the share target)', () => {
+  const loc = (origin: string) => {
+    const u = new URL(origin)
+    return { protocol: u.protocol, hostname: u.hostname, origin: u.origin }
+  }
+
+  it('is the per-video app route, not the page the card sits on', () => {
+    expect(producedVideoRoute('mJ-zg4bnQ8w')).toBe('/produced/mJ-zg4bnQ8w')
+  })
+
+  it('escapes an id so it can never break out of the path', () => {
+    expect(producedVideoRoute('a/b?c')).toBe('/produced/a%2Fb%3Fc')
+  })
+
+  it('shares a real public link from the installed app (never localhost)', () => {
+    expect(canonicalShareUrl(producedVideoRoute('mJ-zg4bnQ8w'), loc('https://localhost'), '/')).toBe(
+      'https://tko.cam/app/produced/mJ-zg4bnQ8w',
+    )
+  })
+
+  it('keeps the league domain when the sharer is on one', () => {
+    expect(
+      canonicalShareUrl(producedVideoRoute('mJ-zg4bnQ8w'), loc('https://shinobistrikerleague.com'), '/'),
+    ).toBe('https://shinobistrikerleague.com/produced/mJ-zg4bnQ8w')
+  })
+})
+
+describe('mergeParticipants', () => {
+  it('unions players and takes the first handle anyone knows', () => {
+    expect(
+      mergeParticipants(
+        [{ id: 'p1', handle: null }, { id: 'p2', handle: 'Hammy' }],
+        [{ id: 'p1', handle: 'MrJerry' }, { id: 'p3', handle: null }],
+      ),
+    ).toEqual([
+      { id: 'p1', handle: 'MrJerry' },
+      { id: 'p2', handle: 'Hammy' },
+      { id: 'p3', handle: null },
+    ])
+  })
+
+  it('drops entries with no player id', () => {
+    expect(mergeParticipants([{ id: '', handle: 'ghost' }], [])).toEqual([])
+  })
+})
+
+describe('combineProducedVideo (single-video reader)', () => {
+  it('unions BOTH tables instead of letting one hide the other', () => {
+    const out = combineProducedVideo(
+      video({
+        youtubeId: 'vid',
+        title: '3-camera synchronized match',
+        participants: [{ id: 'p1', handle: null }, { id: 'p2', handle: null }],
+        angleCount: 3,
+        matchId: 'match-1',
+      }),
+      video({
+        youtubeId: 'vid',
+        title: 'Multi-angle · Flag · Leaf',
+        participants: [{ id: 'p2', handle: 'Hammy' }, { id: 'p3', handle: 'MrJerry' }],
+        angleCount: 2,
+      }),
+    )!
+    expect(out.angleCount).toBe(3)
+    expect(out.matchId).toBe('match-1')
+    // The clip records carry map/mode; the version row only counts cameras.
+    expect(out.title).toBe('Multi-angle · Flag · Leaf')
+    expect(out.participants).toEqual([
+      { id: 'p1', handle: null },
+      { id: 'p2', handle: 'Hammy' },
+      { id: 'p3', handle: 'MrJerry' },
+    ])
+    expect(out.playerIds).toEqual(['p1', 'p2', 'p3'])
+    expect(out.handles).toEqual(['Hammy', 'MrJerry'])
+  })
+
+  it('keeps the camera-count title when the records have no map/mode', () => {
+    const out = combineProducedVideo(
+      video({ title: '2-camera synchronized match' }),
+      video({ title: 'Multi-angle match' }),
+    )!
+    expect(out.title).toBe('2-camera synchronized match')
+  })
+
+  it('works when only one source has the video, and null when neither does', () => {
+    expect(combineProducedVideo(null, video({ youtubeId: 'only-legacy' }))!.youtubeId).toBe('only-legacy')
+    expect(combineProducedVideo(video({ youtubeId: 'only-canonical' }), null)!.youtubeId).toBe('only-canonical')
+    expect(combineProducedVideo(null, null)).toBeNull()
+  })
+})
+
 describe('dedupeProducedVideos', () => {
   it('collapses every angle of one match into ONE video and unions its players', () => {
     const rows = [
@@ -167,6 +290,29 @@ describe('dedupeProducedVideos', () => {
     // must never surface as a produced video linking to their personal channel.
     const out = dedupeProducedVideos([rec({ youtube_id: 'raw-on-user-channel', composite_youtube_id: null, player_id: 'p1' })])
     expect(out).toHaveLength(0)
+  })
+
+  // The bug this guards: playerIds and handles were built as two independent
+  // de-duplications, so ONE player without a handle shifted every later label
+  // onto the wrong profile. Ids and labels now travel as pairs.
+  it('keeps each gamertag with ITS OWN player when one angle has no handle', () => {
+    const out = dedupeProducedVideos([
+      rec({ composite_youtube_id: 'v', player_id: 'p1', player_handle: null }),
+      rec({ composite_youtube_id: 'v', player_id: 'p2', player_handle: 'Hammy' }),
+    ])
+    expect(out[0].participants).toEqual([
+      { id: 'p1', handle: null },
+      { id: 'p2', handle: 'Hammy' },
+    ])
+  })
+
+  it('fills in a handle that only a LATER angle row carried', () => {
+    const out = dedupeProducedVideos([
+      rec({ composite_youtube_id: 'v', player_id: 'p1', player_handle: null }),
+      rec({ composite_youtube_id: 'v', player_id: 'p1', player_handle: 'Hammy' }),
+    ])
+    expect(out[0].participants).toEqual([{ id: 'p1', handle: 'Hammy' }])
+    expect(out[0].handles).toEqual(['Hammy'])
   })
 
   it('orders videos newest first by best timestamp', () => {

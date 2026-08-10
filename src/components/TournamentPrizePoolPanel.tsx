@@ -3,6 +3,7 @@ import { Coins, LockKeyhole, RefreshCw, ShieldCheck, Trophy, UsersRound } from '
 import { callFn } from '@/lib/backend'
 import { useAuth } from '@/hooks/useAuth'
 import { useWallet } from '@/hooks/useWallet'
+import { WAGERING_UI_ENABLED } from '@/lib/storeBuild'
 
 type PrizeEntry = {
   id: string
@@ -44,6 +45,17 @@ type PoolResponse = {
 }
 
 export function TournamentPrizePoolPanel({
+  tournamentId,
+  isHost,
+}: {
+  tournamentId: string
+  isHost: boolean
+}) {
+  if (!WAGERING_UI_ENABLED) return null
+  return <TournamentPrizePoolPanelEnabled tournamentId={tournamentId} isHost={isHost} />
+}
+
+function TournamentPrizePoolPanelEnabled({
   tournamentId,
   isHost,
 }: {

@@ -2,13 +2,13 @@ import { useEffect, useState } from 'react'
 import { useAuth } from '@/hooks/useAuth'
 import { useEntitlements } from '@/hooks/useEntitlements'
 import { autoMergeEnabled, hasContentTier } from '@/lib/entitlements'
-import { loadLibrary } from '@/lib/youtubeConnect'
+import { isYouTubeLinked } from '@/lib/youtubeLink'
 import { supabase } from '@/lib/supabase'
 
 export interface AutoMergeState {
   /** Both conditions met — the user's clips may enter the cross-user merge. */
   enabled: boolean
-  /** (a) YouTube connected: a saved link row and/or a connected local library. */
+  /** (a) YouTube connected: a valid persisted or cached channel identity. */
   youtubeConnected: boolean
   /** (b) An active paid CONTENT tier (pro/supporter/creator). The ad-only
    *  ad_free tier and free do NOT satisfy the auto-merge requirement. */
@@ -27,9 +27,8 @@ export interface AutoMergeState {
  * connected YouTube AND hold a paid tier (see `autoMergeEnabled` in
  * lib/entitlements).
  *
- * "YouTube connected" is true if the user has a saved `user_youtube_links` row
- * (the same signal the TKO King registration + Connect page use) OR a connected
- * local library (the ClipFinder OAuth / manual-add path). Either satisfies (a).
+ * "YouTube connected" is true only for a valid channel identity. A saved video
+ * or local clip library alone does not satisfy the account-channel requirement.
  */
 export function useAutoMerge(): AutoMergeState {
   const { user } = useAuth()
@@ -49,22 +48,18 @@ export function useAutoMerge(): AutoMergeState {
     }
     let alive = true
     setLoading(true)
-    // Local library first (cheap, offline-friendly), then confirm against the
-    // saved links table. Either signal flips "connected".
-    const local = loadLibrary(user.id).length > 0
-    if (local && alive) setYoutubeConnected(true)
     ;(async () => {
       try {
         const [youtube, profile] = await Promise.all([
-          supabase.from('user_youtube_links').select('id').eq('user_id', user.id).limit(1),
+          isYouTubeLinked(user.id),
           supabase.from('profiles').select('auto_merge_opt_out').eq('id', user.id).maybeSingle(),
         ])
         if (alive) {
-          setYoutubeConnected(local || (youtube.data?.length ?? 0) > 0)
+          setYoutubeConnected(youtube)
           setOptedOutState(profile.data?.auto_merge_opt_out === true)
         }
       } catch {
-        if (alive) setYoutubeConnected(local)
+        if (alive) setYoutubeConnected(false)
       } finally {
         if (alive) setLoading(false)
       }

@@ -21,6 +21,7 @@ import { useAuth } from '@/hooks/useAuth'
 import { useWallet } from '@/hooks/useWallet'
 import { AssetUploadForm } from '@/components/AssetUploadForm'
 import { CollapsibleSection } from '@/components/CollapsibleSection'
+import { useLeagueTheme } from '@/components/LeagueThemeProvider'
 import {
   listAssets,
   getOwned,
@@ -39,6 +40,7 @@ import {
   buyCreatorItemWithPaidSweeps,
   startCreatorCashCheckout,
 } from '@/lib/creatorCommerceApi'
+import { resolveArtifactArt } from '@/lib/officialArtifactArt'
 
 type Storefront = 'official' | 'creator' | 'clan' | 'locker'
 
@@ -56,6 +58,14 @@ const KIND_ICONS: Record<AssetKind, LucideIcon> = {
   badge_skin: Badge,
 }
 
+export function officialMarketplaceLabels(productName: 'TKO' | 'SSL') {
+  return {
+    marketplace: `${productName} Marketplace`,
+    seller: `${productName} official`,
+    storefront: productName,
+  }
+}
+
 function assetSellerType(asset: DigitalAsset): SellerType {
   if (asset.sellerType) return asset.sellerType
   return asset.createdBy === 'seed' || asset.createdBy === 'oracle' || asset.createdBy === 'tko-king'
@@ -65,6 +75,8 @@ function assetSellerType(asset: DigitalAsset): SellerType {
 
 export function Shop() {
   const { user } = useAuth()
+  const { display } = useLeagueTheme()
+  const officialLabels = officialMarketplaceLabels(display.productName)
   const userId = user?.id ?? ''
   const {
     tokens,
@@ -180,7 +192,7 @@ export function Shop() {
     return (
       <div className="mx-auto max-w-md p-6 text-center">
         <ShoppingBag size={32} className="mx-auto mb-3 text-accent" />
-        <h1 className="text-2xl font-bold">TKO Marketplace</h1>
+        <h1 className="text-2xl font-bold">{officialLabels.marketplace}</h1>
         <p className="mb-4 mt-2 text-gray-400">Sign in to shop creator and clan items.</p>
         <Link to="/login" className="rounded-lg bg-accent px-4 py-2 font-semibold text-dark">Sign in</Link>
       </div>
@@ -242,7 +254,7 @@ export function Shop() {
             }`}
           >
             <Icon size={16} className="shrink-0" />
-            <span className="truncate">{label}</span>
+            <span className="truncate">{id === 'official' ? officialLabels.storefront : label}</span>
           </button>
         ))}
       </div>
@@ -275,6 +287,7 @@ export function Shop() {
               affordable={tokens >= asset.priceTokens}
               paidSweepsBalance={paidSweepsCents}
               buying={buying}
+              officialSellerLabel={officialLabels.seller}
               onBuy={() => void handleBuy(asset)}
               onCashBuy={() => void handleCashBuy(asset)}
               onPaidSweepsBuy={() => void handlePaidSweepsBuy(asset)}
@@ -307,6 +320,7 @@ function MarketplaceCard({
   affordable,
   paidSweepsBalance,
   buying,
+  officialSellerLabel,
   onBuy,
   onCashBuy,
   onPaidSweepsBuy,
@@ -316,35 +330,38 @@ function MarketplaceCard({
   affordable: boolean
   paidSweepsBalance: number
   buying: string | null
+  officialSellerLabel: string
   onBuy: () => void
   onCashBuy: () => void
   onPaidSweepsBuy: () => void
 }) {
   const KindIcon = KIND_ICONS[asset.kind] ?? ShoppingBag
   const sellerType = assetSellerType(asset)
-  const sellerLabel = sellerType === 'official' ? 'TKO official' : sellerType === 'clan' ? 'Clan shop' : 'Creator shop'
+  const sellerLabel = sellerType === 'official' ? officialSellerLabel : sellerType === 'clan' ? 'Clan shop' : 'Creator shop'
   const creatorListing = sellerType !== 'official' && Number(asset.priceCents ?? 0) > 0
   const paidSplit = creatorListing
     ? paidSweepsCreatorSplit(Number(asset.priceCents ?? 0))
     : null
+  const artworkUrl = resolveArtifactArt(asset.id, asset.imageUrl)
 
   return (
-    <article className="overflow-hidden rounded-lg border border-dark-border bg-dark-card transition-colors hover:border-accent/60">
+    <article className="group overflow-hidden rounded-lg border border-dark-border bg-dark-card transition-all hover:border-accent/60 hover:shadow-[0_12px_36px_rgba(0,0,0,0.38)]">
       <div className="relative aspect-square overflow-hidden bg-dark-elevated">
-        {asset.imageUrl ? (
+        {artworkUrl ? (
           <img
-            src={asset.imageUrl}
+            src={artworkUrl}
             alt={asset.name}
-            className="h-full w-full object-cover"
+            className="h-full w-full object-cover transition-transform duration-500 group-hover:scale-[1.035]"
             onError={(event) => {
               event.currentTarget.hidden = true
               event.currentTarget.nextElementSibling?.classList.remove('hidden')
             }}
           />
         ) : null}
-        <div className={`${asset.imageUrl ? 'hidden' : ''} absolute inset-0 flex items-center justify-center`}>
+        <div className={`${artworkUrl ? 'hidden' : ''} absolute inset-0 flex items-center justify-center`}>
           <KindIcon size={44} className="text-gray-600" />
         </div>
+        <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/45 via-transparent to-black/10" />
         <span className="absolute left-2 top-2 rounded-full bg-black/80 px-2 py-1 text-[10px] font-semibold text-gray-200">
           {sellerLabel}
         </span>

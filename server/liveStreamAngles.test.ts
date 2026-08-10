@@ -48,6 +48,10 @@ async function setTier(pool: any, userId: string, tier: string) {
   await pool.query('update users set user_metadata=$1 where id=$2', [JSON.stringify(meta), userId])
 }
 
+async function allowLiveReuse(pool: any, userId: string) {
+  await pool.query("update profiles set reel_usage_privacy='lives' where id=$1", [userId])
+}
+
 async function startStream(app: any, who: Who, placement: Placement = 'profile', extra: any = {}) {
   return db(app, who, {
     table: 'live_streams',
@@ -265,6 +269,7 @@ describe('live_stream_angles — host-curated multi-angle show', () => {
     player = await signUp(app, 'angle_player')
     stranger = await signUp(app, 'angle_stranger')
     await setTier(pool, host.id, 'pro')
+    await allowLiveReuse(pool, player.id)
     // The added player has a linked YouTube handle to resolve automatically.
     await pool.query('insert into user_youtube_links (user_id, url) values ($1,$2)', [
       player.id,

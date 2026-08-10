@@ -28,9 +28,15 @@ import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
-import { drainQueue, type RenderAndUpload, type RenderJob } from './renderWorker'
+import {
+  assertRenderJobHasCombatEvidence,
+  drainQueue,
+  type RenderAndUpload,
+  type RenderJob,
+} from './renderWorker'
 import { ensureSchema } from './ensureSchema'
 import { buildVideoReactionAudio, type ReactionAudio } from './tkoReactions'
+import { resolveAutoReelPolicy, type AutoReelPolicy } from './autoReelPolicy'
 
 const execFileP = promisify(execFile)
 const FFMPEG = process.env.FFMPEG_PATH || 'ffmpeg'
@@ -59,31 +65,68 @@ function makePool(): Pool {
 }
 
 // ─── source resolution ────────────────────────────────────────────────────
-async function resolveSources(pool: Pool, job: RenderJob, dir: string): Promise<string[]> {
-  const files: string[] = []
+type ResolvedSource = {
+  file: string
+  clipRecordId: string
+  sourceId: string | null
+  segmentId: string | null
+  segmentStart: number
+  segmentEnd: number | null
+  highlightAt: number | null
+  highlightConfidence: number
+}
+
+type RenderInput = ResolvedSource & {
+  start: number
+  duration: number
+}
+
+function finiteNumber(value: unknown, fallback: number | null = null): number | null {
+  if (value == null || value === '') return fallback
+  const parsed = Number(value)
+  return Number.isFinite(parsed) ? parsed : fallback
+}
+
+async function resolveSources(pool: Pool, job: RenderJob, dir: string): Promise<ResolvedSource[]> {
+  const sources: ResolvedSource[] = []
   for (let i = 0; i < job.clip_ids.length; i++) {
     const id = job.clip_ids[i]
     const r = await pool.query(
-      `select cr.youtube_id, c.url_or_path, c.source_type
+      `select cr.youtube_id,cr.source_id,cr.segment_id,
+              cr.source_start_sec,cr.source_end_sec,c.url_or_path,c.source_type
          from clip_records cr left join clips c on c.id = cr.clip_id
         where cr.id = $1`,
       [id],
     )
     const row = r.rows[0] || {}
     const dest = join(dir, `src_${i}.mp4`)
-    if (row.url_or_path && row.source_type === 'upload') {
-      await downloadFile(String(row.url_or_path), dest)
-    } else if (row.youtube_id) {
-      await ytDlp(`https://www.youtube.com/watch?v=${row.youtube_id}`, dest)
-    } else if (row.url_or_path) {
-      await downloadFile(String(row.url_or_path), dest)
-    } else {
-      throw new Error(`clip ${id} has no resolvable source`)
+    try {
+      if (row.url_or_path && row.source_type === 'upload') {
+        await downloadFile(String(row.url_or_path), dest)
+      } else if (row.youtube_id) {
+        await ytDlp(`https://www.youtube.com/watch?v=${row.youtube_id}`, dest)
+      } else if (row.url_or_path) {
+        await downloadFile(String(row.url_or_path), dest)
+      } else {
+        throw new Error(`clip ${id} has no resolvable source`)
+      }
+    } catch (error: any) {
+      console.warn(`[render-worker] skipping unavailable angle ${id}:`, error?.message || error)
+      continue
     }
-    files.push(dest)
+    sources.push({
+      file: dest,
+      clipRecordId: String(id),
+      sourceId: row.source_id ? String(row.source_id) : null,
+      segmentId: row.segment_id ? String(row.segment_id) : null,
+      segmentStart: Math.max(0, finiteNumber(row.source_start_sec, 0) ?? 0),
+      segmentEnd: finiteNumber(row.source_end_sec),
+      highlightAt: null,
+      highlightConfidence: 0,
+    })
   }
-  if (files.length < 2) throw new Error('need ≥2 source angles to composite')
-  return files
+  if (sources.length === 0) throw new Error('render job has no resolvable source angles')
+  return sources
 }
 
 async function downloadFile(url: string, dest: string): Promise<void> {
@@ -118,56 +161,205 @@ async function probeDuration(source: string): Promise<number> {
   return seconds
 }
 
+async function attachHighlightEvents(
+  pool: Pool,
+  matchId: string,
+  sources: ResolvedSource[],
+): Promise<void> {
+  const verified = await pool.query(
+    `select match_clock_sec,confidence
+       from verified_combat_events
+      where match_group_id=$1 and event_type='ko'
+      order by confidence desc,evidence_count desc,match_clock_sec desc
+      limit 1`,
+    [matchId],
+  )
+  const targetClock = finiteNumber(verified.rows[0]?.match_clock_sec)
+  const raw = await pool.query(
+    `select source_id,segment_id,at_sec,match_clock_sec,confidence,event_type
+       from combat_events
+      where match_group_id=$1
+        and event_type in ('ko','death')
+        and verification_status <> 'ambiguous'
+      order by confidence desc,at_sec desc`,
+    [matchId],
+  )
+
+  for (const source of sources) {
+    const candidates = raw.rows.filter((row) =>
+      (source.sourceId && String(row.source_id) === source.sourceId) ||
+      (source.segmentId && String(row.segment_id) === source.segmentId),
+    )
+    candidates.sort((a, b) => {
+      if (targetClock != null) {
+        const aClock = finiteNumber(a.match_clock_sec)
+        const bClock = finiteNumber(b.match_clock_sec)
+        const aDistance = aClock == null ? Number.POSITIVE_INFINITY : Math.abs(aClock - targetClock)
+        const bDistance = bClock == null ? Number.POSITIVE_INFINITY : Math.abs(bClock - targetClock)
+        if (aDistance !== bDistance) return aDistance - bDistance
+      }
+      return (finiteNumber(b.confidence, 0) ?? 0) - (finiteNumber(a.confidence, 0) ?? 0)
+    })
+    const event = candidates[0]
+    if (!event) continue
+    source.highlightAt = finiteNumber(event.at_sec)
+    source.highlightConfidence = finiteNumber(event.confidence, 0) ?? 0
+  }
+}
+
+async function prepareRenderInputs(
+  sources: ResolvedSource[],
+  policy: AutoReelPolicy,
+): Promise<{ inputs: RenderInput[]; durationSeconds: number }> {
+  const prepared: RenderInput[] = []
+  for (const source of sources) {
+    const fileDuration = await probeDuration(source.file)
+    const segmentStart = Math.min(source.segmentStart, Math.max(0, fileDuration - 0.25))
+    const requestedEnd = source.segmentEnd == null ? fileDuration : source.segmentEnd
+    const segmentEnd = Math.max(segmentStart + 0.25, Math.min(requestedEnd, fileDuration))
+    const available = segmentEnd - segmentStart
+    if (available < 1) continue
+
+    const requestedDuration = policy.maxDurationSeconds == null
+      ? available
+      : Math.min(policy.maxDurationSeconds, available)
+    const latestStart = Math.max(segmentStart, segmentEnd - requestedDuration)
+    const desiredStart = source.highlightAt == null
+      ? segmentStart
+      : source.highlightAt - policy.preRollSeconds
+    const start = Math.max(segmentStart, Math.min(desiredStart, latestStart))
+    const duration = Math.min(requestedDuration, segmentEnd - start)
+    if (duration < 1) continue
+    prepared.push({ ...source, segmentStart, segmentEnd, start, duration })
+  }
+
+  prepared.sort((a, b) => {
+    const aHasHighlight = a.highlightAt == null ? 0 : 1
+    const bHasHighlight = b.highlightAt == null ? 0 : 1
+    if (aHasHighlight !== bHasHighlight) return bHasHighlight - aHasHighlight
+    if (a.highlightConfidence !== b.highlightConfidence) {
+      return b.highlightConfidence - a.highlightConfidence
+    }
+    return b.duration - a.duration
+  })
+
+  const inputs = prepared.slice(0, Math.max(1, policy.maxAngles))
+  if (inputs.length === 0) throw new Error('no usable source windows remain after segment trimming')
+  if (policy.orientation === 'landscape') inputs.sort((a, b) => b.duration - a.duration)
+  const durations = inputs.map((input) => input.duration)
+  const durationSeconds = policy.orientation === 'vertical'
+    ? Math.min(...durations)
+    : Math.max(...durations)
+  return { inputs, durationSeconds }
+}
+
 async function composite(
-  sources: string[],
+  sources: RenderInput[],
   out: string,
   reactions: ReactionAudio[],
   durationSeconds: number,
+  policy: AutoReelPolicy,
 ): Promise<void> {
-  const n = Math.min(sources.length, 4)
+  const n = Math.min(sources.length, policy.maxAngles, 4)
   const inputs = sources.slice(0, n)
-  const cols = n <= 1 ? 1 : 2
-  const layout =
-    n === 2 ? '0_0|w0_0' : n === 3 ? '0_0|w0_0|0_h0' : '0_0|w0_0|0_h0|w0_h0'
   const args: string[] = []
-  for (const f of inputs) args.push('-i', f)
+  for (const input of inputs) {
+    args.push(
+      '-ss', input.start.toFixed(3),
+      '-t', Math.min(input.duration, durationSeconds).toFixed(3),
+      '-i', input.file,
+    )
+  }
   args.push('-i', BRAND_WATERMARK)
   for (const reaction of reactions) args.push('-i', reaction.file)
-  const scale = inputs.map((_, i) => `[${i}:v]scale=960:540,setsar=1[v${i}]`).join(';')
-  const stackIn = inputs.map((_, i) => `[v${i}]`).join('')
-  let filter =
-    `${scale};${stackIn}xstack=inputs=${inputs.length}:layout=${layout}[base];` +
-    `[${n}:v][base]scale2ref=w=oh*mdar:h=ih*0.055[wm][base2];` +
-    `[wm]format=rgba,colorchannelmixer=aa=0.82[brand];` +
-    `[base2][brand]overlay=W-w-24:H-h-24[v]`
+  const duration = durationSeconds.toFixed(3)
+  const filterParts = inputs.map((_, i) =>
+    `[${i}:v]setpts=PTS-STARTPTS,tpad=stop_mode=clone:stop_duration=${duration},` +
+    `trim=duration=${duration},setsar=1[src${i}]`,
+  )
+
+  if (policy.orientation === 'vertical') {
+    filterParts.push(
+      `[src0]split=2[front0][back0]`,
+      `[back0]scale=${policy.width}:${policy.height}:force_original_aspect_ratio=increase,` +
+        `crop=${policy.width}:${policy.height},gblur=sigma=28,eq=brightness=-0.24[bg]`,
+    )
+    if (n === 1) {
+      filterParts.push(
+        `[front0]scale=${policy.width}:-2[panel0]`,
+        `[bg][panel0]overlay=0:(H-h)/2[base]`,
+      )
+    } else {
+      filterParts.push(
+        `[front0]scale=${policy.width}:540:force_original_aspect_ratio=decrease,` +
+          `pad=${policy.width}:540:(ow-iw)/2:(oh-ih)/2:color=black[panel0]`,
+        `[src1]scale=${policy.width}:540:force_original_aspect_ratio=decrease,` +
+          `pad=${policy.width}:540:(ow-iw)/2:(oh-ih)/2:color=black[panel1]`,
+        `[bg][panel0]overlay=0:360[vertical1]`,
+        `[vertical1][panel1]overlay=0:1020[base]`,
+      )
+    }
+  } else if (n === 1) {
+    filterParts.push(
+      `[src0]scale=${policy.width}:${policy.height}:force_original_aspect_ratio=decrease,` +
+        `pad=${policy.width}:${policy.height}:(ow-iw)/2:(oh-ih)/2:color=black[base]`,
+    )
+  } else if (n === 2) {
+    filterParts.push(
+      `[src0]scale=960:1080:force_original_aspect_ratio=decrease,` +
+        `pad=960:1080:(ow-iw)/2:(oh-ih)/2:color=black[panel0]`,
+      `[src1]scale=960:1080:force_original_aspect_ratio=decrease,` +
+        `pad=960:1080:(ow-iw)/2:(oh-ih)/2:color=black[panel1]`,
+      `[panel0][panel1]xstack=inputs=2:layout=0_0|w0_0:fill=black[base]`,
+    )
+  } else {
+    const layout = n === 3 ? '0_0|w0_0|0_h0' : '0_0|w0_0|0_h0|w0_h0'
+    inputs.forEach((_, index) => {
+      filterParts.push(
+        `[src${index}]scale=960:540:force_original_aspect_ratio=decrease,` +
+          `pad=960:540:(ow-iw)/2:(oh-ih)/2:color=black[panel${index}]`,
+      )
+    })
+    const panels = inputs.map((_, index) => `[panel${index}]`).join('')
+    filterParts.push(`${panels}xstack=inputs=${n}:layout=${layout}:fill=black[base]`)
+  }
+
+  filterParts.push(
+    `[${n}:v]format=rgba,colorchannelmixer=aa=0.76[brand]`,
+    `[brand][base]scale2ref=w=oh*mdar:h=ih*0.045[wm][base2]`,
+    `[base2][wm]overlay=W-w-20:H-h-20[v]`,
+  )
   let audioMap = ['-map', '0:a?']
   if (reactions.length > 0) {
     const reactionLabels: string[] = []
-    filter += ';[0:a]aresample=48000,volume=0.82[game]'
+    filterParts.push(`[0:a]aresample=48000,atrim=duration=${duration},volume=0.82[game]`)
     reactions.forEach((reaction, index) => {
       const inputIndex = n + 1 + index
       const delayMs = Math.max(0, Math.round(durationSeconds * reaction.fraction * 1000))
-      filter +=
+      filterParts.push(
         `;[${inputIndex}:a]aresample=48000,` +
         `aformat=sample_fmts=fltp:channel_layouts=stereo,volume=1.0,` +
-        `adelay=${delayMs}:all=1[reaction${index}]`
+        `adelay=${delayMs}:all=1[reaction${index}]`,
+      )
       reactionLabels.push(`[reaction${index}]`)
     })
-    filter +=
+    filterParts.push(
       `;[game]${reactionLabels.join('')}amix=inputs=${1 + reactions.length}:` +
-      'duration=first:dropout_transition=0:normalize=0,alimiter=limit=0.95[mix]'
+      'duration=first:dropout_transition=0:normalize=0,alimiter=limit=0.95[mix]',
+    )
     audioMap = ['-map', '[mix]']
   }
+  const filter = filterParts.join(';').replaceAll(';;', ';')
   args.push(
     '-filter_complex', filter,
     '-map', '[v]',
     ...audioMap,
     '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20',
-    '-c:a', 'aac', '-shortest', '-y', out,
+    '-pix_fmt', 'yuv420p', '-r', '30',
+    '-c:a', 'aac', '-t', duration, '-movflags', '+faststart', '-y', out,
   )
   console.log('[ffmpeg]', args.join(' '))
   await execFileP(FFMPEG, args, { maxBuffer: 1024 * 1024 * 256 })
-  void cols
 }
 
 // ─── YouTube upload (fetch-based, no extra deps) ───────────────────────────
@@ -186,10 +378,20 @@ async function getAccessToken(): Promise<string> {
   return ((await res.json()) as { access_token: string }).access_token
 }
 
-async function youtubeUpload(filePath: string, title: string, description: string): Promise<string> {
+async function youtubeUpload(
+  filePath: string,
+  title: string,
+  description: string,
+  shortForm: boolean,
+): Promise<string> {
   const accessToken = await getAccessToken()
   const meta = {
-    snippet: { title, description, tags: ['ShinobiStriker', 'TKO', 'multi-angle'], categoryId: '20' },
+    snippet: {
+      title,
+      description,
+      tags: ['ShinobiStriker', 'TKO', 'multi-angle', ...(shortForm ? ['Shorts'] : [])],
+      categoryId: '20',
+    },
     status: { privacyStatus: 'public', madeForKids: false },
   }
   const fileSize = (await stat(filePath)).size
@@ -222,16 +424,30 @@ async function youtubeUpload(filePath: string, title: string, description: strin
 const renderAndUpload: RenderAndUpload = async (pool, job) => {
   const dir = await mkdtemp(join(tmpdir(), 'tko-render-'))
   try {
+    // This check runs before downloads, FFmpeg, OAuth, or YouTube quota use.
+    await assertRenderJobHasCombatEvidence(pool, job)
+    const policy = await resolveAutoReelPolicy(pool as Pool, job.participant_ids)
+    if (!policy.automatic) {
+      throw new Error('automatic rendering requires an active Pro, Elite, or Legend membership')
+    }
     const sources = await resolveSources(pool as Pool, job, dir)
+    await attachHighlightEvents(pool as Pool, job.match_id, sources)
+    const prepared = await prepareRenderInputs(sources, policy)
     const out = join(dir, 'combined.mp4')
-    const durationSeconds = await probeDuration(sources[0])
-    const reactions = await buildVideoReactionAudio(job.match_id)
-    await composite(sources, out, reactions, durationSeconds)
+    const reactions = await buildVideoReactionAudio(job.match_id, policy.reactionCount)
+    await composite(prepared.inputs, out, reactions, prepared.durationSeconds, policy)
     const title = `Shinobi Striker — ${job.clip_ids.length}-angle match | TKO.cam`
     const description =
       `Every angle of one match, assembled automatically by TKO.cam.\n\n` +
       `Upload your own footage and get auto-matched: https://tko.cam`
-    const youtubeId = await youtubeUpload(out, title, description)
+    const shortForm = policy.orientation === 'vertical'
+    const publishTitle = shortForm
+      ? `TKO ${policy.profile === 'quick_vertical' ? 'Quick Cut' : 'Enhanced Cut'} #Shorts`
+      : `Shinobi Striker - ${prepared.inputs.length}-angle TKO Director Cut`
+    const publishDescription =
+      `One match, ${prepared.inputs.length} verified angle${prepared.inputs.length === 1 ? '' : 's'}, ` +
+      `assembled automatically by TKO.cam (${policy.profile}).\n\n` + description
+    const youtubeId = await youtubeUpload(out, publishTitle || title, publishDescription, shortForm)
     return { youtubeId, videoUrl: `https://youtu.be/${youtubeId}` }
   } finally {
     await rm(dir, { recursive: true, force: true }).catch(() => {})

@@ -4,11 +4,12 @@ import {
   certifyCreatorTaxProfile,
   fetchCreatorFees,
   fetchConnectStatus,
+  creatorCommerceError,
   retryCreatorFees,
   startConnectOnboarding,
   type CreatorPlatformFee,
 } from '@/lib/creatorCommerceApi'
-import { IS_MOBILE_STORE_BUILD } from '@/lib/storeBuild'
+import { DIGITAL_CHECKOUT_ENABLED } from '@/lib/storeBuild'
 
 type ConnectStatus = NonNullable<Awaited<ReturnType<typeof fetchConnectStatus>>['data']>
 
@@ -20,8 +21,8 @@ export function CreatorPayoutsCard({
   paidTotalCents,
   pendingDonations,
 }: {
-  paidTotalCents: number
-  pendingDonations: number
+  paidTotalCents?: number
+  pendingDonations?: number
 }) {
   const [status, setStatus] = useState<ConnectStatus | null>(null)
   const [loading, setLoading] = useState(true)
@@ -34,7 +35,7 @@ export function CreatorPayoutsCard({
   const [fees, setFees] = useState<CreatorPlatformFee[]>([])
 
   const load = useCallback(async () => {
-    if (IS_MOBILE_STORE_BUILD) {
+    if (!DIGITAL_CHECKOUT_ENABLED) {
       setLoading(false)
       return
     }
@@ -47,7 +48,7 @@ export function CreatorPayoutsCard({
       setStatus(result.data)
       setError(null)
     } else {
-      setError(result.error || 'Payout status is unavailable.')
+      setError(creatorCommerceError(result.error, 'Payout status is unavailable right now.'))
     }
     if (feeResult.ok) setFees(feeResult.data?.fees ?? [])
     setLoading(false)
@@ -65,7 +66,7 @@ export function CreatorPayoutsCard({
       window.location.href = result.data.url
       return
     }
-    setError(result.error || 'Stripe onboarding could not start.')
+    setError(creatorCommerceError(result.error, 'Stripe onboarding could not start. Try again later.'))
     setBusy(false)
   }
 
@@ -78,7 +79,7 @@ export function CreatorPayoutsCard({
     setError(null)
     const result = await certifyCreatorTaxProfile(taxFormType)
     if (!result.ok) {
-      setError(result.error || 'Tax consent could not be saved.')
+      setError(creatorCommerceError(result.error, 'Tax consent could not be saved. Try again.'))
       setBusy(false)
       return
     }
@@ -90,7 +91,7 @@ export function CreatorPayoutsCard({
     setBusy(true)
     setError(null)
     const result = await retryCreatorFees()
-    if (!result.ok) setError(result.error || 'Seller charges could not be retried.')
+    if (!result.ok) setError(creatorCommerceError(result.error, 'Seller charges could not be retried. Try again later.'))
     await load()
     setBusy(false)
   }
@@ -100,7 +101,7 @@ export function CreatorPayoutsCard({
     .filter((fee) => fee.status === 'pending' || fee.status === 'failed')
     .reduce((sum, fee) => sum + Number(fee.seller_fee_cents || 0), 0)
 
-  if (IS_MOBILE_STORE_BUILD) return null
+  if (!DIGITAL_CHECKOUT_ENABLED) return null
 
   return (
     <section className="rounded-lg border border-accent/30 bg-dark-card p-5">
@@ -108,27 +109,31 @@ export function CreatorPayoutsCard({
         <div>
           <h2 className="font-semibold text-white">Creator payouts</h2>
           <p className="mt-1 text-sm text-gray-400">
-            Pro keeps 50%, Elite keeps 65%, and Legend or Founder keeps 80% of eligible sales.
+            Connect Stripe now so your payout account is ready. Marketplace sales remain tied to an eligible seller tier.
           </p>
         </div>
         <StatusPill loading={loading} status={status} />
       </div>
 
-      <div className="mt-4 grid grid-cols-2 gap-3">
-        <Metric label="Lifetime paid" value={`$${(paidTotalCents / 100).toFixed(2)}`} />
-        <Metric label="Pending tips" value={String(pendingDonations)} />
-      </div>
+      {(paidTotalCents != null || pendingDonations != null) && (
+        <div className="mt-4 grid grid-cols-2 gap-3">
+          {paidTotalCents != null && <Metric label="Lifetime paid" value={`$${(paidTotalCents / 100).toFixed(2)}`} />}
+          {pendingDonations != null && <Metric label="Pending tips" value={String(pendingDonations)} />}
+        </div>
+      )}
 
       {!loading && status?.seller_eligible === false && (
         <div className="mt-4 rounded-lg border border-accent/30 bg-accent/5 p-4">
-          <p className="text-sm text-gray-200">Selling and Stripe payouts start with Pro.</p>
+          <p className="text-sm text-gray-200">
+            You can finish Stripe setup now. Marketplace selling starts with Pro, and your connected payout account will already be ready when you become eligible.
+          </p>
           <Link to="/upgrade" className="mt-3 inline-flex rounded-md bg-accent px-4 py-2 text-sm font-semibold text-dark">
             View seller tiers
           </Link>
         </div>
       )}
 
-      {!loading && status?.seller_eligible !== false && !connectReady && (
+      {!loading && !connectReady && (
         <div className="mt-4">
           <p className="text-sm text-gray-300">
             Stripe securely collects your identity, payout bank, and W-9 or W-8 information.
@@ -199,14 +204,14 @@ export function CreatorPayoutsCard({
             onClick={saveTaxConsent}
             className="mt-4 rounded-md bg-chakra px-4 py-2 text-sm font-semibold text-dark disabled:opacity-40"
           >
-            {busy ? 'Saving...' : 'Enable seller payouts'}
+            {busy ? 'Saving...' : 'Finish payout setup'}
           </button>
         </div>
       )}
 
       {!loading && status?.ready && (
         <div className="mt-4 text-sm text-leaf">
-          <p>Payouts are active. Stripe handles your bank deposits and tax-form delivery.</p>
+          <p>Your Stripe payout account is ready. Stripe handles your bank deposits and tax-form delivery.</p>
           <p className="mt-1 text-xs text-gray-400">
             Documented Stripe and tax-form filing costs are deducted from seller proceeds.
           </p>
@@ -248,7 +253,9 @@ function StatusPill({
   const label = loading
     ? 'Checking'
     : status?.ready
-      ? `Active - ${status.seller_share_percent ?? 0}%`
+      ? status.seller_share_percent != null
+        ? `Active - ${status.seller_share_percent}%`
+        : 'Payout account ready'
       : status?.connected
         ? 'Setup needed'
         : 'Not connected'

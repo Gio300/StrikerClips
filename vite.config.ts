@@ -23,6 +23,7 @@ export default defineConfig(({ mode: _mode }) => {
   const buildId = resolveBuildId(process.env)
   const builtAt = Date.now()
   process.env.VITE_BUILD_ID = buildId
+  process.env.VITE_BUILD_AT = String(builtAt)
 
   return {
     plugins: [react(), buildIdPlugin({ buildId, builtAt, emitVersionFile: true })],

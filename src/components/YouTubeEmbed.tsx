@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode, type MouseEvent } from 'react'
 import { thumbUrl } from '@/lib/youtubeConnect'
+import { canonicalCurrentUrl, canonicalShareUrl } from '@/lib/canonicalUrl'
 
 /**
  * YouTubeEmbed — play a YouTube video INSIDE the app instead of only linking out.
@@ -28,6 +29,7 @@ export function YouTubeEmbed({
   className,
   overlay,
   preview = false,
+  shareRoute,
 }: {
   videoId: string
   title?: string
@@ -35,6 +37,13 @@ export function YouTubeEmbed({
   overlay?: ReactNode
   /** Enable the muted, looping hover preview (feed cards pass this). */
   preview?: boolean
+  /**
+   * App route this video has a page of its own at (e.g. `/produced/<id>`).
+   * Share sends THIS instead of whatever page the embed happens to sit on —
+   * a card in a feed or on a profile would otherwise share the feed/profile,
+   * and the recipient would never find the video that was shared.
+   */
+  shareRoute?: string
 }) {
   const [active, setActive] = useState(false)
   const [previewing, setPreviewing] = useState(false)
@@ -43,11 +52,19 @@ export function YouTubeEmbed({
   const id = (videoId ?? '').trim()
 
   // Floating Share — visible while the video plays in-app. Uses the native share
-  // sheet on mobile, falls back to copying the page link. Shares the current
-  // watch page (where the user is) so the recipient lands on TKO, not raw YouTube.
+  // sheet on mobile, falls back to copying the link. Shares THIS VIDEO's own
+  // page when it has one (`shareRoute`), otherwise the current watch page — so
+  // the recipient lands on TKO, not raw YouTube, and on the right thing.
   async function shareVideo(e: MouseEvent) {
     e.stopPropagation()
-    const url = typeof window !== 'undefined' ? window.location.href : `https://youtu.be/${id}`
+    // Canonicalized: the raw location.href is `https://localhost/...` inside
+    // the installed app — a dead link for the recipient.
+    const url =
+      typeof window !== 'undefined'
+        ? shareRoute
+          ? canonicalShareUrl(shareRoute)
+          : canonicalCurrentUrl()
+        : `https://youtu.be/${id}`
     const data = { title: title || 'TKO.cam', url }
     try {
       if (typeof navigator !== 'undefined' && navigator.share) {

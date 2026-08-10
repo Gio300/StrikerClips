@@ -40,6 +40,26 @@ export const adsenseSlots: Record<string, string> = {
   'feed-inline': import.meta.env.VITE_ADSENSE_FEED_INLINE ?? '',
   'create-gate': import.meta.env.VITE_ADSENSE_CREATE_GATE ?? '',
   'export-gate': import.meta.env.VITE_ADSENSE_EXPORT_GATE ?? '',
+  // ONE small strip pinned under the message list on every PUBLIC chat surface
+  // (live stream chat, tournament chat, clan/open channels). Deliberately not
+  // one-ad-per-N-messages: it is a single unit that swaps creative on a timer
+  // (see ChatAdRail.tsx), so the feed itself is never interrupted. DMs are
+  // excluded — a private conversation carries no inventory.
+  'chat-inline': import.meta.env.VITE_ADSENSE_CHAT_INLINE ?? '',
+}
+
+/**
+ * How often the single in-chat strip swaps creative, in SECONDS.
+ * Operator's words: "small ad at the bottom that changes every once in a while".
+ * Clamped to a sane band by chatAdRotateMs() so a typo can't spin the ad.
+ */
+export const adChatRotateSeconds = import.meta.env.VITE_AD_CHAT_ROTATE_SECONDS ?? ''
+
+/** Rotation period in ms — default 45s, clamped to [20s, 10min]. */
+export function chatAdRotateMs(raw: string = adChatRotateSeconds): number {
+  const n = Number.parseInt(raw, 10)
+  const seconds = Number.isFinite(n) && n > 0 ? n : 45
+  return Math.min(600, Math.max(20, seconds)) * 1000
 }
 
 /** AdRoll Smart Pixel v2 advertiser id. Empty = pixel stays inert. */

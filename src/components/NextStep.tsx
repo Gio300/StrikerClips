@@ -4,6 +4,8 @@ import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/hooks/useAuth'
 import { isYouTubeLinked } from '@/lib/youtubeLink'
 import { loadLibrary } from '@/lib/youtubeConnect'
+import { useLeagueTheme } from '@/components/LeagueThemeProvider'
+import { kingLadderDisplayName } from '@/lib/displayBrand'
 
 /**
  * NextStep — a single, guiding "here's your next logical move" card.
@@ -30,6 +32,9 @@ function dismiss(id: string) {
 
 export function NextStep() {
   const { user } = useAuth()
+  const { display } = useLeagueTheme()
+  const brandName = display.productName
+  const ladderName = kingLadderDisplayName(display)
   const [step, setStep] = useState<Step | null>(null)
 
   useEffect(() => {
@@ -40,7 +45,7 @@ export function NextStep() {
       const linked = await isYouTubeLinked(user.id)
       if (!alive) return
       if (!linked) {
-        return setStep({ id: 'connect', emoji: '📺', title: 'Connect your YouTube', blurb: 'Link your channel once — then TKO can pull your clips and auto-merge your matches.', cta: 'Connect', to: '/highlight/create' })
+        return setStep({ id: 'connect', emoji: '📺', title: 'Connect your YouTube', blurb: `Link your channel once — then ${brandName} can pull your clips and auto-merge your matches.`, cta: 'Connect', to: '/highlight/create' })
       }
       // 2) Make your first clip.
       let hasClips = loadLibrary(user.id).length > 0
@@ -65,10 +70,10 @@ export function NextStep() {
         return setStep({ id: 'clan', emoji: '🏯', title: 'Join or found a clan', blurb: 'Clans take land in Shinobi Conquest. Pick a village on the map or join an existing clan.', cta: 'Find a clan', to: '/clans' })
       }
       // 4) Enter the King ladder.
-      setStep({ id: 'ladder', emoji: '👑', title: 'Enter the TKO King ladder', blurb: 'Get auto-matched, climb the ranks, and fight toward the crown. It never ends.', cta: 'Enter', to: '/king' })
+      setStep({ id: 'ladder', emoji: '👑', title: `Enter the ${ladderName}`, blurb: 'Get auto-matched, climb the ranks, and fight toward the crown. It never ends.', cta: 'Enter', to: '/king' })
     })()
     return () => { alive = false }
-  }, [user])
+  }, [brandName, ladderName, user])
 
   if (!user || !step || isDismissed(step.id)) return null
 

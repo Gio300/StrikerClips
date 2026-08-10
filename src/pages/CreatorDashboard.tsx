@@ -112,12 +112,10 @@ function Dashboard({ userId }: { userId: string }) {
       <GoalsPanel goals={goals} stats={stats} onChange={async () => { await reloadGoals(); await refreshStats() }} />
 
       {/* ── EARNINGS (reused cards) ───────────────────────────────────────── */}
-      {!IS_MOBILE_STORE_BUILD && (
-        <div className="grid lg:grid-cols-2 gap-6 mt-6">
-          <CreatorPayoutsCard paidTotalCents={stats?.donationCents ?? 0} pendingDonations={0} />
-          <WinningsLedger userId={userId} />
-        </div>
-      )}
+      <div className="grid lg:grid-cols-2 gap-6 mt-6">
+        <CreatorPayoutsCard paidTotalCents={stats?.donationCents ?? 0} pendingDonations={0} />
+        <WinningsLedger userId={userId} />
+      </div>
     </div>
   )
 }
@@ -149,12 +147,7 @@ function GoalsPanel({
     setError(null)
     const saved = await setGoal({ kind, label: label.trim(), target: t })
     setBusy(false)
-    if (!saved) {
-      setError(IS_MOBILE_STORE_BUILD
-        ? 'Goal changes are not available in the mobile app.'
-        : 'Could not save goal. A paid streaming plan is required.')
-      return
-    }
+    if (!saved) { setError('Could not save goal. A paid streaming plan is required.'); return }
     setLabel('')
     setTarget('')
     await onChange()
@@ -276,22 +269,6 @@ function GoalsPanel({
 // ─────────────────────────────────────────────────────────────────────────────
 
 function UpgradeGate() {
-  if (IS_MOBILE_STORE_BUILD) {
-    return (
-      <div className="p-4 sm:p-6 lg:p-8 max-w-2xl mx-auto">
-        <div className="rounded-2xl border border-accent/30 bg-dark-card p-8 text-center">
-          <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-full border border-accent/40 bg-accent/10">
-            <LockIcon className="h-7 w-7 text-accent" />
-          </div>
-          <h1 className="text-2xl font-bold text-white">Creator Dashboard unavailable</h1>
-          <p className="mt-3 text-gray-400">
-            This feature is not available in the mobile app.
-          </p>
-        </div>
-      </div>
-    )
-  }
-
   return (
     <div className="p-4 sm:p-6 lg:p-8 max-w-2xl mx-auto">
       <div className="rounded-2xl border border-accent/30 bg-dark-card p-8 text-center">
@@ -311,12 +288,14 @@ function UpgradeGate() {
             </li>
           ))}
         </ul>
-        <Link
-          to="/upgrade"
-          className="mt-6 inline-flex rounded-lg bg-accent px-6 py-3 text-sm font-semibold text-dark"
-        >
-          Upgrade my plan
-        </Link>
+        {!IS_MOBILE_STORE_BUILD && (
+          <Link
+            to="/upgrade"
+            className="mt-6 inline-flex rounded-lg bg-accent px-6 py-3 text-sm font-semibold text-dark"
+          >
+            Upgrade my plan
+          </Link>
+        )}
       </div>
     </div>
   )

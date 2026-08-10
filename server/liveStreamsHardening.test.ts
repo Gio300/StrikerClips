@@ -237,6 +237,129 @@ describe('live_streams API hardening', () => {
   })
 })
 
+// ── live-tournament-attach: connect a tournament to a RUNNING show ──────────
+// The GoLive form can pre-attach a tournament, but a host who went live without
+// one attaches it mid-show through this fn. Host-only, own-tournament-only
+// (creator / listed admin / global TKO host), never a completed tournament.
+const invokeFn = (app: any, who: Who, name: string, body: any) =>
+  request(app).post(`/api/fn/${name}`).set('Authorization', `Bearer ${who.token}`).send(body)
+
+describe('live-tournament-attach — connect a tournament to a running show', () => {
+  const pool = makeDb()
+  const app = createApp(pool)
+  let host: Who
+  let rival: Who
+
+  beforeAll(async () => {
+    host = await signUp(app, 'attach_host')
+    rival = await signUp(app, 'attach_rival')
+    await setTier(pool, host.id, 'pro')
+    await setTier(pool, rival.id, 'pro')
+  })
+  afterAll(async () => { await pool.end() })
+
+  async function makeTournament(createdBy: string, name: string, status = 'open') {
+    const r = await pool.query(
+      'insert into tournaments (name, created_by, status) values ($1,$2,$3) returning *',
+      [name, createdBy, status],
+    )
+    return r.rows[0]
+  }
+
+  it('lets the host attach THEIR OWN tournament (created_by, no admin row) and detach it', async () => {
+    // Creating a tournament writes NO tournament_admins row — created_by alone
+    // must be enough, exactly the case behind "you're not running a tournament".
+    const tournament = await makeTournament(host.id, 'Attach Cup')
+    const started = await startStream(app, host, 'profile', { title: 'attach show' })
+    expect(started.status).toBe(200)
+    const streamId = started.body.data.id
+    expect(started.body.data.tournament_id ?? null).toBeNull()
+
+    const attach = await invokeFn(app, host, 'live-tournament-attach', {
+      liveStreamId: streamId, tournamentId: tournament.id,
+    })
+    expect(attach.status).toBe(200)
+    expect(attach.body.ok).toBe(true)
+    expect(String(attach.body.stream.tournament_id)).toBe(String(tournament.id))
+    expect(attach.body.stream.show_bracket).toBe(true)
+
+    const detach = await invokeFn(app, host, 'live-tournament-attach', {
+      liveStreamId: streamId, tournamentId: null,
+    })
+    expect(detach.status).toBe(200)
+    expect(detach.body.detached).toBe(true)
+    expect(detach.body.stream.tournament_id).toBeNull()
+    expect(detach.body.stream.show_bracket).toBe(false)
+    await endStream(app, host, streamId)
+  })
+
+  it('refuses a caller who is not the stream host, and a tournament the host does not run', async () => {
+    const theirs = await makeTournament(rival.id, 'Rival Cup')
+    const started = await startStream(app, host, 'profile', { title: 'guard show' })
+    expect(started.status).toBe(200)
+    const streamId = started.body.data.id
+
+    const notYourStream = await invokeFn(app, rival, 'live-tournament-attach', {
+      liveStreamId: streamId, tournamentId: theirs.id,
+    })
+    expect(notYourStream.status).toBe(403)
+
+    const notYourTournament = await invokeFn(app, host, 'live-tournament-attach', {
+      liveStreamId: streamId, tournamentId: theirs.id,
+    })
+    expect(notYourTournament.status).toBe(403)
+
+    const row = await pool.query('select tournament_id from live_streams where id=$1', [streamId])
+    expect(row.rows[0].tournament_id).toBeNull()
+
+    // A LISTED admin of someone else's tournament may attach it.
+    await pool.query(
+      'insert into tournament_admins (tournament_id, user_id) values ($1,$2)',
+      [theirs.id, host.id],
+    )
+    const asAdmin = await invokeFn(app, host, 'live-tournament-attach', {
+      liveStreamId: streamId, tournamentId: theirs.id,
+    })
+    expect(asAdmin.status).toBe(200)
+    expect(asAdmin.body.ok).toBe(true)
+    await endStream(app, host, streamId)
+  })
+
+  it('refuses a completed (closed) tournament', async () => {
+    const closed = await makeTournament(host.id, 'Done Cup', 'closed')
+    const started = await startStream(app, host, 'profile', { title: 'closed show' })
+    expect(started.status).toBe(200)
+    const streamId = started.body.data.id
+
+    const refused = await invokeFn(app, host, 'live-tournament-attach', {
+      liveStreamId: streamId, tournamentId: closed.id,
+    })
+    expect(refused.status).toBe(409)
+    expect(refused.body.reason).toBe('tournament-closed')
+    const row = await pool.query('select tournament_id from live_streams where id=$1', [streamId])
+    expect(row.rows[0].tournament_id).toBeNull()
+    await endStream(app, host, streamId)
+  })
+
+  it('surfaces tournament_id in live-session-list so a recovered show knows its bracket', async () => {
+    const tournament = await makeTournament(host.id, 'Recover Cup')
+    const started = await startStream(app, host, 'profile', { title: 'recover show' })
+    expect(started.status).toBe(200)
+    const streamId = started.body.data.id
+    const attach = await invokeFn(app, host, 'live-tournament-attach', {
+      liveStreamId: streamId, tournamentId: tournament.id,
+    })
+    expect(attach.body.ok).toBe(true)
+
+    const list = await invokeFn(app, host, 'live-session-list', {})
+    expect(list.status).toBe(200)
+    const mine = (list.body.streams as any[]).find((s) => String(s.id) === String(streamId))
+    expect(mine).toBeTruthy()
+    expect(String(mine.tournament_id)).toBe(String(tournament.id))
+    await endStream(app, host, streamId)
+  })
+})
+
 // A public live_streams read runs the stale-live sweep first, so selecting is the
 // way to trigger it. Insert rows directly with a backdated updated_at to simulate
 // a host who stopped heartbeating, then read + check is_live on the row.

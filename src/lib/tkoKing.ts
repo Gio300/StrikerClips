@@ -19,6 +19,7 @@ import { MONTH_DAYS } from './trial'
 import { grantAsset, type DigitalAsset, type AssetStorage } from './assets'
 import { callFn } from './backend'
 import { entitlementsFromUser } from './entitlements'
+import { resolveArtifactArt } from './officialArtifactArt'
 import { TOP_TIER } from './tiers'
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000
@@ -978,11 +979,15 @@ function kingArtifact(
   colors: string,
   caption: string,
 ): DigitalAsset {
+  const id = `${KING_PRIZE_ID_PREFIX}${slug}`
   return {
-    id: `${KING_PRIZE_ID_PREFIX}${slug}`,
+    id,
     name,
     teamName: KING_PRIZE_TEAM,
-    imageUrl: `https://placehold.co/400x400/${colors}?text=${encodeURIComponent(caption)}`,
+    imageUrl: resolveArtifactArt(
+      id,
+      `https://placehold.co/400x400/${colors}?text=${encodeURIComponent(caption)}`,
+    ),
     priceTokens: 0,
     kind,
     sellerType: 'official',

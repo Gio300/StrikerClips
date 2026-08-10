@@ -192,6 +192,9 @@ export async function recordReelParticipants(args: {
   if (error) {
     // eslint-disable-next-line no-console
     console.warn('recordReelParticipants() failed:', error.message)
+    // A refused cast row may be a privacy decision. Do not leak the attempted
+    // reuse through notifications when the server declined the cast.
+    return { ...plan, recipients: [] }
   }
 
   const copy = participantNotification(args.reelTitle, args.reelId)

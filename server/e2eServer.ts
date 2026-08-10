@@ -12,12 +12,46 @@ import { fileURLToPath } from 'node:url'
 import express from 'express'
 import { createApp } from './app'
 import { makeDb } from './testHarness'
+import { sweepEndedTournaments } from './tournamentEndSweep'
 
 process.env.MERCH_MODE ||= 'simulate'
 process.env.MERCH_PAYOUT_HOLD_DAYS ||= '0'
 
 const pool = makeDb()
-const app = createApp(pool)
+// Mirror the live SSL skin so domain-preview E2E runs exercise the same public
+// league-config contract instead of relying on the client's 404 fallback.
+await pool.query(
+  `insert into leagues (slug, name, domain, colors, tagline, video_ownership, tier, plan_status)
+   values (
+     'shinobistrikerleague',
+     'SHINOBI STRIKER LEAGUE',
+     'shinobistrikerleague.com',
+     '{"primary":"#ff5b3d","secondary":"#2ed3dc","accent":"#ffb224","text":"#f5f5f8"}'::jsonb,
+     'rise. strike. reign.',
+     'league',
+     'enterprise',
+     'comped'
+   )
+   on conflict (slug) do nothing`,
+)
+const app = createApp(pool, {
+  // Test-process-only dependency injection: Playwright exercises the normal
+  // authenticated /api/onboarding/video route without depending on YouTube
+  // allowing a scrape from CI. No production route or bypass is added.
+  resolveOnboardingVideo: async (url) => {
+    if (!String(url).includes('e2eplay01')) throw new Error('unknown e2e gameplay fixture')
+    return {
+      videoUrl: 'https://www.youtube.com/watch?v=e2eplay01',
+      videoId: 'e2eplay01',
+      videoTitle: 'E2E Shinobi Striker match',
+      thumbnailUrl: 'https://i.ytimg.com/vi/e2eplay01/hqdefault.jpg',
+      channelId: 'UCabcdefghijklmnopqrstuv',
+      channelUrl: 'https://www.youtube.com/@E2EOnboarding',
+      channelTitle: 'E2E Onboarding',
+    }
+  },
+  interpretOnboardingText: async () => null,
+})
 
 // Test-only entitlement grant. This server is never part of the production
 // image; it lets full-stack proofs create authorized broadcasters while the
@@ -88,6 +122,43 @@ app.post('/__e2e/seed-artifact', async (req, res) => {
     return res.status(500).json({
       error: error instanceof Error ? error.message : 'artifact seed failed',
     })
+  }
+})
+
+// Sweeps into a test wallet. `wallets` is insert:'deny' / write:'deny' through
+// the data API — balances move only through the settlement machinery, which is
+// exactly the property the prize tests are there to prove — so a full-stack
+// money proof needs this one seeded starting balance from outside it.
+app.post('/__e2e/grant-sweeps', async (req, res) => {
+  try {
+    const userId = String(req.body?.user_id || '')
+    const amount = Math.max(0, Math.floor(Number(req.body?.sweeps ?? 100)))
+    if (!userId) return res.status(400).json({ error: 'user_id required' })
+    await pool.query(
+      `insert into wallets (user_id, tokens, sweeps, paid_sweeps_cents)
+       values ($1,0,0,0) on conflict (user_id) do nothing`,
+      [userId],
+    )
+    await pool.query('update wallets set sweeps=$2::integer where user_id=$1', [userId, amount])
+    const row = await pool.query('select sweeps from wallets where user_id=$1', [userId])
+    return res.json({ ok: true, sweeps: Number(row.rows[0]?.sweeps ?? 0) })
+  } catch (error) {
+    return res.status(500).json({ error: error instanceof Error ? error.message : 'grant failed' })
+  }
+})
+
+// The end-time sweep on demand. In production this runs on an interval from
+// server/index.ts (startTournamentEndSweeper); there is deliberately no API to
+// trigger it, because nothing outside the server should be able to close
+// tournaments and move money. A full-stack proof still needs to WATCH that
+// settlement happen over real HTTP, so this test-only process exposes one
+// button for it. Returns the sweep summary — including WHY each pool settled
+// or refunded (see PoolOutcomeReason in server/tournamentEndSweep.ts).
+app.post('/__e2e/run-end-sweep', async (_req, res) => {
+  try {
+    res.json(await sweepEndedTournaments(pool))
+  } catch (error) {
+    res.status(500).json({ error: error instanceof Error ? error.message : 'sweep failed' })
   }
 })
 

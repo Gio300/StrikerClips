@@ -104,33 +104,13 @@ const allowedArtworkUrl = (url: string): boolean => {
   return /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?\//i.test(url)
 }
 
-const PRIVATE_EVENT_KEYS = new Set([
-  'recipient',
-  'shippingaddress',
-  'customerdetails',
-  'email',
-  'billingaddress',
-])
-
 const eventPayload = (value: Record<string, unknown>): Record<string, unknown> => {
-  // Provider payloads can nest buyer details several levels deep. Scrub by
-  // normalized key at every level so event replay/deduplication never becomes
-  // a second store of customer contact or address data.
-  const scrub = (input: unknown): unknown => {
-    if (Array.isArray(input)) return input.map(scrub)
-    if (!input || typeof input !== 'object') return input
-    return Object.fromEntries(
-      Object.entries(input as Record<string, unknown>)
-        .filter(([key]) => !PRIVATE_EVENT_KEYS.has(key.toLowerCase().replace(/[^a-z0-9]/g, '')))
-        .map(([key, nested]) => [key, scrub(nested)]),
-    )
-  }
-  return scrub(value) as Record<string, unknown>
-}
-
-const hasProviderVariantMapping = (value: unknown): boolean => {
-  const id = Number(value)
-  return Number.isSafeInteger(id) && id > 0
+  // Provider-event storage intentionally excludes customer address/email.
+  const copy = { ...value }
+  delete copy.shipping_address
+  delete copy.shippingAddress
+  delete copy.email
+  return copy
 }
 
 export class PhysicalMerchService {
@@ -140,71 +120,28 @@ export class PhysicalMerchService {
     this.deps = deps
   }
 
-  private checkoutCapabilities(): {
-    mode: MerchMode
-    simulated: boolean
-    stripeCheckoutReady: boolean
-    shopifyBridgeReady: boolean
-    printProviderReady: boolean
-    fulfillmentConfirmationEnabled: boolean
-    checkoutReady: boolean
-  } {
-    const mode = physicalMerchMode()
-    const simulated = mode === 'simulate'
-    const stripeCheckoutReady = simulated
-      || (this.deps.stripeConfigured() && physicalMerchExternalWriteAllowed('stripe'))
-    const shopifyBridgeReady = simulated
-      || (
-        physicalMerchExternalWriteAllowed('shopify')
-        && !!process.env.SHOPIFY_BRIDGE_URL
-        && !!process.env.TKO_SHOPIFY_BRIDGE_SECRET
-      )
-    const printProviderReady = simulated
-      || (
-        physicalMerchExternalWriteAllowed('printful')
-        && !!process.env.PRINTFUL_ACCESS_TOKEN
-      )
-    const fulfillmentConfirmationEnabled = physicalMerchExternalWriteAllowed('fulfillment')
-    return {
-      mode,
-      simulated,
-      stripeCheckoutReady,
-      shopifyBridgeReady,
-      printProviderReady,
-      fulfillmentConfirmationEnabled,
-      checkoutReady: simulated || (
-        stripeCheckoutReady
-        && shopifyBridgeReady
-        && printProviderReady
-        && fulfillmentConfirmationEnabled
-      ),
-    }
-  }
-
-  private assertCheckoutReady(providerVariantId: unknown): void {
-    const readiness = this.checkoutCapabilities()
-    if (readiness.simulated) return
-    if (!readiness.checkoutReady || !hasProviderVariantMapping(providerVariantId)) {
-      throw Object.assign(
-        new Error('Physical checkout is temporarily unavailable until manufacturing and automatic fulfillment are fully connected for this option.'),
-        { status: 503, code: 'physical_checkout_not_ready' },
-      )
-    }
-  }
-
   register(api: Router): void {
     const { auth } = this.deps
 
     api.get('/physical/config', (_req, res) => {
-      const readiness = this.checkoutCapabilities()
+      const mode = physicalMerchMode()
       res.json({
-        mode: readiness.mode,
-        simulated: readiness.simulated,
-        checkout_ready: readiness.checkoutReady,
-        stripe_checkout_ready: readiness.stripeCheckoutReady,
-        shopify_bridge_ready: readiness.shopifyBridgeReady,
-        print_provider_ready: readiness.printProviderReady,
-        fulfillment_confirmation_enabled: readiness.fulfillmentConfirmationEnabled,
+        mode,
+        simulated: mode === 'simulate',
+        stripe_checkout_ready: mode === 'simulate'
+          || (this.deps.stripeConfigured() && physicalMerchExternalWriteAllowed('stripe')),
+        shopify_bridge_ready: mode === 'simulate'
+          || (
+            physicalMerchExternalWriteAllowed('shopify')
+            && !!process.env.SHOPIFY_BRIDGE_URL
+            && !!process.env.TKO_SHOPIFY_BRIDGE_SECRET
+          ),
+        print_provider_ready: mode === 'simulate'
+          || (
+            physicalMerchExternalWriteAllowed('printful')
+            && !!process.env.PRINTFUL_ACCESS_TOKEN
+          ),
+        fulfillment_confirmation_enabled: physicalMerchExternalWriteAllowed('fulfillment'),
         creator_transfers_enabled: physicalMerchExternalWriteAllowed('transfers'),
         sizes: TSHIRT_SIZES,
         colors: COLORS,
@@ -722,18 +659,11 @@ export class PhysicalMerchService {
     if (quantity < 1 || quantity > MAX_QUANTITY) {
       throw Object.assign(new Error(`quantity must be 1-${MAX_QUANTITY}`), { status: 400, code: 'invalid_quantity' })
     }
-    const mode = physicalMerchMode()
     const existing = await this.deps.pool.query(
       'select * from physical_merch_orders where idempotency_key=$1',
       [idempotencyKey],
     )
-    if (existing.rows[0]) {
-      if (!existing.rows[0].dry_run) {
-        const prior = await this.fullOrder(String(existing.rows[0].id))
-        this.assertCheckoutReady(prior?.provider_variant_id)
-      }
-      return this.checkoutResponse(existing.rows[0])
-    }
+    if (existing.rows[0]) return this.checkoutResponse(existing.rows[0])
 
     const productRows = await this.deps.pool.query(
       `select p.*, v.id variant_id, v.size, v.color, v.sku, v.provider_variant_id
@@ -744,7 +674,6 @@ export class PhysicalMerchService {
     )
     const product = productRows.rows[0]
     if (!product) throw Object.assign(new Error('approved product or variant not found'), { status: 404, code: 'product_not_available' })
-    this.assertCheckoutReady(product.provider_variant_id)
 
     const itemSubtotal = Number(product.sale_price_cents) * quantity
     const shippingCharge = DEFAULT_BUYER_SHIPPING_CENTS
@@ -756,6 +685,7 @@ export class PhysicalMerchService {
       paymentFeeCents: Number(product.payment_fee_cents),
       refundReserveCents: Number(product.refund_reserve_cents),
     }, Number(product.creator_share_percent))
+    const mode = physicalMerchMode()
     const order = await this.deps.withTransaction(async (db) => {
       const inserted = await db.query(
         `insert into physical_merch_orders
@@ -804,6 +734,12 @@ export class PhysicalMerchService {
         simulated: true,
         totalCents: total,
       }
+    }
+    if (!this.deps.stripeConfigured() || !physicalMerchExternalWriteAllowed('stripe')) {
+      throw Object.assign(new Error('Stripe merchandise checkout is disabled until test-mode credentials and the explicit allow flag are set.'), {
+        status: 503,
+        code: 'external_checkout_disabled',
+      })
     }
     const email = cleanText((req as any).user?.email, 120)
     const customer = await this.deps.ensureCustomer(userId, email)
@@ -948,14 +884,12 @@ export class PhysicalMerchService {
       }
     }
     order = await this.fullOrder(orderId)
-    if (!order?.shopify_order_gid) return
     if (!order?.provider_order_id) {
       const draft = await this.createProviderDraft(order)
       if (draft?.id) {
-        const confirmationEnabled = physicalMerchExternalWriteAllowed('fulfillment')
         await this.deps.pool.query(
           `update physical_merch_orders
-              set status=$6,provider_order_id=$2,provider_status=$3,
+              set status='fulfillment_held',provider_order_id=$2,provider_status=$3,
                   provider_cost_cents=$4,hold_reason=$5,last_error=null,updated_at=now()
             where id=$1`,
           [
@@ -963,21 +897,10 @@ export class PhysicalMerchService {
             String(draft.id),
             cleanText(draft.status, 80) || 'draft',
             safeInt(draft.cost_cents, 0),
-            confirmationEnabled
-              ? null
-              : 'Provider draft created. Automatic manufacturing confirmation is disabled.',
-            confirmationEnabled ? 'provider_draft' : 'fulfillment_held',
+            'Provider draft created. Automatic manufacturing confirmation is disabled.',
           ],
         )
       }
-    }
-    order = await this.fullOrder(orderId)
-    if (
-      order?.provider_order_id
-      && physicalMerchMode() !== 'simulate'
-      && physicalMerchExternalWriteAllowed('fulfillment')
-    ) {
-      await this.confirmProviderOrder(order)
     }
   }
 
@@ -1172,85 +1095,6 @@ export class PhysicalMerchService {
       )
       return null
     }
-  }
-
-  private async confirmProviderOrder(order: any): Promise<any> {
-    const operationId = `printful-confirm:${order.id}`
-    const existing = await this.processedOperation('printful', operationId)
-    if (existing) {
-      await this.markProviderSubmitted(order.id, existing)
-      return existing
-    }
-    if (
-      physicalMerchMode() === 'simulate'
-      || !physicalMerchExternalWriteAllowed('fulfillment')
-      || !physicalMerchExternalWriteAllowed('printful')
-    ) return null
-
-    try {
-      const providerOrderId = cleanText(order.provider_order_id, 160)
-      if (!providerOrderId) throw new Error('Print provider order is missing.')
-      const token = String(process.env.PRINTFUL_ACCESS_TOKEN || '')
-      if (!token) throw new Error('Print provider is not configured.')
-      const response = await fetch(
-        `https://api.printful.com/orders/${encodeURIComponent(providerOrderId)}/confirm`,
-        {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${token}`,
-            'Content-Type': 'application/json',
-            ...(process.env.PRINTFUL_STORE_ID ? { 'X-PF-Store-Id': String(process.env.PRINTFUL_STORE_ID) } : {}),
-          },
-          body: JSON.stringify({}),
-        },
-      )
-      const body: any = await response.json().catch(() => ({}))
-      if (!response.ok || !body?.result?.id) {
-        throw new Error(body?.error?.message || 'Print provider confirmation failed')
-      }
-      const result = {
-        id: String(body.result.id),
-        status: cleanText(body.result.status, 80) || 'submitted',
-      }
-      await this.upsertOperationEvent(
-        'printful',
-        operationId,
-        'provider_confirmation',
-        String(order.id),
-        result,
-        'processed',
-      )
-      await this.markProviderSubmitted(String(order.id), result)
-      return result
-    } catch (error: any) {
-      const detail = cleanText(error?.message || 'Print provider confirmation failed', 500)
-      await this.upsertOperationEvent(
-        'printful',
-        operationId,
-        'provider_confirmation',
-        String(order.id),
-        { error: detail },
-        'failed',
-      )
-      await this.deps.pool.query(
-        `update physical_merch_orders
-            set status='fulfillment_held',hold_reason='Automatic fulfillment needs attention',
-                last_error=$2,updated_at=now()
-          where id=$1 and status in ('paid','shopify_pending','provider_draft','fulfillment_held','submitted')`,
-        [order.id, detail],
-      )
-      return null
-    }
-  }
-
-  private async markProviderSubmitted(orderId: string, confirmation: any): Promise<void> {
-    await this.deps.pool.query(
-      `update physical_merch_orders
-          set status='submitted',provider_status=$2,provider_confirmed_at=coalesce(provider_confirmed_at,now()),
-              hold_reason=null,last_error=null,updated_at=now()
-        where id=$1 and status in ('paid','shopify_pending','provider_draft','fulfillment_held','submitted')`,
-      [orderId, cleanText(confirmation?.status, 80) || 'submitted'],
-    )
   }
 
   private async shopifyBridge(operation: string, payload: any): Promise<any> {
@@ -1528,7 +1372,7 @@ export class PhysicalMerchService {
         `insert into physical_merch_events
            (provider,topic,provider_event_id,order_id,payload,status,attempts,processed_at)
          values ($1,$2,$3,$4,$5,'processed',1,now())`,
-        [provider, topic, providerEventId, orderId, JSON.stringify(eventPayload(payload))],
+        [provider, topic, providerEventId, orderId, JSON.stringify(payload)],
       )
       return true
     } catch {

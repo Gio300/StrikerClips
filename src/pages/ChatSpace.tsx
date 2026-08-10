@@ -7,9 +7,35 @@ import { Drawer } from '@/components/ui/Drawer'
 import { Avatar } from '@/components/ui'
 import { TagBadge } from '@/components/TagBadge'
 import { ChatComposer, ChatMessageContent } from '@/components/social/ChatPoll'
+import { encodeTkoBot, parseTkoBot, stripLeadingMarkers } from '@/lib/streamChatMarkup'
+import {
+  askAssistant,
+  cooldownRemainingMs,
+  currentPath,
+  extractAssistantQuestion,
+  throttleLine,
+} from '@/lib/chatAssistant'
+import { useChatPresence } from '@/hooks/useChatPresence'
+import { useChatUnread } from '@/hooks/useChatUnread'
+import { useChatMessages } from '@/hooks/useChatMessages'
+import { mergeMessages, orderOldestFirst } from '@/lib/chatMessages'
+import { createAuthorCache, type AuthorCache } from '@/lib/chatAuthors'
+import { ChatConnectionNote, ChatLiveBar, TypingLine } from '@/components/chat/ChatLiveBar'
+import { NewMessagesDivider } from '@/components/chat/NewMessagesDivider'
+import { ChatAdRail } from '@/components/ChatAdRail'
+import { ReactionRow, ReplyButton, ReplyQuote } from '@/components/chat'
+import { useChatReactions } from '@/hooks/useChatReactions'
 import { callFn } from '@/lib/backend'
-import { extractTkoQuestion, encodeTkoBot, parseTkoBot, stripLeadingMarkers } from '@/lib/streamChatMarkup'
-import type { ArtifactRarity } from '@/types/database'
+import { ReportContentButton } from '@/components/ReportContentButton'
+import { parseMentions, serializeMentions, type ChatMention } from '@/lib/chatMentions'
+import {
+  replyPreview,
+  replyToColumn,
+  resolveReplyTarget,
+  type ReplyTarget,
+} from '@/lib/chatReplies'
+import type { ChatSendMeta } from '@/components/social/ChatPoll'
+import type { ArtifactRarity, Json } from '@/types/database'
 import {
   groupChannels,
   canPost,
@@ -25,6 +51,14 @@ import type { ClanRole } from '@/lib/clans'
 
 /** Fixed id of the seeded TKO-official space (db/schema.sql). */
 export const TKO_SPACE_ID = '00000000-0000-0000-0000-0000000c4a70'
+
+/**
+ * How many messages a channel opens with. Deliberately larger than the shared
+ * MESSAGE_BACKFILL_LIMIT the live/tournament panels use: a channel is a
+ * long-lived room people scroll, not a transient stream panel. Read from the
+ * NEWEST end either way (see lib/chatMessages.orderOldestFirst).
+ */
+const CHANNEL_BACKFILL_LIMIT = 200
 
 /**
  * Find-or-create the official "TKO chats" space + its default channels. On a
@@ -86,6 +120,91 @@ type EnrichedMessage = ChatMessage & {
   avatarUrl?: string | null
   equippedTagText?: string | null
   equippedTagRarity?: ArtifactRarity | null
+  /** Validated mentions for THIS row — parsed once, never re-derived from text. */
+  mentionList?: ChatMention[]
+}
+
+/** The author identity a channel line renders — name, avatar, equipped tag. */
+type ChannelAuthor = {
+  username: string
+  avatar_url: string | null
+  equipped_tag_text: string | null
+  equipped_tag_rarity: ArtifactRarity | null
+}
+
+/**
+ * Resolve senders (name, avatar, equipped tag) for a BATCH of raw rows.
+ *
+ * Shared by the initial backfill and the incremental poll so a polled message
+ * renders identically to a backfilled one. The enriched select is tried first
+ * and falls back to a plain id/username/avatar read, so senders NEVER blank out
+ * to "someone" just because the tag columns are unavailable on this backend.
+ *
+ * Reads `profiles` ONLY for authors this channel has never resolved. This is
+ * the most expensive hydrate of the four (it carries the equipped-tag join on
+ * the server), and running it on every 5s tick for the same handful of speakers
+ * was pure waste — see lib/chatAuthors.ts.
+ */
+async function hydrateChannelRows(
+  rows: ChatMessage[],
+  authors: AuthorCache<ChannelAuthor>,
+): Promise<EnrichedMessage[]> {
+  const wanted = authors.missing(rows.map((r) => r.user_id))
+  if (wanted.length > 0) {
+    type ProfRow = {
+      id: string
+      username: string
+      avatar_url: string | null
+      equipped_tag_text?: string | null
+      equipped_tag_rarity?: ArtifactRarity | null
+    }
+    let profs: ProfRow[] = []
+    let resolved = true
+    const enriched = await supabase
+      .from('profiles')
+      .select('id, username, avatar_url, equipped_tag_text, equipped_tag_rarity')
+      .in('id', wanted)
+    if (enriched.error) {
+      const plain = await supabase
+        .from('profiles')
+        .select('id, username, avatar_url')
+        .in('id', wanted)
+      profs = (plain.data ?? []) as ProfRow[]
+      // Both selects refused — this tells us nothing about who these people are.
+      resolved = !plain.error
+    } else {
+      profs = (enriched.data ?? []) as ProfRow[]
+    }
+    // ONLY a read that actually SUCCEEDED may populate the cache. `fill` records
+    // an asked-for id that did not come back as known-absent, so filling from a
+    // FAILED read would pin those senders to "someone" for the life of the
+    // channel instead of resolving them on the next batch.
+    if (resolved) {
+      authors.fill(
+        wanted,
+        new Map(
+          profs.map((p) => [
+            p.id,
+            {
+              username: p.username,
+              avatar_url: p.avatar_url ?? null,
+              equipped_tag_text: p.equipped_tag_text ?? null,
+              equipped_tag_rarity: (p.equipped_tag_rarity ?? null) as ArtifactRarity | null,
+            } as ChannelAuthor,
+          ]),
+        ),
+      )
+    }
+  }
+  return rows.map((r) => ({
+    ...r,
+    username: authors.get(r.user_id)?.username,
+    avatarUrl: authors.get(r.user_id)?.avatar_url ?? null,
+    equippedTagText: authors.get(r.user_id)?.equipped_tag_text ?? null,
+    equippedTagRarity: authors.get(r.user_id)?.equipped_tag_rarity ?? null,
+    // Parsed defensively: a null/legacy value is simply "no mentions".
+    mentionList: parseMentions(r.mentions, r.body),
+  }))
 }
 
 function fmtTime(iso: string): string {
@@ -464,95 +583,80 @@ function ChannelView({
   userId: string | null
 }) {
   const [messages, setMessages] = useState<EnrichedMessage[]>([])
+  // The backfill has landed — the incremental poll may take over from here.
+  const [loaded, setLoaded] = useState(false)
+  const [notice, setNotice] = useState<string | null>(null)
+  const [replyTo, setReplyTo] = useState<ReplyTarget | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
+  const lastAskAtRef = useRef<number | null>(null)
 
+  // Shared live layer — same hooks, same cadence as the live/tournament chats.
+  const presence = useChatPresence({ scope: 'channel', roomId: channel.id, userId })
+  const unread = useChatUnread({ scope: 'channel', roomId: channel.id, userId, messages })
+
+  // Reactions come from the same polymorphic store every surface uses.
+  const messageIds = useMemo(() => messages.map((m) => m.id), [messages])
+  const reactions = useChatReactions({ surface: 'channel', messageIds, userId })
+
+  /** Scroll a quoted parent into view when its preview is clicked. */
+  const jumpToMessage = useCallback((messageId: string) => {
+    const el = scrollRef.current?.querySelector(`[data-message-id="${CSS.escape(messageId)}"]`)
+    el?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+  }, [])
+
+  // Author identity, memoized for the life of THIS channel — see
+  // hydrateChannelRows.
+  const authorsRef = useRef<AuthorCache<ChannelAuthor>>(createAuthorCache<ChannelAuthor>())
+
+  // Initial backfill. Liveness is the shared incremental poll below — the
+  // subscription this used to register was an inert stub, and its handler was a
+  // FULL re-read of the channel, which is exactly what the poll must not do.
   useEffect(() => {
     let cancelled = false
-    let sub: ReturnType<typeof supabase.channel> | null = null
+    setLoaded(false)
+    // A new channel is a new set of speakers.
+    authorsRef.current = createAuthorCache<ChannelAuthor>()
 
     async function fetchMessages() {
+      // NEWEST first. Reading the oldest N opened a long-lived channel on its
+      // FIRST EVER messages and left the poll to walk forward through years of
+      // backlog, replaying it as live traffic; the tail is flipped back to
+      // oldest-first for rendering by orderOldestFirst.
       const { data } = await supabase
         .from('chat_messages')
         .select('*')
         .eq('channel_id', channel.id)
-        .order('created_at', { ascending: true })
-        .limit(200)
+        .order('created_at', { ascending: false })
+        .limit(CHANNEL_BACKFILL_LIMIT)
       if (cancelled) return
-      const rows = (data ?? []) as ChatMessage[]
-      const ids = Array.from(new Set(rows.map((r) => r.user_id).filter(Boolean) as string[]))
-      type ProfMeta = {
-        username: string
-        avatar_url: string | null
-        equipped_tag_text: string | null
-        equipped_tag_rarity: ArtifactRarity | null
-      }
-      let names = new Map<string, ProfMeta>()
-      if (ids.length > 0) {
-        // Resolve sender names/avatars resiliently. Try the enriched select
-        // (with the equipped-tag columns) first; if that errors for any reason
-        // — e.g. those columns aren't present on this backend — fall back to a
-        // plain id/username/avatar select so senders NEVER blank out to
-        // "someone" just because the tag columns were unavailable.
-        type ProfRow = {
-          id: string
-          username: string
-          avatar_url: string | null
-          equipped_tag_text?: string | null
-          equipped_tag_rarity?: ArtifactRarity | null
-        }
-        let profs: ProfRow[] = []
-        const enriched = await supabase
-          .from('profiles')
-          .select('id, username, avatar_url, equipped_tag_text, equipped_tag_rarity')
-          .in('id', ids)
-        if (enriched.error) {
-          const plain = await supabase
-            .from('profiles')
-            .select('id, username, avatar_url')
-            .in('id', ids)
-          profs = (plain.data ?? []) as ProfRow[]
-        } else {
-          profs = (enriched.data ?? []) as ProfRow[]
-        }
-        names = new Map(
-          profs.map((p) => [
-            p.id,
-            {
-              username: p.username,
-              avatar_url: p.avatar_url ?? null,
-              equipped_tag_text: p.equipped_tag_text ?? null,
-              equipped_tag_rarity: (p.equipped_tag_rarity ?? null) as ArtifactRarity | null,
-            },
-          ]),
-        )
-      }
+      const tail = orderOldestFirst((data ?? []) as ChatMessage[])
+      const hydrated = await hydrateChannelRows(tail, authorsRef.current)
       if (cancelled) return
-      setMessages(
-        rows.map((r) => ({
-          ...r,
-          username: r.user_id ? names.get(r.user_id)?.username : undefined,
-          avatarUrl: r.user_id ? names.get(r.user_id)?.avatar_url ?? null : null,
-          equippedTagText: r.user_id ? names.get(r.user_id)?.equipped_tag_text ?? null : null,
-          equippedTagRarity: r.user_id ? names.get(r.user_id)?.equipped_tag_rarity ?? null : null,
-        })),
-      )
+      setMessages(hydrated)
+      setLoaded(true)
     }
 
-    fetchMessages()
-    sub = supabase
-      .channel(`chat:${channel.id}`)
-      .on(
-        'postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'chat_messages', filter: `channel_id=eq.${channel.id}` },
-        fetchMessages,
-      )
-      .subscribe()
-
+    void fetchMessages()
     return () => {
       cancelled = true
-      if (sub) supabase.removeChannel(sub)
     }
   }, [channel.id])
+
+  /** Fold rows another client wrote into the log, senders resolved in one read. */
+  const onPolled = useCallback(async (rows: ChatMessage[]) => {
+    const hydrated = await hydrateChannelRows(rows, authorsRef.current)
+    setMessages((prev) => mergeMessages(prev, hydrated, (m) => m.body))
+  }, [])
+
+  // THE LIVE LAYER — the same incremental cursor + visibility gate every chat
+  // surface now uses. Starts only once the backfill has landed.
+  const delivery = useChatMessages<ChatMessage>({
+    scope: 'channel',
+    roomId: channel.id,
+    messages,
+    onMessages: onPolled,
+    ready: loaded,
+  })
 
   useEffect(() => {
     const el = scrollRef.current
@@ -561,14 +665,26 @@ function ChannelView({
     if (nearBottom) el.scrollTop = el.scrollHeight
   }, [messages])
 
-  /** Insert one chat_messages row and optimistically append it. */
-  async function insertBody(body: string): Promise<void> {
+  /**
+   * Insert one chat_messages row and optimistically append it. The
+   * chat-foundation columns are written when the backend has them, and the
+   * insert RETRIES WITHOUT THEM otherwise — an older database keeps taking
+   * plain messages rather than the composer dead-ending.
+   */
+  async function insertBody(
+    body: string,
+    extras: { mentions?: Json; reply_to?: string | null; mentionList?: ChatMention[] } = {},
+  ): Promise<void> {
     if (!userId) throw new Error('Log in to chat.')
-    const { data: inserted, error: err } = await supabase
+    const base = { channel_id: channel.id, user_id: userId, body }
+    const enrichedWrite = await supabase
       .from('chat_messages')
-      .insert({ channel_id: channel.id, user_id: userId, body })
+      .insert({ ...base, mentions: extras.mentions ?? [], reply_to: extras.reply_to ?? null })
       .select()
       .single()
+    const { data: inserted, error: err } = enrichedWrite.error
+      ? await supabase.from('chat_messages').insert(base).select().single()
+      : enrichedWrite
     if (err) {
       throw new Error(err.message || 'Could not send the message.')
     }
@@ -588,33 +704,62 @@ function ChannelView({
             ...prev,
             {
               ...row,
+              reply_to: row.reply_to ?? extras.reply_to ?? null,
               username: selfName,
               avatarUrl: selfAvatar,
               equippedTagText: selfTagText,
               equippedTagRarity: selfTagRarity,
+              // Prefer what we just computed: a legacy backend drops the column
+              // and re-parsing the echo would lose the chips.
+              mentionList: extras.mentionList ?? parseMentions(row.mentions, row.body),
             },
           ],
     )
   }
 
-  /** After a user line posts, if it @tko'd a question, ask + post the reply. */
+  /**
+   * After a user line posts, if it addressed the assistant, ask + post the reply.
+   * Shares the live chat's two-sided cost gate (client cooldown here, per-user
+   * window in the `ask` fn) — a public channel composer must never be an
+   * unmetered line to a paid model. Throttled asks post nothing to the channel.
+   */
   async function maybeAnswerTko(text: string): Promise<void> {
-    const question = extractTkoQuestion(text)
+    const question = extractAssistantQuestion(text)
     if (!question) return
+    const now = Date.now()
+    const wait = cooldownRemainingMs(lastAskAtRef.current, now)
+    if (wait > 0) {
+      setNotice(throttleLine(wait))
+      return
+    }
+    lastAskAtRef.current = now
+    const result = await askAssistant(question, { path: currentPath() })
+    if (result.kind === 'throttled') {
+      setNotice(result.message)
+      return
+    }
+    if (result.kind !== 'answer') return
+    setNotice(null)
     try {
-      const res = await callFn<{ ok: boolean; answer?: string }>('ask', { question })
-      const answer = res?.ok ? (res.answer || '').trim() : ''
-      if (answer) await insertBody(encodeTkoBot(answer))
+      await insertBody(encodeTkoBot(result.answer))
     } catch {
-      /* ask failed — stay silent, never break the chat */
+      /* the answer just doesn't land — never break the chat over it */
     }
   }
 
-  async function sendMessage(body: string): Promise<void> {
-    // Strip any leading control markers the user typed (anti-spoof), then post.
+  async function sendMessage(body: string, meta?: ChatSendMeta): Promise<void> {
+    // The composer already stripped the control markers, trimmed and capped the
+    // line, and re-anchored the mentions to that final text (prepareChatMessage).
     const clean = stripLeadingMarkers(body)
     if (!clean.trim()) return
-    await insertBody(clean)
+    const mentions = clean === body ? meta?.mentions ?? [] : []
+    const parent = replyToColumn(replyTo)
+    await insertBody(clean, {
+      mentions: serializeMentions(clean, mentions),
+      reply_to: parent,
+      mentionList: mentions,
+    })
+    setReplyTo(null)
     void maybeAnswerTko(clean)
   }
 
@@ -630,6 +775,17 @@ function ChannelView({
             Announcements
           </span>
         )}
+        {unread.count > 0 && (
+          <span className="rounded-full bg-kunai/20 px-1.5 py-0.5 text-[9px] font-bold tabular-nums text-kunai">
+            {unread.count > 99 ? '99+' : unread.count} new
+          </span>
+        )}
+        <ChatLiveBar
+          members={presence.members}
+          supported={presence.supported}
+          selfId={userId}
+          className="ml-auto"
+        />
       </div>
 
       <div ref={scrollRef} className="flex-1 overflow-auto p-4 space-y-4">
@@ -637,24 +793,51 @@ function ChannelView({
           <p className="text-gray-500 text-sm text-center py-8">Be the first to say something.</p>
         ) : (
           messages.map((m) => {
+            const divider = unread.dividerBeforeId === m.id ? <NewMessagesDivider count={unread.count} /> : null
             const botAnswer = parseTkoBot(m.body)
+            const footer = reactions.supported ? (
+              <ReactionRow
+                tallies={reactions.talliesFor(m.id)}
+                onToggle={(emoji) => reactions.toggle(m.id, emoji)}
+                canReact={Boolean(userId)}
+              />
+            ) : null
+            const parent = resolveReplyTarget(m.reply_to, messages, (row) => ({
+              author: row.username ?? 'someone',
+              body: row.body,
+              authorId: row.user_id,
+            }))
             if (botAnswer) {
               return (
-                <div key={m.id} className="flex gap-3">
-                  <span className="mt-0.5 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-accent text-dark text-[10px] font-black">
-                    TKO
-                  </span>
-                  <div className="min-w-0 rounded-lg border border-accent/40 bg-accent/5 px-3 py-2">
-                    <span className="text-accent text-sm font-semibold">TKO</span>
-                    <p className="mt-0.5 break-words text-gray-100">{botAnswer}</p>
+                <div key={m.id} data-message-id={m.id}>
+                  {divider}
+                  <div className="flex gap-3">
+                    <span className="mt-0.5 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-accent text-dark text-[10px] font-black">
+                      TKO
+                    </span>
+                    <div className="min-w-0 rounded-lg border border-accent/40 bg-accent/5 px-3 py-2">
+                      <span className="text-accent text-sm font-semibold">TKO</span>
+                      <p className="mt-0.5 break-words text-gray-100">{botAnswer}</p>
+                      {footer}
+                      <ReportContentButton
+                        reporterId={userId}
+                        targetOwnerId={null}
+                        targetType="chat_message"
+                        targetId={m.id}
+                        className="mt-1 -ml-2"
+                      />
+                    </div>
                   </div>
                 </div>
               )
             }
             return (
-              <div key={m.id} className="flex gap-3">
+              <div key={m.id} data-message-id={m.id} className="group">
+                {divider}
+                <div className="flex gap-3">
                 <Avatar src={m.avatarUrl} name={m.username} seed={m.user_id} size={32} />
                 <div className="min-w-0">
+                  {parent && <ReplyQuote target={parent} onJump={jumpToMessage} className="mb-1" />}
                   <span className="text-accent text-sm font-medium inline-flex items-center gap-1.5">
                     {m.user_id ? (
                       <Link to={`/profile/${m.user_id}`} className="hover:underline">
@@ -666,7 +849,29 @@ function ChannelView({
                     <TagBadge artifactText={m.equippedTagText} rarity={m.equippedTagRarity} />
                   </span>
                   <span className="text-gray-500 text-xs ml-2">{fmtTime(m.created_at)}</span>
-                  <ChatMessageContent body={m.body} userId={userId} />
+                  {canPostHere && userId && (
+                    <ReplyButton
+                      onClick={() =>
+                        setReplyTo({
+                          id: m.id,
+                          author: m.username ?? 'someone',
+                          preview: replyPreview(m.body),
+                          authorId: m.user_id,
+                        })
+                      }
+                      className="ml-2 opacity-0 group-hover:opacity-100 focus:opacity-100"
+                    />
+                  )}
+                  <ReportContentButton
+                    reporterId={userId}
+                    targetOwnerId={m.user_id}
+                    targetType="chat_message"
+                    targetId={m.id}
+                    className="ml-1 sm:opacity-0 sm:group-hover:opacity-100 focus-within:opacity-100"
+                  />
+                  <ChatMessageContent body={m.body} userId={userId} mentions={m.mentionList} />
+                  {footer}
+                </div>
                 </div>
               </div>
             )
@@ -674,11 +879,25 @@ function ChannelView({
         )}
       </div>
 
+      <TypingLine line={presence.typingLine} className="px-4" />
+      {/* Delivery is struggling — a status line under the log, never an error. */}
+      <ChatConnectionNote status={delivery.status} className="px-4" />
+      {/* The one in-chat ad — pinned under the message list, outside the scroll
+          area, and rendered for nobody entitled to ad-free (personal ad_free /
+          pro / supporter / creator, OR a league plan carrying member_ad_free). */}
+      <ChatAdRail />
+      {notice && <p className="border-t border-dark-border px-4 py-1 text-xs text-gray-500">{notice}</p>}
+
       {canPostHere && userId ? (
         <ChatComposer
           userId={userId}
-          placeholder={`Message #${channel.name}`}
+          placeholder={`Message #${channel.name} — or ask @tko`}
           onSend={sendMessage}
+          onTyping={presence.notifyTyping}
+          replyTo={replyTo}
+          onCancelReply={() => setReplyTo(null)}
+          mediaRoomId={channel.id}
+          mediaRoomType="channel"
           className="border-t border-dark-border"
         />
       ) : (
@@ -710,14 +929,18 @@ export default ChatSpace
  */
 export function ClanChatRedirect() {
   const { serverId } = useParams()
-  const { user } = useAuth()
+  const { user, loading: authLoading } = useAuth()
   const navigate = useNavigate()
   const [failed, setFailed] = useState(false)
 
   useEffect(() => {
     let cancelled = false
     async function go() {
-      if (!serverId) return
+      // A clan space can only be created by an authenticated clan member. Wait
+      // for the shared session lookup before deciding who the creator is; the
+      // first render intentionally has `user=null` while auth is hydrating.
+      if (!serverId || authLoading) return
+      setFailed(false)
       // Existing clan space?
       const { data: existing } = await supabase
         .from('chat_spaces')
@@ -730,35 +953,34 @@ export function ClanChatRedirect() {
         navigate(`/chat/${(existing as ChatSpaceRow).id}`, { replace: true })
         return
       }
-      // Create it, named after the clan.
-      const { data: server } = await supabase.from('servers').select('name').eq('id', serverId).maybeSingle()
-      const name = ((server?.name as string | undefined) ?? 'Clan') + ' Chat'
-      const { data: created } = await supabase
-        .from('chat_spaces')
-        // Stamp the creator as owner so they can run + post in the chat they made.
-        .insert({ kind: 'clan', name, clan_id: serverId, owner_id: user?.id ?? null })
-        .select()
-        .single()
-      const space = created as ChatSpaceRow | null
+      // Existing spaces stay publicly viewable, but creating one requires a
+      // signed-in clan member. Login returns the viewer to this exact clan.
+      if (!user) {
+        navigate('/login', {
+          replace: true,
+          state: { from: `/clans/${serverId}/chat`, reason: 'Sign in to open the clan chat' },
+        })
+        return
+      }
+      // Creation is a trusted server operation: the backend verifies current
+      // clan membership, serializes the first-visitor race, binds the space to
+      // this clan, and gives management authority to the clan leadership.
+      const created = await callFn<{ ok?: boolean; space?: ChatSpaceRow }>('clan-chat-space-ensure', {
+        serverId,
+      })
+      const space = created?.ok ? created.space ?? null : null
       if (cancelled) return
       if (!space) {
         setFailed(true)
         return
       }
-      await supabase.from('chat_channels').insert({
-        space_id: space.id,
-        name: 'general',
-        category: null,
-        position: 0,
-        is_announcement: false,
-      })
       if (!cancelled) navigate(`/chat/${space.id}`, { replace: true })
     }
     go()
     return () => {
       cancelled = true
     }
-  }, [serverId, navigate])
+  }, [serverId, navigate, authLoading, user?.id])
 
   if (failed) {
     return (

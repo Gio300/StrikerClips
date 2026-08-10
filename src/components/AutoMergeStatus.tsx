@@ -76,8 +76,8 @@ export function AutoMergeStatus({ className }: { className?: string }) {
     >
       <div className="font-semibold text-white">Auto-merge: locked.</div>
       <p className="mt-1 text-xs text-gray-400">
-        {IS_MOBILE_STORE_BUILD && !hasPaid
-          ? 'Auto-merge is not available in the mobile app.'
+        {IS_MOBILE_STORE_BUILD
+          ? 'Connect YouTube to finish setup. Automatic merging also requires eligible account access.'
           : 'Connect YouTube and subscribe to synchronize recorded games across players.'}
       </p>
       <div className="mt-2 flex flex-wrap gap-2">

@@ -1,5 +1,7 @@
 import { useEffect } from 'react'
 import { adrollAdvId, adrollPixId } from '@/lib/adConfig'
+import { useAdsHidden } from '@/hooks/useAdsHidden'
+import { THIRD_PARTY_AD_TECH_ENABLED } from '@/lib/storeBuild'
 
 /**
  * AdRoll Smart Pixel v2 loader.
@@ -15,11 +17,23 @@ import { adrollAdvId, adrollPixId } from '@/lib/adConfig'
  * it injects the standard AdRoll snippet: it sets window.adroll_adv_id /
  * adroll_pix_id / adroll_version = '2.0' and async-loads
  * https://s.adroll.com/j/<adv_id>/roundtrip.js.
+ *
+ * ENTITLEMENT: "gets rid of ads" has to mean the AD TECH too, not just the
+ * boxes. A retargeting pixel on a subscriber is the same product promise
+ * broken, one layer down — and unlike a rendered slot they cannot even see it
+ * to complain. So this waits for useAdsHidden() to resolve and never injects
+ * for anyone entitled to ad-free, from either ladder.
  */
 export function AdRollPixel() {
+  const { adsHidden, resolved } = useAdsHidden()
+
   useEffect(() => {
+    if (!THIRD_PARTY_AD_TECH_ENABLED) return
     // Inert until BOTH AdRoll ids are configured — never inject with empty ids.
     if (!adrollAdvId || !adrollPixId) return
+    // Never retarget someone who paid not to be advertised at, and never guess:
+    // hold until the entitlement is known. Injection is irreversible.
+    if (!resolved || adsHidden) return
     // Guard against a double-mount injecting the pixel twice.
     if (document.getElementById('__adroll_pixel')) return
 
@@ -43,7 +57,7 @@ export function AdRollPixel() {
     } else {
       document.head.appendChild(script)
     }
-  }, [])
+  }, [adsHidden, resolved])
 
   return null
 }

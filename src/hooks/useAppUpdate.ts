@@ -13,6 +13,7 @@ import {
   type NativeVersionManifest,
 } from '@/lib/nativeUpdate'
 import { activateUpdateAndReload, canUseServiceWorker, hardResetAndReload, registerServiceWorker } from '@/lib/swClient'
+import { SIDELOAD_UPDATES_ENABLED } from '@/lib/storeBuild'
 
 /**
  * "A newer build is live" detection, from two independent sources.
@@ -108,7 +109,7 @@ function readDismissed(): string | null {
 
 export function useAppUpdate(): AppUpdateState {
   const platform = Capacitor.getPlatform()
-  const nativeUpdate = shouldUseAndroidSideloadUpdates(
+  const nativeUpdate = SIDELOAD_UPDATES_ENABLED && shouldUseAndroidSideloadUpdates(
     platform,
     import.meta.env.VITE_ANDROID_SIDELOAD_UPDATES,
   )
@@ -179,6 +180,11 @@ export function useAppUpdate(): AppUpdateState {
           setAvailable(true)
           // Force the update rather than waiting for a tap on the banner.
           maybeAutoReload(served.buildId)
+        } else {
+          // `/version.json` is authoritative. It also repairs a transient
+          // service-worker hint raised while this same build was activating.
+          setServedBuildId(null)
+          setAvailable(false)
         }
       } catch {
         /* offline / SPA fallback returned HTML — nothing to do. */
@@ -193,6 +199,24 @@ export function useAppUpdate(): AppUpdateState {
     if (!canUseServiceWorker()) return
     let cancelled = false
     let interval: number | undefined
+
+    const onWorkerMessage = (event: MessageEvent) => {
+      const data = event.data as { type?: unknown; buildId?: unknown } | null
+      if (data?.type !== 'TKO_UPDATE_ACTIVATED') return
+      if (typeof data.buildId !== 'string' || !data.buildId.trim()) return
+      if (data.buildId === RUNNING_VERSION.buildId) {
+        // The page can already be running the new bundle while the previous
+        // worker controls its first load. In that case `updatefound` briefly
+        // raises the generic SW hint, then the replacement worker activates
+        // with the SAME build id as the page. Clear that stale hint instead of
+        // leaving a permanent "New version available" banner.
+        setServedBuildId(null)
+        setAvailable(false)
+        return
+      }
+      maybeAutoReload(data.buildId)
+    }
+    navigator.serviceWorker.addEventListener('message', onWorkerMessage)
 
     void registerServiceWorker(APP_BASE).then((reg) => {
       if (!reg || cancelled) return
@@ -224,8 +248,9 @@ export function useAppUpdate(): AppUpdateState {
     return () => {
       cancelled = true
       if (interval) window.clearInterval(interval)
+      navigator.serviceWorker.removeEventListener('message', onWorkerMessage)
     }
-  }, [webUpdate])
+  }, [maybeAutoReload, webUpdate])
 
   // --- source 2: the /version.json poll ---------------------------------
   useEffect(() => {

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { useParams, useSearchParams } from 'react-router-dom'
+import { Link, useParams, useSearchParams } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
 import { extractYouTubeId, CLEAN_EMBED_PARAMS } from '@/lib/youtubeApi'
 import { StreamChat } from '@/components/StreamChat'
@@ -99,8 +99,16 @@ export function ProgramView() {
     <div className="fixed inset-0 z-[100] bg-black text-white flex">
       <div className="relative flex-1 min-w-0">
         {shown.length === 0 ? (
-          <div className="h-full flex items-center justify-center text-gray-500">
-            Waiting for live feeds…
+          <div className="h-full flex flex-col items-center justify-center gap-4 px-6 text-center">
+            <div>
+              <p className="font-semibold text-white">No live feeds are available yet</p>
+              <p className="mt-1 text-sm text-gray-400">
+                Start a stream or choose an active show before opening the program output.
+              </p>
+            </div>
+            <Link to="/live" className="rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-dark">
+              Back to Live
+            </Link>
           </div>
         ) : (
           <>
@@ -115,7 +123,7 @@ export function ProgramView() {
                     className="relative bg-black cursor-pointer overflow-hidden"
                   >
                     {/* Crop out YouTube chrome; the shield lets the click reach the pane for focus. */}
-                    <CroppedFrame>
+                    <CroppedFrame overscan={1}>
                       <iframe
                         key={`${f.id}-${unmuted}`}
                         src={embedSrc(f.videoId, unmuted)}

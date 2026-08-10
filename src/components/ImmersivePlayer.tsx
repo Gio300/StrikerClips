@@ -4,6 +4,7 @@ import { useAuth } from '@/hooks/useAuth'
 import { ReelComments } from '@/components/ReelComments'
 import { ShareButtons } from '@/components/ShareButtons'
 import { fetchLikeState, setReelLike, fetchCommentCount } from '@/lib/reelSocial'
+import { ReportContentButton } from '@/components/ReportContentButton'
 
 /**
  * ImmersivePlayer — a full-bleed, TikTok/Sora-style watch surface for a produced
@@ -357,6 +358,14 @@ export function ImmersivePlayer({
               >
                 Reel details &amp; contributors
               </Link>
+              <ReportContentButton
+                reporterId={user?.id}
+                targetOwnerId={creatorId}
+                targetType="reel"
+                targetId={reelId}
+                compact={false}
+                className="w-full justify-start border border-dark-border text-gray-200 hover:border-kunai/50"
+              />
             </div>
           </Sheet>
         )}

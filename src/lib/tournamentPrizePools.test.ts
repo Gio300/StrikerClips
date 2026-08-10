@@ -3,6 +3,7 @@ import {
   DEFAULT_PRIZE_SPLIT_BPS,
   parsePrizeSplitBps,
   splitPrizePool,
+  splitPrizePoolEvenly,
 } from './tournamentPrizePools'
 
 describe('tournament prize pool math', () => {
@@ -33,5 +34,42 @@ describe('tournament prize pool math', () => {
     expect(parsePrizeSplitBps('[7000,2000,1000]')).toEqual([7000, 2000, 1000])
     expect(parsePrizeSplitBps([10_000])).toEqual([10_000])
     expect(parsePrizeSplitBps('not-json')).toEqual([])
+  })
+})
+
+describe('tie split (splitPrizePoolEvenly)', () => {
+  it('splits an even pot exactly evenly', () => {
+    expect(splitPrizePoolEvenly(50, 2)).toEqual([
+      { placement: 1, amount: 25 },
+      { placement: 2, amount: 25 },
+    ])
+  })
+
+  it('conserves the pot and keeps every share within one unit on odd pots', () => {
+    const payouts = splitPrizePoolEvenly(75, 2)
+    expect(payouts.reduce((sum, payout) => sum + payout.amount, 0)).toBe(75)
+    expect(payouts.map((payout) => payout.amount)).toEqual([38, 37])
+
+    const threeWay = splitPrizePoolEvenly(100, 3)
+    expect(threeWay.reduce((sum, payout) => sum + payout.amount, 0)).toBe(100)
+    const amounts = threeWay.map((payout) => payout.amount)
+    expect(Math.max(...amounts) - Math.min(...amounts)).toBeLessThanOrEqual(1)
+  })
+
+  it('stays within one unit on LARGE pots (where rounded basis points drift apart)', () => {
+    const payouts = splitPrizePoolEvenly(1_000_000, 3)
+    expect(payouts.reduce((sum, payout) => sum + payout.amount, 0)).toBe(1_000_000)
+    const amounts = payouts.map((payout) => payout.amount)
+    expect(Math.max(...amounts) - Math.min(...amounts)).toBeLessThanOrEqual(1)
+  })
+
+  it('degrades to winner-take-all for a single leader and rejects bad input', () => {
+    expect(splitPrizePoolEvenly(45, 1)).toEqual([{ placement: 1, amount: 45 }])
+    expect(splitPrizePoolEvenly(0, 2)).toEqual([
+      { placement: 1, amount: 0 },
+      { placement: 2, amount: 0 },
+    ])
+    expect(() => splitPrizePoolEvenly(-1, 2)).toThrow()
+    expect(() => splitPrizePoolEvenly(10, 0)).toThrow()
   })
 })

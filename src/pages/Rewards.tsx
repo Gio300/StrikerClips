@@ -1,14 +1,19 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
+import { Pencil, Trash2 } from 'lucide-react'
 import { useAuth } from '@/hooks/useAuth'
 import { useEntitlements } from '@/hooks/useEntitlements'
 import { useRewards } from '@/hooks/useRewards'
 import ArtifactCard from '@/components/ArtifactCard'
 import UnlockReveal from '@/components/UnlockReveal'
+import { callFn } from '@/lib/backend'
 import {
   MILESTONES, RARITY, canCraft, makeGiftCode, LEGEND_MONTHLY_CRAFTS,
   type EarnKind,
 } from '@/lib/artifacts'
+import {
+  normalizeOwnedArtifacts, ownedArtifactDef, type OwnedArtifact,
+} from '@/lib/ownedArtifacts'
 
 const TRACK_LABEL: Record<EarnKind, string> = {
   uploads: 'Clips uploaded',
@@ -22,6 +27,28 @@ export function Rewards() {
   const { counts, earnedArtifacts, next, loading } = useRewards()
   const [gift, setGift] = useState<string | null>(null)
   const [reveal, setReveal] = useState(false)
+
+  // THE FORGE COLLECTION — the artifacts this member actually forged, with the
+  // paid extras (powers / price / paired shirt) the Forge saved. Scoped to the
+  // caller server-side; a failure just leaves the section empty rather than
+  // breaking the milestone collection below it.
+  const [forged, setForged] = useState<OwnedArtifact[]>([])
+  const [forgedLoading, setForgedLoading] = useState(true)
+  const [artifactBusy, setArtifactBusy] = useState<string | null>(null)
+  const [artifactNotice, setArtifactNotice] = useState<string | null>(null)
+  useEffect(() => {
+    if (!user) { setForgedLoading(false); return }
+    let alive = true
+    void (async () => {
+      setForgedLoading(true)
+      try {
+        const result = await callFn<{ ok?: boolean; artifacts?: unknown }>('forge-artifact-list', {})
+        if (alive && result?.ok) setForged(normalizeOwnedArtifacts(result.artifacts))
+      } catch { /* offline / older server — the section stays empty */ }
+      if (alive) setForgedLoading(false)
+    })()
+    return () => { alive = false }
+  }, [user?.id])
 
   // "Legend" = the top creator tier.
   const isLegend = ent.tier === 'creator'
@@ -40,6 +67,22 @@ export function Rewards() {
   function craftGift() {
     setGift(makeGiftCode(`${user!.id}-${Date.now()}`))
     setReveal(true)
+  }
+
+  async function removeArtifact(artifact: OwnedArtifact) {
+    if (!window.confirm(`Remove ${artifact.name} from your artifact collection?`)) return
+    setArtifactBusy(artifact.id)
+    setArtifactNotice(null)
+    const result = await callFn<{ ok?: boolean; error?: string }>('forge-artifact-delete', {
+      artifactId: artifact.id,
+    })
+    setArtifactBusy(null)
+    if (!result?.ok) {
+      setArtifactNotice(result?.error || 'That artifact could not be removed.')
+      return
+    }
+    setForged((current) => current.filter((item) => item.id !== artifact.id))
+    setArtifactNotice(`${artifact.name} was removed.`)
   }
 
   return (
@@ -80,6 +123,61 @@ export function Rewards() {
         })}
       </div>
 
+      {/* what THIS member forged — the read side of /forge */}
+      <div>
+        <div className="mb-3 flex items-center justify-between gap-3">
+          <h2 className="text-lg font-semibold">Your Forge</h2>
+          <Link to="/forge" className="text-xs font-semibold text-accent hover:underline">
+            Forge an artifact →
+          </Link>
+        </div>
+        {artifactNotice && (
+          <p className="mb-3 rounded-lg border border-accent/30 bg-accent/10 px-3 py-2 text-sm text-gray-200">
+            {artifactNotice}
+          </p>
+        )}
+        {forgedLoading ? (
+          <div className="rounded-xl border border-dark-border bg-dark p-4 text-sm text-gray-400">
+            Loading your forged artifacts…
+          </div>
+        ) : forged.length === 0 ? (
+          <div className="rounded-xl border border-dark-border bg-dark p-4 text-sm text-gray-400">
+            You haven’t forged anything yet. Anything you forge — with its powers, price and paired
+            shirt — shows up here.
+          </div>
+        ) : (
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4">
+            {forged.map((artifact) => (
+              <div key={artifact.id} className="space-y-2">
+                <ArtifactCard def={ownedArtifactDef(artifact)} owned={artifact} />
+                <div className="grid grid-cols-2 gap-2">
+                  {artifact.conquest ? (
+                    <span className="flex min-h-9 items-center justify-center rounded-md border border-dark-border px-2 text-[11px] text-gray-500">
+                      Recipe locked
+                    </span>
+                  ) : (
+                    <Link
+                      to={`/forge?edit=${encodeURIComponent(artifact.id)}`}
+                      className="flex min-h-9 items-center justify-center gap-1 rounded-md border border-accent/40 px-2 text-xs font-semibold text-accent"
+                    >
+                      <Pencil size={13} /> Edit
+                    </Link>
+                  )}
+                  <button
+                    type="button"
+                    disabled={artifactBusy === artifact.id}
+                    onClick={() => void removeArtifact(artifact)}
+                    className="flex min-h-9 items-center justify-center gap-1 rounded-md border border-red-500/40 px-2 text-xs font-semibold text-red-400 disabled:opacity-50"
+                  >
+                    <Trash2 size={13} /> {artifactBusy === artifact.id ? 'Removing' : 'Remove'}
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
       {/* the full collection: earned bright, locked dim */}
       <div>
         <h2 className="text-lg font-semibold mb-3">Collection</h2>
@@ -109,7 +207,7 @@ export function Rewards() {
             Craft a “Gift Starter Pass” artifact
           </button>
         ) : (
-          <Link to="/pricing" className="mt-4 inline-block rounded-lg border border-accent/50 px-5 py-2.5 text-sm font-semibold text-accent">
+          <Link to="/upgrade" className="mt-4 inline-block rounded-lg border border-accent/50 px-5 py-2.5 text-sm font-semibold text-accent">
             Reach Legend to craft
           </Link>
         )}

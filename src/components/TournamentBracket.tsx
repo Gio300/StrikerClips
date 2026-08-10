@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Check, GitBranch, LoaderCircle, Shuffle, Trophy } from 'lucide-react'
 import { Avatar } from '@/components/ui'
 import { callFn } from '@/lib/backend'
-import { roundLabel } from '@/lib/tournamentBracket'
+import { expectedRoundsFromBattles, roundLabel } from '@/lib/tournamentBracket'
 import { supabase } from '@/lib/supabase'
+import { BattleMediaLinks } from '@/components/tournament/BattleMediaLinks'
 import type { TournamentBattle } from '@/types/database'
 
 type EntrantIdentity = {
@@ -31,6 +32,13 @@ interface TournamentBracketProps {
   entrants?: EntrantIdentity[]
   canManage?: boolean
   compact?: boolean
+  /**
+   * CONTROLLED mode (tournament replay): render exactly these battles instead
+   * of fetching them. The board becomes read-only — no seeding, no winner
+   * picks — so the replay scrubber can re-render the bracket as of any moment
+   * by handing in a time-filtered list (src/lib/tournamentReplay.ts battlesAsOf).
+   */
+  battles?: TournamentBattle[]
 }
 
 function compareBattles(a: TournamentBattle, b: TournamentBattle) {
@@ -41,15 +49,29 @@ function compareBattles(a: TournamentBattle, b: TournamentBattle) {
   )
 }
 
+/** One drawn bracket connector — the elbow from a matchup to its feeder slot
+ *  in the next round. `decided` accents the path once the matchup has a
+ *  winner (that's the line the winner's art travels). */
+type ConnectorLine = {
+  key: string
+  path: string
+  decided: boolean
+}
+
+/** Snap to a crisp half-pixel so 1.5px strokes don't blur across two pixels. */
+const snap = (value: number) => Math.round(value) + 0.5
+
 export function TournamentBracket({
   tournamentId,
   entrants = [],
   canManage = false,
   compact = false,
+  battles: controlledBattles,
 }: TournamentBracketProps) {
+  const controlled = controlledBattles != null
   const [battles, setBattles] = useState<TournamentBattle[]>([])
   const [profiles, setProfiles] = useState<Map<string, ProfileIdentity>>(new Map())
-  const [loading, setLoading] = useState(true)
+  const [loading, setLoading] = useState(!controlled)
   const [working, setWorking] = useState<string | null>(null)
   const [seedMode, setSeedMode] = useState<'registration' | 'shuffle'>('registration')
   const [message, setMessage] = useState('')
@@ -59,13 +81,23 @@ export function TournamentBracket({
     [entrants],
   )
 
+  // Profiles already fetched — controlled (replay) mode hands in a different
+  // time-filtered battles list on every scrub tick, and only NEW ids should
+  // trigger a network read.
+  const knownProfileIds = useRef(new Set<string>())
+
   const load = useCallback(async () => {
-    setLoading(true)
-    const { data } = await supabase
-      .from('tournament_battles')
-      .select('*')
-      .eq('tournament_id', tournamentId)
-    const nextBattles = ((data ?? []) as TournamentBattle[]).sort(compareBattles)
+    let nextBattles: TournamentBattle[]
+    if (controlled) {
+      nextBattles = [...(controlledBattles ?? [])].sort(compareBattles)
+    } else {
+      setLoading(true)
+      const { data } = await supabase
+        .from('tournament_battles')
+        .select('*')
+        .eq('tournament_id', tournamentId)
+      nextBattles = ((data ?? []) as TournamentBattle[]).sort(compareBattles)
+    }
     setBattles(nextBattles)
 
     const profileIds = Array.from(
@@ -74,22 +106,23 @@ export function TournamentBracket({
           .flatMap((battle) => [battle.player_a, battle.player_b, battle.winner])
           .filter((id): id is string => Boolean(id)),
       ),
-    )
+    ).filter((id) => !knownProfileIds.current.has(id))
     if (profileIds.length) {
+      for (const id of profileIds) knownProfileIds.current.add(id)
       const { data: profileRows } = await supabase
         .from('profiles')
         .select('id, username, avatar_url')
         .in('id', profileIds)
-      setProfiles(
-        new Map(
-          ((profileRows ?? []) as ProfileIdentity[]).map((profile) => [profile.id, profile]),
-        ),
-      )
-    } else {
-      setProfiles(new Map())
+      setProfiles((current) => {
+        const merged = new Map(current)
+        for (const profile of (profileRows ?? []) as ProfileIdentity[]) {
+          merged.set(profile.id, profile)
+        }
+        return merged
+      })
     }
     setLoading(false)
-  }, [tournamentId])
+  }, [tournamentId, controlled, controlledBattles])
 
   useEffect(() => {
     void load()
@@ -108,6 +141,77 @@ export function TournamentBracket({
         matches: matches.sort(compareBattles),
       }))
   }, [battles])
+
+  // ── Bracket connectors ────────────────────────────────────────────────────
+  // The classic elbow lines from each matchup to the slot its winner advances
+  // into. Card heights vary (team lines, media badges) and later rounds only
+  // exist once both feeders are decided, so instead of fragile CSS spacer
+  // math the REAL card positions are measured and an SVG overlay is drawn
+  // behind the columns. Handles byes, partial rounds and uneven brackets by
+  // construction; a ResizeObserver re-measures whenever layout shifts.
+  const boardRef = useRef<HTMLDivElement | null>(null)
+  const cardRefs = useRef(new Map<string, HTMLDivElement | null>())
+  const [connectors, setConnectors] = useState<ConnectorLine[]>([])
+  const connectorsJson = useRef('')
+
+  // How many rounds this bracket will have once fully played, derived from the
+  // opening round so stubs are not drawn off the final — and so the column
+  // headings name the right round (see expectedRoundsFromBattles).
+  const expectedRounds = useMemo(
+    () => expectedRoundsFromBattles(rounds.flatMap((entry) => entry.matches)) || rounds.length,
+    [rounds],
+  )
+
+  const measureConnectors = useCallback(() => {
+    const board = boardRef.current
+    if (!board) return
+    const boardRect = board.getBoundingClientRect()
+    const lines: ConnectorLine[] = []
+    for (const { round, matches } of rounds) {
+      matches.forEach((battle, index) => {
+        if (round >= expectedRounds) return // the final: nowhere to advance
+        const slot = Number(battle.bracket_slot ?? index)
+        const from = cardRefs.current.get(`${round}:${slot}`)
+        if (!from) return
+        const fromRect = from.getBoundingClientRect()
+        const x1 = snap(fromRect.right - boardRect.left)
+        const y1 = snap(fromRect.top + fromRect.height / 2 - boardRect.top)
+        const decided = Boolean(battle.winner)
+        const target = cardRefs.current.get(`${round + 1}:${Math.floor(slot / 2)}`)
+        if (!target) {
+          // The next-round matchup is not seeded yet — draw a short advance
+          // stub once this one is decided, as the "winner moves on" affordance.
+          if (decided) {
+            lines.push({ key: battle.id, decided, path: `M ${x1} ${y1} h 14` })
+          }
+          return
+        }
+        const targetRect = target.getBoundingClientRect()
+        const x2 = snap(targetRect.left - boardRect.left)
+        const y2 = snap(targetRect.top + targetRect.height / 2 - boardRect.top)
+        const midX = snap(x1 + (x2 - x1) / 2)
+        lines.push({
+          key: battle.id,
+          decided,
+          path: `M ${x1} ${y1} H ${midX} V ${y2} H ${x2}`,
+        })
+      })
+    }
+    const json = JSON.stringify(lines)
+    if (json !== connectorsJson.current) {
+      connectorsJson.current = json
+      setConnectors(lines)
+    }
+  }, [rounds, expectedRounds])
+
+  useLayoutEffect(() => {
+    measureConnectors()
+    const board = boardRef.current
+    if (!board || typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(() => measureConnectors())
+    observer.observe(board)
+    return () => observer.disconnect()
+  }, [measureConnectors, loading])
 
   const identityFor = (id: string | null) => {
     if (!id) return null
@@ -168,6 +272,13 @@ export function TournamentBracket({
   }
 
   if (battles.length === 0) {
+    if (controlled) {
+      return (
+        <div className="border-y border-dark-border py-5 text-center text-sm text-gray-400">
+          The bracket has not been built at this point of the replay.
+        </div>
+      )
+    }
     if (!canManage) {
       return (
         <div className="border-y border-dark-border py-5 text-center text-sm text-gray-400">
@@ -248,28 +359,60 @@ export function TournamentBracket({
       )}
 
       <div className="overflow-x-auto pb-2">
-        <div className="flex min-w-max items-stretch gap-4">
-          {rounds.map(({ round, matches }) => (
-            <section key={round} className={compact ? 'w-56' : 'w-64'}>
-              <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-gray-400">
-                {roundLabel(round, rounds.length)}
-              </h3>
-              <div className="flex h-[calc(100%-1.5rem)] flex-col justify-around gap-3">
-                {matches.map((battle) => (
-                  <Matchup
-                    key={battle.id}
-                    battle={battle}
-                    playerA={identityFor(battle.player_a)}
-                    playerB={identityFor(battle.player_b)}
-                    canManage={canManage}
-                    compact={compact}
-                    working={working === battle.id}
-                    onWinner={(winnerId) => void recordWinner(battle.id, winnerId)}
-                  />
-                ))}
-              </div>
-            </section>
-          ))}
+        <div ref={boardRef} className="relative min-w-max">
+          {/* Connector overlay — sits BEHIND the cards; lines run through the
+              column gaps, so nothing needs pointer events or z juggling. */}
+          <svg
+            className="pointer-events-none absolute inset-0 h-full w-full"
+            aria-hidden="true"
+          >
+            {connectors.map((line) => (
+              <path
+                key={line.key}
+                d={line.path}
+                fill="none"
+                stroke="currentColor"
+                strokeWidth={line.decided ? 2 : 1.5}
+                className={line.decided ? 'text-leaf' : 'text-dark-border'}
+              />
+            ))}
+          </svg>
+          <div className="flex items-stretch gap-8">
+            {rounds.map(({ round, matches }) => (
+              <section key={round} className={compact ? 'w-56' : 'w-64'}>
+                <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-gray-400">
+                  {/* Label against the bracket's EXPECTED depth, not the rounds
+                      that happen to exist yet. A freshly seeded 4-player
+                      bracket has one round on the board; `rounds.length` made
+                      that round read "FINAL" when it is the semifinal. */}
+                  {roundLabel(round, expectedRounds)}
+                </h3>
+                <div className="flex h-[calc(100%-1.5rem)] flex-col justify-around gap-3">
+                  {matches.map((battle, index) => (
+                    <div
+                      key={battle.id}
+                      ref={(el) => {
+                        cardRefs.current.set(
+                          `${round}:${Number(battle.bracket_slot ?? index)}`,
+                          el,
+                        )
+                      }}
+                    >
+                      <Matchup
+                        battle={battle}
+                        playerA={identityFor(battle.player_a)}
+                        playerB={identityFor(battle.player_b)}
+                        canManage={canManage && !controlled}
+                        compact={compact}
+                        working={working === battle.id}
+                        onWinner={(winnerId) => void recordWinner(battle.id, winnerId)}
+                      />
+                    </div>
+                  ))}
+                </div>
+              </section>
+            ))}
+          </div>
         </div>
       </div>
       {message && <p className="text-sm text-kunai">{message}</p>}
@@ -357,6 +500,8 @@ function Matchup({
           </button>
         )
       })}
+      {/* Attached watch links (fighter lives + clips) — see battleMedia.ts. */}
+      <BattleMediaLinks media={battle.media} playerA={playerA} playerB={playerB} />
     </div>
   )
 }

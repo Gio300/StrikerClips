@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
-import { useParams, Link } from 'react-router-dom'
+import { useNavigate, useParams, Link } from 'react-router-dom'
+import { LogOut, Settings } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/hooks/useAuth'
 import { LiveNowStrip } from '@/components/LiveNowStrip'
@@ -8,16 +9,22 @@ import { topBadge, type BadgeMeta } from '@/lib/badges'
 import { BadgeChip } from '@/components/BadgeChip'
 import { effectiveDisplayName } from '@/lib/founder'
 import { formatTag } from '@/lib/identity'
-import type { Server, Channel, Message } from '@/types/database'
+import { can, canLeaveClan, isClanManagerRole } from '@/lib/clans'
+import type { Server, Channel, ClanMember, Message } from '@/types/database'
 
 // Messages carry an optional `meta` bag of badge-bearing metadata. The profile
 // join only returns username + power_level, so today only the signed-in user's
 // own optimistic message carries badges; everyone else degrades to no badge.
 type BoardMessage = Message & { profiles?: { username: string }; meta?: BadgeMeta }
 
+export function boardRailStartsOpen(viewportWidth: number): boolean {
+  return viewportWidth >= 640
+}
+
 export function BoardDetail() {
   const { serverId, channelId } = useParams()
   const { user, profile } = useAuth()
+  const navigate = useNavigate()
   const [server, setServer] = useState<Server | null>(null)
   const [channels, setChannels] = useState<Channel[]>([])
   const [messages, setMessages] = useState<BoardMessage[]>([])
@@ -25,21 +32,31 @@ export function BoardDetail() {
   const [newMessage, setNewMessage] = useState('')
   const [loading, setLoading] = useState(true)
   // Collapse the channel rail so the chat gets the whole screen on a phone.
-  const [railOpen, setRailOpen] = useState(true)
+  const [railOpen, setRailOpen] = useState(() => (
+    typeof window === 'undefined' ? true : boardRailStartsOpen(window.innerWidth)
+  ))
   const [newChannel, setNewChannel] = useState('')
   const [addingChannel, setAddingChannel] = useState(false)
+  const [viewerMembership, setViewerMembership] = useState<Pick<ClanMember, 'id' | 'role'> | null>(null)
+  const [clanNotice, setClanNotice] = useState<string | null>(null)
+  const [leavingClan, setLeavingClan] = useState(false)
 
   async function addChannel(e: React.FormEvent) {
     e.preventDefault()
     const name = newChannel.trim().toLowerCase().replace(/^#+/, '').replace(/\s+/g, '-').replace(/[^a-z0-9\-_]/g, '').slice(0, 32)
     if (!name || !serverId) return
     setAddingChannel(true)
+    setClanNotice(null)
     try {
-      const { data } = await supabase
+      const { data, error } = await supabase
         .from('channels')
         .insert({ server_id: serverId, name })
         .select()
         .single()
+      if (error) {
+        setClanNotice(error.message || 'That channel could not be created.')
+        return
+      }
       if (data) {
         setChannels((prev) => [...prev, data as Channel].sort((a, b) => a.name.localeCompare(b.name)))
         setActiveChannel(data as Channel)
@@ -50,11 +67,58 @@ export function BoardDetail() {
     }
   }
 
+  async function leaveClan() {
+    if (!user || !serverId || !server || !viewerMembership || !canLeaveClan(viewerMembership.role)) return
+    if (!window.confirm(`Leave ${server.name}? You will be removed from its clan roster and board.`)) return
+    setLeavingClan(true)
+    setClanNotice(null)
+    const { error: membershipError } = await supabase
+      .from('clan_members')
+      .delete()
+      .eq('id', viewerMembership.id)
+      .eq('user_id', user.id)
+    if (membershipError) {
+      setClanNotice(membershipError.message || 'You could not leave this clan.')
+      setLeavingClan(false)
+      return
+    }
+
+    const { error: boardError } = await supabase
+      .from('server_members')
+      .delete()
+      .eq('server_id', serverId)
+      .eq('user_id', user.id)
+    setLeavingClan(false)
+    if (boardError) {
+      setViewerMembership(null)
+      setClanNotice('You left the clan, but its board access could not be cleaned up. Please contact support.')
+      return
+    }
+    navigate('/boards')
+  }
+
   useEffect(() => {
     if (!serverId) return
     async function fetch() {
       const { data: serverData } = await supabase.from('servers').select('*').eq('id', serverId!).single()
       setServer(serverData)
+      if (user) {
+        const { data: membership } = await supabase
+          .from('clan_members')
+          .select('id, role')
+          .eq('server_id', serverId!)
+          .eq('user_id', user.id)
+          .maybeSingle()
+        setViewerMembership(
+          serverData?.owner_id === user.id
+            ? { id: (membership?.id as string | undefined) ?? '', role: 'leader' }
+            : membership
+              ? { id: membership.id as string, role: membership.role as ClanMember['role'] }
+              : null,
+        )
+      } else {
+        setViewerMembership(null)
+      }
       const { data: channelsData } = await supabase
         .from('channels')
         .select('*')
@@ -66,7 +130,7 @@ export function BoardDetail() {
       setLoading(false)
     }
     fetch()
-  }, [serverId, channelId])
+  }, [serverId, channelId, user?.id])
 
   useEffect(() => {
     if (!activeChannel) return
@@ -94,8 +158,8 @@ export function BoardDetail() {
     e.preventDefault()
     if (!user || !activeChannel || !newMessage.trim()) return
     const content = newMessage.trim()
-    setNewMessage('')
-    const { data } = await supabase
+    setClanNotice(null)
+    const { data, error } = await supabase
       .from('messages')
       .insert({
         channel_id: activeChannel.id,
@@ -104,6 +168,11 @@ export function BoardDetail() {
       })
       .select('*, profiles(username, power_level)')
       .single()
+    if (error) {
+      setClanNotice(error.message || 'Your message could not be sent. Try again.')
+      return
+    }
+    setNewMessage('')
     if (data) {
       // Optimistically show the sent message. In standalone mode the realtime
       // channel is a stub, so nothing arrives otherwise. Guard against a
@@ -131,12 +200,20 @@ export function BoardDetail() {
     )
   }
 
+  const viewerRole = viewerMembership?.role ?? null
+  const canManageChannels = viewerRole ? can(viewerRole, 'manage_channels') : false
+
   return (
     <div className="flex flex-col h-[calc(100dvh-4rem-env(safe-area-inset-bottom))] sm:h-[calc(100vh-0px)]">
       {/* This clan's live streams */}
       <div className="px-4 pt-4">
         <LiveNowStrip placement="clan" clanId={serverId} />
       </div>
+      {clanNotice && (
+        <p role="alert" className="mx-4 mt-2 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-300">
+          {clanNotice}
+        </p>
+      )}
       <div className="flex flex-1 min-h-0">
       {railOpen && (
       <div className="w-40 sm:w-56 shrink-0 border-r border-dark-border bg-dark-card flex flex-col">
@@ -153,12 +230,35 @@ export function BoardDetail() {
           >
             Open chat space →
           </Link>
+          {user && isClanManagerRole(viewerRole) && (
+            <Link
+              to={`/clans/${serverId}/manage`}
+              className="mt-2 flex items-center gap-1.5 text-xs text-gray-400 hover:text-white"
+            >
+              <Settings size={13} /> Clan tools
+            </Link>
+          )}
+          {user && canLeaveClan(viewerRole) && (
+            <button
+              type="button"
+              onClick={() => void leaveClan()}
+              disabled={leavingClan}
+              className="mt-2 flex items-center gap-1.5 text-xs text-red-400 hover:text-red-300 disabled:opacity-50"
+            >
+              <LogOut size={13} /> {leavingClan ? 'Leaving clan...' : 'Leave clan'}
+            </button>
+          )}
         </div>
         <nav className="flex-1 p-2 overflow-auto">
           {channels.map((ch) => (
             <button
               key={ch.id}
-              onClick={() => { setActiveChannel(ch); setRailOpen(true) }}
+              onClick={() => {
+                setActiveChannel(ch)
+                if (typeof window !== 'undefined' && !boardRailStartsOpen(window.innerWidth)) {
+                  setRailOpen(false)
+                }
+              }}
               className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${
                 activeChannel?.id === ch.id ? 'bg-accent/10 text-accent' : 'text-gray-400 hover:text-white hover:bg-dark-border/50'
               }`}
@@ -167,7 +267,7 @@ export function BoardDetail() {
             </button>
           ))}
           {/* Add a channel — a plus row so you can spin up more rooms. */}
-          {user && (
+          {user && canManageChannels && (
             <form onSubmit={addChannel} className="mt-2 flex gap-1 border-t border-dark-border pt-2">
               <input
                 type="text"
@@ -228,7 +328,7 @@ export function BoardDetail() {
                     <span className="text-gray-500 text-sm ml-2">
                       {new Date(msg.created_at).toLocaleTimeString()}
                     </span>
-                    <p className="text-gray-300 mt-0.5">{msg.content}</p>
+                    <p data-user-content className="text-gray-300 mt-0.5">{msg.content}</p>
                   </div>
                 </div>
               ))}
@@ -253,8 +353,47 @@ export function BoardDetail() {
             )}
           </>
         ) : (
-          <div className="flex-1 flex items-center justify-center text-gray-400">
-            Select a channel
+          <div className="flex flex-1 flex-col">
+            <div className="flex items-center gap-2 border-b border-dark-border p-4">
+              <button
+                type="button"
+                onClick={() => setRailOpen((value) => !value)}
+                className="shrink-0 rounded-lg border border-dark-border px-2 py-1 text-sm text-gray-300 hover:text-white"
+                aria-label={railOpen ? 'Hide channels' : 'Show channels'}
+              >
+                {railOpen ? '⟨' : '☰'}
+              </button>
+              <h2 className="font-medium text-white">Clan board</h2>
+            </div>
+            <div className="flex flex-1 items-center justify-center p-6">
+              <div className="w-full max-w-sm text-center">
+                <p className="font-semibold text-white">No channels yet</p>
+                <p className="mt-1 text-sm text-gray-500">
+                  {canManageChannels
+                    ? 'Create #general so your clan has a place to talk.'
+                    : 'A clan leader or officer needs to create the first channel.'}
+                </p>
+                {canManageChannels && (
+                  <form onSubmit={addChannel} className="mt-4 flex gap-2">
+                    <input
+                      type="text"
+                      value={newChannel}
+                      onChange={(event) => setNewChannel(event.target.value)}
+                      placeholder="general"
+                      aria-label="Channel name"
+                      className="min-w-0 flex-1 rounded-lg border border-dark-border bg-dark px-3 py-2 text-sm text-white focus:border-accent focus:outline-none"
+                    />
+                    <button
+                      type="submit"
+                      disabled={!newChannel.trim() || addingChannel}
+                      className="rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-dark disabled:opacity-50"
+                    >
+                      {addingChannel ? 'Creating...' : 'Create'}
+                    </button>
+                  </form>
+                )}
+              </div>
+            </div>
           </div>
         )}
       </div>

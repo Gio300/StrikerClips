@@ -1,34 +1,38 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useDeferredValue, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
+import { Search } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/hooks/useAuth'
 import { useWallet } from '@/hooks/useWallet'
 import { ActionCard } from '@/components/ui/ActionCard'
-import {
-  canJoin,
-  joinBlockMessage,
-  clanSummary,
-  isDiscoverable,
-  payClanFee,
-} from '@/lib/clans'
+import { clanSummary } from '@/lib/clans'
 import { clanLabel } from '@/lib/identity'
-import { IS_MOBILE_STORE_BUILD } from '@/lib/storeBuild'
+import { applyToClan, fetchMyClanApplications } from '@/lib/organizerApi'
 import type { Server } from '@/types/database'
-
-/**
- * Clan Discovery — "find a clan".
- *
- * Lists clans that are OPEN / recruiting (and not full), each as an ActionCard
- * showing name, spots left and the join fee (or "Free to join"). Tapping a card
- * attempts to join: it enforces `canJoin` (cap ∩ recruiting ∩ affordability); on
- * a paid clan it deducts the fee from the user's Token wallet and books the 80/20
- * split (clan treasury / platform); on success the user becomes a Member
- * (`clan_members` insert). Blocks fail closed with a clear message and a link to
- * buy Tokens when short. See docs/economy-clans-villages.md §5.3.
- */
 
 type Counts = Record<string, number>
 
+export function clanCapacityLabel(memberCount: number, maxMembers: number): string {
+  const members = Math.max(0, Math.floor(memberCount))
+  const capacity = Math.max(0, Math.floor(maxMembers))
+  return `${Math.max(0, capacity - members)} open spots · ${members}/${capacity} members`
+}
+
+export function clanApplicationErrorMessage(error: string | null | undefined): string {
+  const messages: Record<string, string> = {
+    already_a_clan_member: 'You are already a member of this clan.',
+    clan_is_full: 'This clan is full.',
+    clan_not_found: 'That clan is no longer available.',
+    authentication_required: 'Sign in to apply to a clan.',
+  }
+  return messages[error || ''] || 'Application could not be sent. Try again.'
+}
+
+/**
+ * Clan Discovery is an application surface, not a client-side membership door.
+ * Recruiting clans are sorted first, but closed clans remain reachable so their
+ * leaders can still receive and review applications.
+ */
 export function ClanDiscovery() {
   const { user } = useAuth()
   const userId = user?.id ?? ''
@@ -37,33 +41,64 @@ export function ClanDiscovery() {
   const [clans, setClans] = useState<Server[]>([])
   const [counts, setCounts] = useState<Counts>({})
   const [myClanIds, setMyClanIds] = useState<Set<string>>(new Set())
+  const [applications, setApplications] = useState<Record<string, string>>({})
   const [loading, setLoading] = useState(true)
   const [busyId, setBusyId] = useState<string | null>(null)
   const [flash, setFlash] = useState<{ id: string; msg: string; ok: boolean } | null>(null)
+  const [search, setSearch] = useState('')
+  const [loadError, setLoadError] = useState('')
+  const deferredSearch = useDeferredValue(search.trim())
 
   const load = useCallback(async () => {
-    // Recruiting clans. (Filtering client-side too keeps the mock backend honest.)
-    const { data: serverRows } = await supabase
+    let clanQuery = supabase
       .from('servers')
       .select('*')
-      .eq('is_recruiting', true)
-      .order('name')
-    const recruiting = ((serverRows ?? []) as Server[]).filter((s) => s.is_recruiting)
-
-    // Member counts per clan (group all clan_members client-side — robust on mock + real).
-    const { data: memberRows } = await supabase.from('clan_members').select('server_id, user_id')
-    const rows = (memberRows ?? []) as { server_id: string; user_id: string }[]
-    const c: Counts = {}
-    const mine = new Set<string>()
-    for (const r of rows) {
-      c[r.server_id] = (c[r.server_id] ?? 0) + 1
-      if (r.user_id === userId) mine.add(r.server_id)
+      .eq('kind', 'clan')
+      .order('is_recruiting', { ascending: false })
+      .limit(50)
+    if (deferredSearch) clanQuery = clanQuery.ilike('name', `%${deferredSearch}%`)
+    const { data: serverRows, error: clansError } = await clanQuery
+    if (clansError) {
+      setLoadError(clansError.message || 'Clans could not be loaded.')
+      setClans([])
+      setLoading(false)
+      return
     }
-    setCounts(c)
+    setLoadError('')
+    const allClans = ((serverRows ?? []) as Server[])
+      .filter((server) => server.kind === 'clan')
+      .sort((a, b) => (
+        Number(Boolean(b.is_recruiting)) - Number(Boolean(a.is_recruiting))
+        || a.name.localeCompare(b.name)
+      ))
+
+    const clanIds = allClans.map((clan) => clan.id)
+    const { data: memberRows } = clanIds.length
+      ? await supabase.from('clan_members').select('server_id, user_id').in('server_id', clanIds)
+      : { data: [] }
+    const rows = (memberRows ?? []) as { server_id: string; user_id: string }[]
+    const nextCounts: Counts = {}
+    const mine = new Set<string>()
+    for (const row of rows) {
+      nextCounts[row.server_id] = (nextCounts[row.server_id] ?? 0) + 1
+      if (row.user_id === userId) mine.add(row.server_id)
+    }
+
+    let nextApplications: Record<string, string> = {}
+    if (userId) {
+      const result = await fetchMyClanApplications()
+      if (result.ok && result.data) {
+        nextApplications = Object.fromEntries(
+          result.data.applications.map((application) => [application.server_id, application.status]),
+        )
+      }
+    }
+    setCounts(nextCounts)
     setMyClanIds(mine)
-    setClans(recruiting)
+    setApplications(nextApplications)
+    setClans(allClans)
     setLoading(false)
-  }, [userId])
+  }, [deferredSearch, userId])
 
   useEffect(() => {
     void load()
@@ -71,59 +106,30 @@ export function ClanDiscovery() {
 
   function showFlash(id: string, msg: string, ok: boolean) {
     setFlash({ id, msg, ok })
-    setTimeout(() => setFlash((f) => (f && f.id === id && f.msg === msg ? null : f)), 3500)
+    setTimeout(() => setFlash((current) => (
+      current?.id === id && current.msg === msg ? null : current
+    )), 3500)
   }
 
-  async function attemptJoin(clan: Server) {
+  async function attemptApply(clan: Server) {
     if (!userId) {
-      showFlash(clan.id, 'Sign in to join a clan.', false)
+      showFlash(clan.id, 'Sign in to apply to a clan.', false)
       return
     }
-    if (myClanIds.has(clan.id)) return
-    const memberCount = counts[clan.id] ?? 0
-    const fee = clan.join_fee_tokens ?? 0
-    if (IS_MOBILE_STORE_BUILD && fee > 0) {
-      showFlash(clan.id, 'Paid clan joining is unavailable in this version.', false)
-      return
-    }
-    const check = canJoin(
-      { maxMembers: clan.max_members ?? undefined, isRecruiting: !!clan.is_recruiting, joinFeeTokens: fee },
-      memberCount,
-      tokens,
-    )
-    if (!check.ok) {
-      showFlash(clan.id, joinBlockMessage(check.reason), false)
+    if (myClanIds.has(clan.id) || applications[clan.id] === 'pending') return
+    if ((counts[clan.id] ?? 0) >= (clan.max_members ?? 100)) {
+      showFlash(clan.id, 'This clan is full.', false)
       return
     }
     setBusyId(clan.id)
     try {
-      // Charge the fee SERVER-SIDE: one request debits the wallet, credits the
-      // clan's treasury 80%, writes the clan_dues_payments receipt and books the
-      // wallet_ledger row. The amount comes from the clan's own
-      // `join_fee_tokens`, not from this page — and if the debit fails we do NOT
-      // seat the member.
-      if (fee > 0) {
-        const paid = await payClanFee(clan.id, userId, 'join')
-        if (!paid.ok) {
-          showFlash(
-            clan.id,
-            paid.reason === 'insufficient'
-              ? 'Not enough Tokens for that join fee.'
-              : "Couldn't take the join fee just now — nothing was charged.",
-            false,
-          )
-          return
-        }
+      const result = await applyToClan(clan.id, '')
+      if (!result.ok || !result.data) {
+        showFlash(clan.id, clanApplicationErrorMessage(result.error), false)
+        return
       }
-      await supabase.from('clan_members').insert({ server_id: clan.id, user_id: userId, role: 'member' })
-      // Mirror into server_members so the chat/host-dropdown reads see the join.
-      await supabase.from('server_members').insert({ server_id: clan.id, user_id: userId, role: 'member' })
-      showFlash(
-        clan.id,
-        fee > 0 ? `Joined ${clan.name}! ${fee.toLocaleString()} Tokens spent.` : `Joined ${clan.name}!`,
-        true,
-      )
-      await load()
+      setApplications((current) => ({ ...current, [clan.id]: 'pending' }))
+      showFlash(clan.id, `Application sent to ${clan.name}.`, true)
     } finally {
       setBusyId(null)
     }
@@ -132,122 +138,131 @@ export function ClanDiscovery() {
   if (loading) {
     return (
       <div className="p-8 flex items-center justify-center">
-        <div className="animate-pulse text-accent">Finding clans…</div>
+        <div className="animate-pulse text-accent">Finding clans...</div>
       </div>
     )
   }
-
-  const discoverable = clans.filter((c) => {
-    const joinFeeTokens = c.join_fee_tokens ?? 0
-    return (
-      (!IS_MOBILE_STORE_BUILD || joinFeeTokens <= 0) &&
-      isDiscoverable(
-        {
-          maxMembers: c.max_members ?? undefined,
-          isRecruiting: !!c.is_recruiting,
-          joinFeeTokens,
-        },
-        counts[c.id] ?? 0,
-      )
-    )
-  })
 
   return (
     <div className="p-4 sm:p-6 lg:p-8 max-w-3xl mx-auto">
       <div className="flex flex-wrap items-start justify-between gap-3 mb-6">
         <div>
           <h1 className="text-2xl font-bold">Find a clan</h1>
-          <p className="text-sm text-gray-500 mt-1">Clans recruiting right now. Tap one to join.</p>
-        </div>
-        {!IS_MOBILE_STORE_BUILD && (
-          <div className="flex items-center gap-3">
-            <div className="rounded-lg border border-dark-border bg-dark-card px-4 py-2 text-center">
-              <div className="text-lg font-bold text-accent">{tokens.toLocaleString()}</div>
-              <div className="text-[11px] uppercase tracking-wide text-gray-500">Your Tokens</div>
-            </div>
-            <Link
-              to="/store"
-              className="px-3 py-2 rounded-lg border border-dark-border bg-dark-card text-sm text-accent hover:border-accent/50 transition-colors"
-            >
-              Get more
-            </Link>
-          </div>
-        )}
-      </div>
-
-      {discoverable.length === 0 ? (
-        <div className="text-center py-16 text-gray-400">
-          <p className="mb-4">
-            {IS_MOBILE_STORE_BUILD
-              ? 'No free clans are recruiting right now.'
-              : 'No clans are recruiting right now.'}
+          <p className="text-sm text-gray-500 mt-1">
+            Apply to any clan. Recruiting clans are actively looking for players.
           </p>
-          <Link to="/boards/create" className="px-4 py-2 rounded-lg bg-accent text-dark font-semibold">
-            Start your own clan
+        </div>
+        <div className="flex items-center gap-3">
+          <div className="rounded-lg border border-dark-border bg-dark-card px-4 py-2 text-center">
+            <div className="text-lg font-bold text-accent">{tokens.toLocaleString()}</div>
+            <div className="text-[11px] uppercase tracking-wide text-gray-500">Your Tokens</div>
+          </div>
+          <Link
+            to="/store"
+            className="px-3 py-2 rounded-lg border border-dark-border bg-dark-card text-sm text-accent hover:border-accent/50 transition-colors"
+          >
+            Get more
           </Link>
         </div>
-      ) : (
+      </div>
+
+      <label className="relative mb-5 block">
+        <Search size={17} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" aria-hidden />
+        <span className="sr-only">Search clans</span>
+        <input
+          type="search"
+          value={search}
+          onChange={(event) => setSearch(event.target.value)}
+          placeholder="Search clans by name"
+          className="w-full rounded-lg border border-dark-border bg-dark py-2.5 pl-10 pr-3 text-sm text-white placeholder-gray-500 outline-none focus:border-accent"
+        />
+      </label>
+
+      {loadError && (
+        <p role="alert" className="mb-5 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-300">
+          Clans could not be loaded. Try again in a moment.
+        </p>
+      )}
+
+      {!loadError && clans.length === 0 ? (
+        <div className="text-center py-16 text-gray-400">
+          <p className="mb-4">{deferredSearch ? `No clans match “${deferredSearch}”.` : 'No clans have been created yet.'}</p>
+          {!deferredSearch && (
+            <Link to="/boards/create" className="px-4 py-2 rounded-lg bg-accent text-dark font-semibold">
+              Start your own clan
+            </Link>
+          )}
+        </div>
+      ) : !loadError ? (
         <div className="space-y-3">
-          {discoverable.map((clan) => {
-            const s = clanSummary(
-              { name: clan.name, maxMembers: clan.max_members ?? undefined, isRecruiting: !!clan.is_recruiting, joinFeeTokens: clan.join_fee_tokens ?? 0 },
+          {clans.map((clan) => {
+            const summary = clanSummary(
+              {
+                name: clan.name,
+                maxMembers: clan.max_members ?? undefined,
+                isRecruiting: Boolean(clan.is_recruiting),
+                joinFeeTokens: clan.join_fee_tokens ?? 0,
+              },
               counts[clan.id] ?? 0,
             )
             const joined = myClanIds.has(clan.id)
+            const applicationStatus = applications[clan.id]
             const busy = busyId === clan.id
-            const sub = `${s.spotsLeft} of ${s.maxMembers} spots left · ${s.free ? 'Free to join' : `${s.joinFeeTokens.toLocaleString()} TKN`}`
-            const isFlash = flash && flash.id === clan.id
+            const fee = summary.free
+              ? 'No join fee'
+              : `${summary.joinFeeTokens.toLocaleString()} TKN if accepted`
+            const recruiting = clan.is_recruiting ? 'Recruiting' : 'Applications reviewed'
+            const sublabel = `${recruiting} | ${clanCapacityLabel(counts[clan.id] ?? 0, summary.maxMembers)} | ${fee}`
+            const disabled = joined || busy || applicationStatus === 'pending' || summary.isFull
             return (
               <div key={clan.id}>
                 <ActionCard
-                  emoji="🛡️"
+                  icon="clan"
                   label={clanLabel(clan.name, clan.clan_tag)}
-                  sublabel={sub}
-                  onClick={joined || busy ? undefined : () => void attemptJoin(clan)}
-                  aria-label={
-                    joined
-                      ? `${clanLabel(clan.name, clan.clan_tag)} — joined`
-                      : `Join ${clanLabel(clan.name, clan.clan_tag)}`
-                  }
-                  trailing={
-                    <span
-                      className={`shrink-0 text-xs font-semibold px-3 py-1.5 rounded-lg ${
-                        joined
-                          ? 'border border-leaf/40 bg-leaf/10 text-leaf'
-                          : busy
+                  sublabel={sublabel}
+                  onClick={disabled ? undefined : () => void attemptApply(clan)}
+                  aria-label={joined ? `${clan.name}, joined` : `Apply to ${clan.name}`}
+                  trailing={(
+                    <span className={`shrink-0 text-xs font-semibold px-3 py-1.5 rounded-lg ${
+                      joined
+                        ? 'border border-leaf/40 bg-leaf/10 text-leaf'
+                        : applicationStatus === 'pending'
+                          ? 'border border-accent/40 bg-accent/10 text-accent'
+                          : summary.isFull
                             ? 'border border-dark-border text-gray-500'
-                            : s.free
-                              ? 'bg-accent text-dark'
-                              : 'bg-accent text-dark'
-                      }`}
-                    >
-                      {joined ? '✓ Joined' : busy ? '…' : s.free ? 'Join' : `Join · ${s.joinFeeTokens.toLocaleString()}`}
+                            : 'bg-accent text-dark'
+                    }`}>
+                      {joined
+                        ? 'Joined'
+                        : applicationStatus === 'pending'
+                          ? 'Pending'
+                          : busy
+                            ? 'Sending...'
+                            : summary.isFull
+                              ? 'Full'
+                              : 'Apply'}
                     </span>
-                  }
+                  )}
                   hideChevron
                 />
-                {isFlash && (
-                  <p className={`mt-1 px-1 text-xs ${flash!.ok ? 'text-leaf' : 'text-red-400'}`}>
-                    {flash!.msg}
-                    {!IS_MOBILE_STORE_BUILD && !flash!.ok && flash!.msg.includes('Tokens') && (
-                      <Link to="/store" className="ml-1 underline text-accent">
-                        Buy Tokens
-                      </Link>
-                    )}
+                {flash?.id === clan.id && (
+                  <p className={`mt-1 px-1 text-xs ${flash.ok ? 'text-leaf' : 'text-red-400'}`}>
+                    {flash.msg}
                   </p>
                 )}
               </div>
             )
           })}
         </div>
+      ) : null}
+
+      {clans.length === 50 && (
+        <p className="mt-6 text-center text-xs text-gray-500">Showing the first 50 clans. Search by name to narrow the list.</p>
       )}
 
-      {!IS_MOBILE_STORE_BUILD && (
-        <p className="mt-8 text-xs text-gray-500 text-center">
-          Join fees are paid in Tokens and split 80% to the clan treasury, 20% platform fee.
-          Tokens have no cash value.
-        </p>
-      )}
+      <p className="mt-8 text-xs text-gray-500 text-center">
+        A join fee is collected only after approval and split 80% to the clan treasury and 20% to the platform.
+      </p>
     </div>
   )
 }

@@ -1,6 +1,11 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { recentProducedVideos, type ProducedVideo } from '@/lib/producedVideos'
+import {
+  interleaveCreators,
+  PRODUCED_WATCH_LIMIT,
+  producedVideoCreatorKey,
+} from '@/lib/feedDiversity'
 import { ReelScrollFeed } from '@/components/ReelScrollFeed'
 
 /**
@@ -16,8 +21,8 @@ export function Videos() {
 
   useEffect(() => {
     let alive = true
-    recentProducedVideos(48)
-      .then((v) => alive && setVideos(v))
+    recentProducedVideos(PRODUCED_WATCH_LIMIT)
+      .then((v) => alive && setVideos(interleaveCreators(v, producedVideoCreatorKey)))
       .catch(() => {})
       .finally(() => alive && setLoading(false))
     return () => {

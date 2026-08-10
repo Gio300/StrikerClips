@@ -60,6 +60,7 @@ export function buildIdPlugin({
     transformIndexHtml() {
       return [
         { tag: 'meta', attrs: { name: 'tko-build', content: buildId }, injectTo: 'head' as const },
+        { tag: 'meta', attrs: { name: 'tko-built-at', content: String(builtAt) }, injectTo: 'head' as const },
       ]
     },
     generateBundle() {

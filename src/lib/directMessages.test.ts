@@ -1,8 +1,10 @@
 import { describe, expect, it, vi } from 'vitest'
 import { mockSupabase } from './mockSupabase'
 import {
+  addConversationMembers,
   readDirectMessages,
   openDirectConversation,
+  openGroupConversation,
   sendDirectMessage,
   type DirectConversationClient,
   type DirectMessageClient,
@@ -39,6 +41,42 @@ describe('direct messages data round trip', () => {
     await expect(openDirectConversation(functionClient, 'target-456')).rejects.toThrow(
       'This conversation is unavailable.',
     )
+  })
+
+  it('creates a named group thread through the server-owned endpoint', async () => {
+    const invoke = vi.fn().mockResolvedValue({
+      data: { ok: true, conversation_id: 'group-123' },
+      error: null,
+    })
+    const functionClient = {
+      functions: { invoke },
+    } as unknown as DirectConversationClient
+
+    await expect(openGroupConversation(functionClient, {
+      name: 'Tournament crew',
+      usernames: ['Alice', '@Bob'.replace('@', ''), 'alice'],
+    })).resolves.toBe('group-123')
+    expect(invoke).toHaveBeenCalledWith('dm-group-open', {
+      body: { name: 'Tournament crew', usernames: ['alice', 'Bob'] },
+    })
+  })
+
+  it('adds deduplicated usernames through the server-owned member endpoint', async () => {
+    const invoke = vi.fn().mockResolvedValue({
+      data: { ok: true, participant_count: 4 },
+      error: null,
+    })
+    const functionClient = {
+      functions: { invoke },
+    } as unknown as DirectConversationClient
+
+    await expect(addConversationMembers(functionClient, {
+      conversationId: 'conversation-123',
+      usernames: ['@Alice', 'alice', ' Bob '],
+    })).resolves.toBe(4)
+    expect(invoke).toHaveBeenCalledWith('dm-members-add', {
+      body: { conversationId: 'conversation-123', usernames: ['alice', 'Bob'] },
+    })
   })
 
   it('persists a two-user send/read/reply flow', async () => {

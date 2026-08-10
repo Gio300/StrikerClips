@@ -7,6 +7,7 @@ import { standings, kageTitle, type ClanLand } from '@/lib/conquest'
 import { pointFor, CONQUEST_POINTS } from '@/lib/conquestLayout'
 import { artifactTierFor, holdDays, tierLabel, BATTLE_FORMATS } from '@/lib/conquestMechanics'
 import { LandUnlockModal, type LandUnlock } from '@/components/LandUnlockModal'
+import { claimVillageHome } from '@/lib/organizerApi'
 
 /**
  * ConquestMap — Shinobi Conquest drawn on the painted ninja-world map.
@@ -21,8 +22,15 @@ import { LandUnlockModal, type LandUnlock } from '@/components/LandUnlockModal'
  * Live + DB-backed (territories + clans). The struggle is ongoing: battles
  * (found videos or scheduled matches) move ownership, which relights the map.
  */
-interface Territory { id: string; name: string; owner_clan_id: string | null; captured_at?: string | null }
+interface Territory {
+  id: string
+  name: string
+  owner_clan_id: string | null
+  owner_village_id: string | null
+  captured_at?: string | null
+}
 interface Clan { id: string; name: string; clan_tag: string | null }
+interface VillageInfo { id: string; name: string }
 
 /** Stable, vivid color per clan id. */
 function clanColor(id: string): string {
@@ -43,9 +51,13 @@ export function ConquestMap() {
   const location = useLocation()
   const [terr, setTerr] = useState<Territory[]>([])
   const [clans, setClans] = useState<Record<string, Clan>>({})
+  const [villages, setVillages] = useState<Record<string, VillageInfo>>({})
   const [occupancy, setOccupancy] = useState<Record<string, number>>({})
   const [myClanId, setMyClanId] = useState<string | null>(null)
+  const [myVillageId, setMyVillageId] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
+  const [claimBusy, setClaimBusy] = useState(false)
+  const [actionMessage, setActionMessage] = useState('')
   const [selected, setSelected] = useState<string | null>(null)
   const [hoveredClan, setHoveredClan] = useState<string | null>(null)
   const [refreshTick, setRefreshTick] = useState(0)
@@ -63,7 +75,9 @@ export function ConquestMap() {
         const { data } = await sb.from('territories').select('*').order('row').order('col')
         const rows = (data ?? []) as Territory[]
         const ownerIds = [...new Set(rows.map((t) => t.owner_clan_id).filter(Boolean))] as string[]
+        const villageIds = [...new Set(rows.map((t) => t.owner_village_id).filter(Boolean))] as string[]
         let byId: Record<string, Clan> = {}
+        let villagesById: Record<string, VillageInfo> = {}
         const occ: Record<string, number> = {}
         if (ownerIds.length) {
           try {
@@ -72,19 +86,39 @@ export function ConquestMap() {
           } catch { /* clans best-effort */ }
           // Occupancy: how many members sit in each holding clan (best-effort).
           try {
-            const { data: mems } = await sb.from('clan_members').select('clan_id').in('clan_id', ownerIds)
-            for (const m of (mems ?? []) as { clan_id: string }[]) occ[m.clan_id] = (occ[m.clan_id] ?? 0) + 1
+            const { data: mems } = await sb.from('clan_members').select('server_id').in('server_id', ownerIds)
+            for (const m of (mems ?? []) as { server_id: string }[]) occ[m.server_id] = (occ[m.server_id] ?? 0) + 1
           } catch { /* occupancy optional */ }
+        }
+        if (villageIds.length) {
+          try {
+            const { data: villageRows } = await sb.from('villages').select('id, name').in('id', villageIds)
+            villagesById = Object.fromEntries(((villageRows ?? []) as VillageInfo[]).map((village) => [village.id, village]))
+          } catch { /* village labels are optional during schema rollout */ }
         }
         // Which clan am I in? (drives the "you are here" glow.)
         let mine: string | null = null
+        let myVillage: string | null = null
         if (user?.id) {
           try {
-            const { data: mm } = await sb.from('clan_members').select('clan_id').eq('user_id', user.id)
-            mine = ((mm ?? []) as { clan_id: string }[])[0]?.clan_id ?? null
+            const { data: mm } = await sb.from('clan_members').select('server_id').eq('user_id', user.id)
+            mine = ((mm ?? []) as { server_id: string }[])[0]?.server_id ?? null
           } catch { /* not in a clan / no table */ }
+          if (mine) {
+            try {
+              const { data: memberships } = await sb.from('village_clans').select('village_id').eq('server_id', mine)
+              myVillage = ((memberships ?? []) as { village_id: string }[])[0]?.village_id ?? null
+            } catch { /* clan has not joined a village */ }
+          }
         }
-        if (alive) { setTerr(rows); setClans(byId); setOccupancy(occ); setMyClanId(mine) }
+        if (alive) {
+          setTerr(rows)
+          setClans(byId)
+          setVillages(villagesById)
+          setOccupancy(occ)
+          setMyClanId(mine)
+          setMyVillageId(myVillage)
+        }
       } finally {
         if (alive) setLoading(false)
       }
@@ -125,16 +159,45 @@ export function ConquestMap() {
 
   const selTerr = placed.find((p) => p.t.id === selected)?.t ?? null
   const selClan = selTerr?.owner_clan_id ? clans[selTerr.owner_clan_id] : null
+  const selVillage = selTerr?.owner_village_id ? villages[selTerr.owner_village_id] : null
   const selOcc = selTerr?.owner_clan_id ? Math.max(1, occupancy[selTerr.owner_clan_id] ?? 1) : 0
   const selHold = holdDays(selTerr?.captured_at)
   const selTier = selTerr?.owner_clan_id ? artifactTierFor(selHold, selOcc) : null
-  const selMine = !!selTerr?.owner_clan_id && selTerr.owner_clan_id === myClanId
+  const selMine = Boolean(
+    (selTerr?.owner_village_id && selTerr.owner_village_id === myVillageId)
+      || (selTerr?.owner_clan_id && selTerr.owner_clan_id === myClanId),
+  )
 
-  function actionFor(t: Territory) {
+  async function actionFor(t: Territory) {
     if (!t.owner_clan_id) {
-      // Unclaimed — claim by founding/placing your clan here.
-      navigate('/clans', { state: { claimVillage: t.name } })
-    } else if (t.owner_clan_id === myClanId) {
+      if (!user) {
+        navigate('/login', { state: { from: '/conquest', reason: 'Sign in to claim territory' } })
+        return
+      }
+      if (!myClanId) {
+        navigate('/clans/discover')
+        return
+      }
+      if (!myVillageId) {
+        navigate(`/clans/${myClanId}/manage?section=village`)
+        return
+      }
+      setClaimBusy(true)
+      setActionMessage('')
+      const result = await claimVillageHome(myVillageId, t.id)
+      setClaimBusy(false)
+      if (!result.ok) {
+        const known: Record<string, string> = {
+          village_manager_required: 'A clan leader or officer must establish the village home.',
+          village_home_already_claimed: 'Your village already has a home territory.',
+          territory_already_claimed: 'Another village claimed this territory first. Choose another open point.',
+        }
+        setActionMessage(known[result.error || ''] || result.error || 'The territory could not be claimed.')
+        return
+      }
+      setActionMessage(`${result.data?.village.name || 'Your village'} established its home at ${t.name}.`)
+      setRefreshTick((tick) => tick + 1)
+    } else if (selMine) {
       navigate('/tournaments', { state: { defendTerritory: t.name } })
     } else {
       navigate('/tournaments', { state: { challengeClan: t.owner_clan_id, territory: t.name } })
@@ -153,6 +216,15 @@ export function ConquestMap() {
           Clans hold land, defend it in 1v1 through 4v4 battles, and produce stronger artifacts the longer they stay in control.
         </p>
       </header>
+
+      {actionMessage && (
+        <div className="mb-4 flex items-start justify-between gap-3 border border-accent/30 bg-accent/10 px-3 py-2 text-sm text-gray-200">
+          <span>{actionMessage}</span>
+          <button type="button" onClick={() => setActionMessage('')} aria-label="Dismiss" className="text-gray-400 hover:text-white">
+            <X size={16} />
+          </button>
+        </div>
+      )}
 
       <div className="mb-5 grid grid-cols-3 divide-x divide-dark-border border-y border-dark-border py-3">
         <ConquestStat icon={MapPinned} label="Land held" value={`${claimed}/${terr.length || 20}`} />
@@ -348,6 +420,7 @@ export function ConquestMap() {
                     {selClan.clan_tag ? `[${selClan.clan_tag}] ` : ''}{selClan.name}
                   </span>
                   {selMine && <span className="ml-1 rounded bg-white/15 px-1.5 py-0.5 text-[10px] font-bold text-white">YOUR CLAN</span>}
+                  {selVillage && <p className="mt-1 text-xs font-semibold text-kunai">{selVillage.name}</p>}
                   <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-400">
                     <span>Occupied by <span className="text-gray-200">{selOcc}</span></span>
                     <span>Held <span className="text-gray-200">{selHold}</span>d</span>
@@ -363,16 +436,27 @@ export function ConquestMap() {
               <div className="mt-3 flex flex-wrap gap-2">
                 <button
                   type="button"
-                  onClick={() => actionFor(selTerr)}
-                  className="btn-primary min-h-9 px-3 py-1.5 text-sm"
+                  onClick={() => void actionFor(selTerr)}
+                  disabled={claimBusy}
+                  className="btn-primary min-h-9 px-3 py-1.5 text-sm disabled:opacity-50"
                 >
                   <Swords size={15} />
-                  {!selTerr.owner_clan_id ? 'Found your clan here' : selMine ? 'Defend this land' : `Challenge for it`}
+                  {!selTerr.owner_clan_id
+                    ? claimBusy
+                      ? 'Claiming...'
+                      : !user
+                        ? 'Sign in to claim'
+                        : !myClanId
+                          ? 'Join or start a clan'
+                          : !myVillageId
+                            ? 'Form a village to claim'
+                            : 'Claim village home'
+                    : selMine ? 'Defend this land' : 'Challenge for it'}
                 </button>
-                {selClan && !selMine && myClanId && (
+                {selClan && !selMine && myClanId && (!selTerr.owner_village_id || selTerr.owner_village_id !== myVillageId) && (
                   <button
                     type="button"
-                    onClick={() => navigate('/clans', { state: { uniteWith: selTerr.owner_clan_id } })}
+                    onClick={() => navigate(`/clans/${myClanId}/manage?section=village&target=${selTerr.owner_clan_id}`)}
                     className="btn-ghost min-h-9 px-3 py-1.5 text-sm"
                   >
                     <Shield size={15} />

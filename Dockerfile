@@ -25,6 +25,27 @@ ENV VITE_YT_CLIENT_ID=$VITE_YT_CLIENT_ID
 ARG VITE_YT_API_KEY=AIzaSyA7qv-7BZecK7yzEF_MUkEFJmEHh_zNxCg
 ENV VITE_YT_API_KEY=$VITE_YT_API_KEY
 
+# ── AD NETWORK + GIF PICKER: BUILD-TIME, NOT RUNTIME ────────────────────────
+# Vite INLINES every import.meta.env.VITE_* at build time. Setting these as
+# Cloud Run runtime env vars has zero effect — the bundle is already compiled
+# with ''. They must arrive here, as build args, or the slot stays inert and it
+# looks like an AdSense approval problem instead of a build problem.
+#   gcloud builds submit --substitutions _ADSENSE_CLIENT=ca-pub-...,...
+#   docker build --build-arg VITE_ADSENSE_CLIENT=ca-pub-...
+# Empty defaults keep every network INERT until the operator fills one in.
+ARG VITE_ADSENSE_CLIENT=
+ENV VITE_ADSENSE_CLIENT=$VITE_ADSENSE_CLIENT
+ARG VITE_ADSENSE_CHAT_INLINE=
+ENV VITE_ADSENSE_CHAT_INLINE=$VITE_ADSENSE_CHAT_INLINE
+ARG VITE_AD_CHAT_ROTATE_SECONDS=
+ENV VITE_AD_CHAT_ROTATE_SECONDS=$VITE_AD_CHAT_ROTATE_SECONDS
+# Tenor/Giphy client keys are public by design (they identify the app, they do
+# not authorize spend). No key → the GIF button never renders.
+ARG VITE_TENOR_KEY=
+ENV VITE_TENOR_KEY=$VITE_TENOR_KEY
+ARG VITE_GIPHY_KEY=
+ENV VITE_GIPHY_KEY=$VITE_GIPHY_KEY
+
 # Build stamp surfaced at /version.json + <meta name="tko-build">. Defaults
 # to a timestamp inside vite.buildId.ts when unset.
 ARG BUILD_ID=

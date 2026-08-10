@@ -1,150 +1,207 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
+import {
+  AtSign,
+  Bell,
+  CheckCheck,
+  ChevronRight,
+  CircleDollarSign,
+  Clapperboard,
+  Link2,
+  MessageCircle,
+  Radio,
+  ShieldCheck,
+  ShoppingBag,
+  Trophy,
+  UserPlus,
+  Users,
+  type LucideIcon,
+} from 'lucide-react'
 import { useAuth } from '@/hooks/useAuth'
 import { fetchMyNotifications, markRead, markAllRead } from '@/lib/notifications'
 import { supabase } from '@/lib/supabase'
 import { LiveLinkOptOut } from '@/components/LiveLinkOptOut'
+import { PushNotificationToggle } from '@/components/PushNotificationToggle'
 import type { Notification } from '@/types/database'
 
-/**
- * Kinds that announce a live LINK. These rows carry an extra action — "don't
- * connect me" — because the moment you're told your stream was joined to
- * somebody else's is the moment you might want out of it, and making someone
- * hunt through settings for that is the wrong answer. `related_id` on these
- * rows is the live_groups id. See src/components/LiveLinkOptOut.
- */
 const LIVE_LINK_KINDS = new Set(['live_link_created', 'live_battle_both_live'])
 
-/**
- * Notifications inbox.
- *
- * The whole feed lives on `notifications` table; this page just renders it
- * with a filter (all / unread). Clicking a row marks it read AND deep-links
- * to whatever path was stashed in `link`.
- */
+type ReadFilter = 'all' | 'unread'
+type ActivityCategory = 'all' | 'messages' | 'live' | 'competition' | 'creator'
 
-type Filter = 'all' | 'unread'
+const CATEGORY_LABELS: Record<ActivityCategory, string> = {
+  all: 'All activity',
+  messages: 'Messages',
+  live: 'Live',
+  competition: 'Competition',
+  creator: 'Creator',
+}
+
+function categoryFor(kind: string): Exclude<ActivityCategory, 'all'> | 'other' {
+  if (kind === 'mention' || kind === 'follow' || kind.includes('message')) return 'messages'
+  if (kind.startsWith('live_') || kind.startsWith('oracle_')) return 'live'
+  if (kind.startsWith('tournament_') || kind.startsWith('stat_check_') || kind.startsWith('clan_')) return 'competition'
+  if (kind.startsWith('reel_') || kind.startsWith('creator_') || kind.includes('sale') || kind.includes('payout')) return 'creator'
+  return 'other'
+}
 
 export function NotificationsPage() {
   const { user } = useAuth()
   const [items, setItems] = useState<Notification[]>([])
   const [actorMap, setActorMap] = useState<Map<string, string>>(new Map())
-  const [filter, setFilter] = useState<Filter>('unread')
+  const [readFilter, setReadFilter] = useState<ReadFilter>('unread')
+  const [category, setCategory] = useState<ActivityCategory>('all')
   const [loading, setLoading] = useState(true)
 
-  useEffect(() => {
+  const load = useCallback(async (showLoading = false) => {
     if (!user) {
+      setItems([])
       setLoading(false)
       return
     }
-    let cancelled = false
-    ;(async () => {
-      const list = await fetchMyNotifications({ limit: 100 })
-      if (cancelled) return
-      const actorIds = Array.from(new Set(list.map((n) => n.actor_id).filter(Boolean) as string[]))
-      let map = new Map<string, string>()
-      if (actorIds.length > 0) {
-        const { data: profiles } = await supabase
-          .from('profiles')
-          .select('id, username')
-          .in('id', actorIds)
-        map = new Map((profiles ?? []).map((p) => [p.id, p.username]))
-      }
-      if (cancelled) return
-      setActorMap(map)
-      setItems(list)
-      setLoading(false)
-    })()
-    return () => {
-      cancelled = true
+    if (showLoading) setLoading(true)
+    const list = await fetchMyNotifications({ limit: 150 })
+    const actorIds = Array.from(new Set(list.map((item) => item.actor_id).filter(Boolean) as string[]))
+    let names = new Map<string, string>()
+    if (actorIds.length > 0) {
+      const { data: profiles } = await supabase.from('profiles').select('id, username').in('id', actorIds)
+      names = new Map((profiles ?? []).map((profile) => [profile.id, profile.username]))
     }
+    setActorMap(names)
+    setItems(list)
+    setLoading(false)
   }, [user])
 
-  async function onClick(n: Notification) {
-    if (!n.read_at) {
-      await markRead(n.id)
-      setItems((prev) =>
-        prev.map((x) => (x.id === n.id ? { ...x, read_at: new Date().toISOString() } : x)),
-      )
+  useEffect(() => {
+    let cancelled = false
+    const refresh = async (showLoading = false) => {
+      if (cancelled) return
+      await load(showLoading)
     }
+    void refresh(true)
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === 'visible') void refresh()
+    }, 15_000)
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') void refresh()
+    }
+    document.addEventListener('visibilitychange', onVisible)
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+      document.removeEventListener('visibilitychange', onVisible)
+    }
+  }, [load])
+
+  async function onClick(item: Notification) {
+    if (item.read_at) return
+    await markRead(item.id)
+    setItems((current) => current.map((entry) => (
+      entry.id === item.id ? { ...entry, read_at: new Date().toISOString() } : entry
+    )))
   }
 
   async function onMarkAll() {
     await markAllRead()
-    setItems((prev) => prev.map((n) => (n.read_at ? n : { ...n, read_at: new Date().toISOString() })))
+    const now = new Date().toISOString()
+    setItems((current) => current.map((item) => (item.read_at ? item : { ...item, read_at: now })))
   }
+
+  const unreadCount = items.filter((item) => !item.read_at).length
+  const categoryCounts = useMemo(() => {
+    const counts: Record<ActivityCategory, number> = { all: items.length, messages: 0, live: 0, competition: 0, creator: 0 }
+    items.forEach((item) => {
+      const itemCategory = categoryFor(item.kind)
+      if (itemCategory !== 'other') counts[itemCategory] += 1
+    })
+    return counts
+  }, [items])
+  const visible = useMemo(() => items.filter((item) => {
+    if (readFilter === 'unread' && item.read_at) return false
+    return category === 'all' || categoryFor(item.kind) === category
+  }), [category, items, readFilter])
 
   if (!user) {
     return (
-      <div className="p-4 sm:p-6 lg:p-8 max-w-2xl mx-auto">
-        <h1 className="text-2xl font-bold mb-4">Notifications</h1>
-        <div className="rounded-xl border border-dark-border bg-dark-card p-8 text-center">
-          <Link to="/login" className="text-accent hover:underline">
-            Log in
-          </Link>
-          <span className="text-gray-400"> to view your notifications.</span>
+      <div className="mx-auto max-w-2xl p-4 sm:p-6 lg:p-8">
+        <h1 className="mb-4 text-2xl font-bold">Activity</h1>
+        <div className="rounded-lg border border-dark-border bg-dark-card p-8 text-center">
+          <Link to="/login" className="font-semibold text-accent hover:underline">Log in</Link>
+          <span className="text-gray-400"> to view messages, matches, live activity, and creator updates.</span>
         </div>
       </div>
     )
   }
 
-  const visible = filter === 'all' ? items : items.filter((n) => !n.read_at)
-  const unreadCount = items.filter((n) => !n.read_at).length
-
   return (
-    <div className="p-4 sm:p-6 lg:p-8 max-w-2xl mx-auto">
-      <div className="flex items-center justify-between mb-6 gap-4 flex-wrap">
+    <div className="mx-auto max-w-3xl p-4 sm:p-6 lg:p-8">
+      <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-bold">Notifications</h1>
-          <p className="text-gray-400 text-sm">
-            Tournament invites, stat-check reviews, team requests — everything you've been linked
-            on lives here.
+          <div className="flex items-center gap-2">
+            <Bell size={22} className="text-accent" aria-hidden />
+            <h1 className="text-2xl font-bold">Activity</h1>
+          </div>
+          <p className="mt-1 max-w-xl text-sm text-gray-400">
+            Messages, live invites, Oracle results, tournaments, clan activity, videos, sales, and payouts.
           </p>
         </div>
         {unreadCount > 0 && (
-          <button
-            type="button"
-            onClick={onMarkAll}
-            className="text-sm text-gray-400 hover:text-accent"
-          >
-            Mark all read
+          <button type="button" onClick={() => { void onMarkAll() }} className="inline-flex min-h-10 items-center gap-2 rounded-md border border-dark-border px-3 text-sm font-semibold text-gray-300 hover:border-accent/60 hover:text-white">
+            <CheckCheck size={17} aria-hidden /> Mark all read
           </button>
         )}
       </div>
 
-      <div className="flex gap-1 mb-4">
-        {(['unread', 'all'] as const).map((f) => (
+      {/*
+        The phone-notification opt-in lives here, at the top of the page that IS
+        activity — not buried in profile settings. It renders nothing at all when
+        the deployment has no VAPID keys or the browser cannot do web push, so
+        this line is invisible until the feature genuinely works.
+      */}
+      <PushNotificationToggle className="mb-4" />
+
+      <div className="mb-4 grid grid-cols-2 gap-2 sm:grid-cols-5">
+        {(Object.keys(CATEGORY_LABELS) as ActivityCategory[]).map((value) => (
           <button
-            key={f}
+            key={value}
             type="button"
-            onClick={() => setFilter(f)}
-            className={`px-3 py-1 rounded-full text-xs uppercase tracking-wider transition-colors ${
-              filter === f
-                ? 'bg-accent text-dark'
-                : 'border border-dark-border text-gray-400 hover:border-accent/50'
-            }`}
+            onClick={() => setCategory(value)}
+            className={`min-h-12 rounded-md border px-3 text-left transition-colors ${category === value ? 'border-accent bg-accent/10 text-white' : 'border-dark-border bg-dark-card text-gray-400 hover:border-accent/40'}`}
           >
-            {f}
-            {f === 'unread' && unreadCount > 0 && (
-              <span className="ml-1 text-[10px]">({unreadCount})</span>
-            )}
+            <span className="block text-xs font-semibold">{CATEGORY_LABELS[value]}</span>
+            <span className="mt-0.5 block text-[11px] tabular-nums text-gray-500">{categoryCounts[value]}</span>
+          </button>
+        ))}
+      </div>
+
+      <div className="mb-4 inline-flex rounded-md border border-dark-border bg-dark-card p-1">
+        {(['unread', 'all'] as ReadFilter[]).map((value) => (
+          <button
+            key={value}
+            type="button"
+            onClick={() => setReadFilter(value)}
+            className={`min-h-9 rounded px-4 text-xs font-semibold capitalize transition-colors ${readFilter === value ? 'bg-accent text-dark' : 'text-gray-400 hover:text-white'}`}
+          >
+            {value}{value === 'unread' && unreadCount > 0 ? ` (${unreadCount})` : ''}
           </button>
         ))}
       </div>
 
       {loading ? (
-        <div className="animate-pulse text-gray-400">Loading…</div>
+        <div className="rounded-lg border border-dark-border bg-dark-card p-8 text-center text-gray-400">Loading activity...</div>
       ) : visible.length === 0 ? (
-        <div className="rounded-xl border border-dark-border bg-dark-card p-12 text-center text-gray-400">
-          {filter === 'unread' ? 'You\u2019re all caught up.' : 'No notifications yet.'}
+        <div className="rounded-lg border border-dark-border bg-dark-card p-10 text-center">
+          <CheckCheck size={28} className="mx-auto mb-3 text-accent" aria-hidden />
+          <p className="font-semibold text-white">{readFilter === 'unread' ? 'You are all caught up.' : 'No activity here yet.'}</p>
+          <p className="mt-1 text-sm text-gray-500">New activity appears here automatically.</p>
         </div>
       ) : (
         <ul className="space-y-2">
-          {visible.map((n) => (
+          {visible.map((item) => (
             <NotificationRow
-              key={n.id}
-              n={n}
-              actorName={n.actor_id ? actorMap.get(n.actor_id) : undefined}
+              key={item.id}
+              item={item}
+              actorName={item.actor_id ? actorMap.get(item.actor_id) : undefined}
               onClick={onClick}
               viewerId={user.id}
             />
@@ -156,129 +213,83 @@ export function NotificationsPage() {
 }
 
 function NotificationRow({
-  n,
+  item,
   actorName,
   onClick,
   viewerId,
 }: {
-  n: Notification
-  actorName: string | undefined
-  onClick: (n: Notification) => void
+  item: Notification
+  actorName?: string
+  onClick: (item: Notification) => void
   viewerId: string
 }) {
-  // "Your streams were linked" comes with a way out, right on the row.
-  const linkGroupId = LIVE_LINK_KINDS.has(n.kind) ? n.related_id : null
+  const linkGroupId = LIVE_LINK_KINDS.has(item.kind) ? item.related_id : null
+  const Icon = iconFor(item.kind)
   const inner = (
-    <div
-      className={`rounded-lg border p-3 transition-colors ${
-        n.read_at
-          ? 'border-dark-border bg-dark-card hover:border-accent/30'
-          : 'border-accent/40 bg-accent/5 hover:border-accent'
-      }`}
-    >
+    <div className={`group rounded-lg border p-3 transition-colors ${item.read_at ? 'border-dark-border bg-dark-card hover:border-accent/30' : 'border-accent/50 bg-accent/5 hover:border-accent'}`}>
       <div className="flex items-start gap-3">
-        <KindIcon kind={n.kind} unread={!n.read_at} />
-        <div className="flex-1 min-w-0">
-          <p className="font-medium text-sm">
-            {n.title}
-            {actorName && (
-              <span className="text-gray-500 text-xs ml-2">via @{actorName}</span>
-            )}
-          </p>
-          {n.body && <p className="text-xs text-gray-400 mt-1 whitespace-pre-wrap">{n.body}</p>}
-          <p className="text-[11px] text-gray-500 mt-1">
-            {timeAgo(n.created_at)}
-          </p>
+        <span className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-md ${item.read_at ? 'bg-dark-elevated text-gray-500' : 'bg-accent/15 text-accent'}`}>
+          <Icon size={19} aria-hidden />
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-start gap-2">
+            <p className="min-w-0 flex-1 text-sm font-semibold text-white">{item.title}</p>
+            {!item.read_at && <span className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-accent" aria-label="Unread" />}
+          </div>
+          {actorName && <p className="mt-0.5 text-xs font-medium text-accent">@{actorName}</p>}
+          {item.body && <p className="mt-1 whitespace-pre-wrap text-xs leading-5 text-gray-400">{item.body}</p>}
+          <div className="mt-2 flex items-center justify-between gap-2">
+            <span className="text-[11px] text-gray-500">{timeAgo(item.created_at)}</span>
+            {item.link && <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-gray-400 group-hover:text-accent">Open <ChevronRight size={13} aria-hidden /></span>}
+          </div>
         </div>
-        {!n.read_at && <span className="w-2 h-2 rounded-full bg-accent shrink-0 mt-2" />}
       </div>
     </div>
   )
 
-  // The opt-out sits OUTSIDE the row's link, or tapping it would navigate away
-  // to the stage instead of doing what it says.
   const optOut = linkGroupId ? (
-    <div className="mt-1 pl-11">
+    <div className="mt-1 pl-12">
       <LiveLinkOptOut groupId={linkGroupId} userId={viewerId} />
     </div>
   ) : null
 
-  if (n.link) {
+  if (item.link) {
     return (
       <li>
-        <Link to={n.link} onClick={() => onClick(n)} className="block">
-          {inner}
-        </Link>
+        <Link to={item.link} onClick={() => { void onClick(item) }} className="block">{inner}</Link>
         {optOut}
       </li>
     )
   }
   return (
     <li>
-      <button
-        type="button"
-        onClick={() => onClick(n)}
-        className="w-full text-left"
-      >
-        {inner}
-      </button>
+      <button type="button" onClick={() => { void onClick(item) }} className="w-full text-left">{inner}</button>
       {optOut}
     </li>
   )
 }
 
-function KindIcon({ kind, unread }: { kind: string; unread: boolean }) {
-  const cls = unread ? 'text-accent' : 'text-gray-500'
-  // Pick an emoji by kind. Cheap, readable, no extra SVGs to maintain.
-  const emoji = (() => {
-    switch (kind) {
-      case 'tournament_admin_invite':
-        return '🛡️'
-      case 'tournament_team_invite':
-        return '🤝'
-      case 'tournament_started':
-        return '🏆'
-      case 'stat_check_review_request':
-        return '📋'
-      case 'stat_check_reviewed':
-        return '✓'
-      case 'stat_check_creator_decision':
-        return '⚖️'
-      case 'live_group_invite':
-        return '🎥'
-      case 'live_invite':
-        return '🎙️'
-      case 'live_link_created':
-      case 'live_battle_both_live':
-        return '🔗'
-      case 'live_link_proposed':
-        return '🤔'
-      case 'reel_invite':
-        return '🎬'
-      case 'follow':
-        return '➕'
-      case 'mention':
-        return '@'
-      default:
-        return '🔔'
-    }
-  })()
-  return (
-    <span
-      className={`shrink-0 w-8 h-8 inline-flex items-center justify-center rounded-full bg-dark-elevated ${cls}`}
-      aria-hidden
-    >
-      {emoji}
-    </span>
-  )
+function iconFor(kind: string): LucideIcon {
+  if (kind === 'direct_message' || kind === 'group_message') return MessageCircle
+  if (kind === 'mention') return AtSign
+  if (kind === 'follow') return UserPlus
+  if (kind.startsWith('oracle_')) return ShieldCheck
+  if (kind.startsWith('live_')) return kind.includes('link') ? Link2 : Radio
+  if (kind.startsWith('tournament_') || kind.startsWith('stat_check_')) return Trophy
+  if (kind.startsWith('clan_')) return Users
+  if (kind.startsWith('reel_')) return Clapperboard
+  if (kind.includes('payout')) return CircleDollarSign
+  if (kind.includes('sale')) return ShoppingBag
+  return Bell
 }
 
 function timeAgo(iso: string): string {
-  const ms = Date.now() - new Date(iso).getTime()
-  const mins = Math.floor(ms / 60000)
-  if (mins < 1) return 'just now'
-  if (mins < 60) return `${mins}m ago`
-  const hours = Math.floor(mins / 60)
+  const timestamp = new Date(iso).getTime()
+  if (!Number.isFinite(timestamp)) return ''
+  const minutes = Math.floor((Date.now() - timestamp) / 60_000)
+  if (minutes < 1) return 'Just now'
+  if (minutes < 60) return `${minutes}m ago`
+  const hours = Math.floor(minutes / 60)
   if (hours < 24) return `${hours}h ago`
   const days = Math.floor(hours / 24)
   if (days < 7) return `${days}d ago`

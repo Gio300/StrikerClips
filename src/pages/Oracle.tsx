@@ -109,11 +109,7 @@ export function Oracle() {
 
       {atCap && (
         <div className="mb-8 rounded-lg border border-chakra/40 bg-chakra/10 px-4 py-3 text-sm text-chakra flex flex-wrap items-center gap-2">
-          <span>
-            {IS_MOBILE_STORE_BUILD
-              ? 'Prediction limit reached. Additional prediction capacity is not available in the mobile app.'
-              : predictionUpgradeNudge(tier)}
-          </span>
+          <span>{predictionUpgradeNudge(tier)}</span>
           {!IS_MOBILE_STORE_BUILD && (
             <Link to="/upgrade" className="text-accent hover:underline">See tiers →</Link>
           )}

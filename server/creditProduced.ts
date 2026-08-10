@@ -52,6 +52,8 @@ export interface CreditResult {
     created: boolean
     clip_record_id: string
     source_youtube_id?: string
+    /** The gamertag stored on the row — what the participant chips render. */
+    player_handle: string | null
   }[]
   /** Angles we couldn't map to a TKO account (not connected / unknown handle). */
   unresolved: CreditAngle[]
@@ -63,6 +65,29 @@ export type OwnerMap = Record<string, string>
 
 function cleanHandle(h?: string): string {
   return (h || '').trim().replace(/^@+/, '').replace(/\/.*$/, '').toLowerCase()
+}
+
+/** The handle as it should be SHOWN — @ and any path stripped, case kept. */
+function displayHandle(h?: string): string {
+  return (h || '').trim().replace(/^@+/, '').replace(/\/.*$/, '')
+}
+
+/**
+ * The gamertag to label this player with: the handle the pipeline sent, else
+ * their TKO username. Without it every participant chip on a produced video
+ * reads "player" (src/components/ProducedVideoCard.tsx), because the reader has
+ * nothing but a user id to show.
+ */
+async function labelFor(pool: Pool, angle: CreditAngle, userId: string): Promise<string | null> {
+  const sent = displayHandle(angle.handle)
+  if (sent) return sent
+  try {
+    const r = await pool.query('select username from profiles where id=$1 limit 1', [userId])
+    const username = String(r.rows[0]?.username || '').trim()
+    return username || null
+  } catch {
+    return null // slim test schema / no profiles table — leave it unlabeled
+  }
 }
 
 /** Resolve one angle to a TKO user id, or null if we can't. */
@@ -89,6 +114,9 @@ async function resolveUser(pool: Pool, angle: CreditAngle, ownerMap: OwnerMap): 
 /**
  * Credit every resolvable angle of a produced composite video with a
  * participant clip_records row and recompute their power.
+ *
+ * The row also carries the player's GAMERTAG (`player_handle`) — the pipeline
+ * always sends it, and the app's participant chips have nothing else to show.
  *
  * Idempotent per (player, composite): re-running for the same video never
  * double-credits. If a row already exists and an outcome arrives later, the
@@ -117,25 +145,38 @@ export async function creditProduced(
     seen.add(userId)
 
     const existing = await pool.query(
-      'select id, outcome from clip_records where player_id=$1 and composite_youtube_id=$2 limit 1',
+      'select id, outcome, player_handle from clip_records where player_id=$1 and composite_youtube_id=$2 limit 1',
       [userId, composite],
     )
+    const handle = await labelFor(pool, a, userId)
     let created = false
     let clipRecordId = existing.rows[0]?.id ? String(existing.rows[0].id) : ''
     if (!existing.rows.length) {
       const inserted = await pool.query(
-        `insert into clip_records (player_id, composite_youtube_id, youtube_id, outcome, recorded_at)
-         values ($1,$2,$3,$4, now())
+        `insert into clip_records (player_id, composite_youtube_id, youtube_id, player_handle, outcome, recorded_at)
+         values ($1,$2,$3,$4,$5, now())
          returning id`,
-        [userId, composite, a.source_youtube_id || null, a.outcome || null],
+        [userId, composite, a.source_youtube_id || null, handle, a.outcome || null],
       )
       clipRecordId = String(inserted.rows[0]?.id || '')
       created = true
-    } else if (a.outcome && !existing.rows[0].outcome) {
-      await pool.query(
-        'update clip_records set outcome=$3 where player_id=$1 and composite_youtube_id=$2 and outcome is null',
-        [userId, composite, a.outcome],
-      )
+    } else {
+      if (a.outcome && !existing.rows[0].outcome) {
+        await pool.query(
+          'update clip_records set outcome=$3 where player_id=$1 and composite_youtube_id=$2 and outcome is null',
+          [userId, composite, a.outcome],
+        )
+      }
+      // Backfill the label onto a row credited before handles were persisted —
+      // re-running the credit is what un-"player"s an existing video's chips.
+      if (handle && !String(existing.rows[0].player_handle || '').trim()) {
+        await pool.query(
+          `update clip_records set player_handle=$3
+             where player_id=$1 and composite_youtube_id=$2
+               and coalesce(player_handle,'') = ''`,
+          [userId, composite, handle],
+        )
+      }
     }
     const power = await recompute(pool, userId)
     credited.push({
@@ -144,6 +185,7 @@ export async function creditProduced(
       created,
       clip_record_id: clipRecordId,
       source_youtube_id: a.source_youtube_id,
+      player_handle: handle ?? (String(existing.rows[0]?.player_handle || '').trim() || null),
     })
   }
   return { credited, unresolved }

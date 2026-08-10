@@ -1,5 +1,12 @@
 import { supabase } from '@/lib/supabase'
-import { saveHandle, loadHandle, loadLibrary, youtubeLiveUrl } from '@/lib/youtubeConnect'
+import {
+  channelLiveUrl,
+  loadChannelId,
+  loadHandle,
+  rememberYouTubeChannel,
+  youtubeLiveUrl,
+} from '@/lib/youtubeConnect'
+import { normalizeConnectedYouTubeChannelUrl } from '@/lib/signupYouTube'
 
 /**
  * youtubeLink — ONE source of truth for "this user has connected YouTube".
@@ -16,9 +23,15 @@ import { saveHandle, loadHandle, loadLibrary, youtubeLiveUrl } from '@/lib/youtu
 export async function recordYouTubeLink(userId: string, handle: string): Promise<void> {
   if (!userId) return
   const clean = (handle || '').trim().replace(/^@/, '').replace(/\/.*$/, '')
-  if (clean) saveHandle(userId, clean)
   const url = clean ? `https://www.youtube.com/@${clean}` : ''
   if (!url) return
+  rememberYouTubeChannel(userId, url)
+  try {
+    const { error } = await supabase.functions.invoke('youtube-channel-settings', {
+      body: { action: 'save', url },
+    })
+    if (!error) return
+  } catch { /* use the rolling-deploy fallback below */ }
   try {
     // Idempotent: don't stack duplicate rows for the same channel.
     const { data: existing } = await supabase
@@ -36,21 +49,24 @@ export async function recordYouTubeLink(userId: string, handle: string): Promise
 }
 
 /**
- * Is this user connected to YouTube — anywhere, by any path? True if they have a
- * backend `user_youtube_links` row OR a locally cached channel handle/library.
- * Every "you must connect YouTube" gate should use THIS so the answer is the
- * same on every screen.
+ * Only a valid channel identity counts as connected. A locally cached clip
+ * library or a saved video URL is useful media, but cannot satisfy an account
+ * channel requirement.
  */
 export async function isYouTubeLinked(userId: string): Promise<boolean> {
   if (!userId) return false
-  if (loadHandle(userId) || loadLibrary(userId).length > 0) return true
+  const handle = loadHandle(userId)
+  if (handle && /^[A-Za-z0-9._-]{2,40}$/.test(handle)
+    && normalizeConnectedYouTubeChannelUrl(`https://www.youtube.com/@${handle}`)) return true
+  const channelId = loadChannelId(userId)
+  if (channelId && /^[A-Za-z0-9_-]+$/.test(channelId)
+    && normalizeConnectedYouTubeChannelUrl(`https://www.youtube.com/channel/${channelId}`)) return true
   try {
     const { data } = await supabase
       .from('user_youtube_links')
-      .select('id')
+      .select('url')
       .eq('user_id', userId)
-      .limit(1)
-    return (data?.length ?? 0) > 0
+    return (data ?? []).some((row) => Boolean(normalizeConnectedYouTubeChannelUrl(row.url)))
   } catch {
     return false
   }
@@ -59,5 +75,7 @@ export async function isYouTubeLinked(userId: string): Promise<boolean> {
 /** The user's "go live from my channel" URL, if we know their handle. */
 export function myYouTubeLiveUrl(userId: string): string | null {
   const h = loadHandle(userId)
-  return h ? youtubeLiveUrl(h) : null
+  if (h) return youtubeLiveUrl(h)
+  const channelId = loadChannelId(userId)
+  return channelId ? channelLiveUrl(channelId) : null
 }

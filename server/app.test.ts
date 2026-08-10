@@ -1,11 +1,12 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { describe, it, expect, beforeAll, afterAll } from 'vitest'
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
 import request from 'supertest'
 import { randomUUID, createHmac } from 'node:crypto'
 import {
   ageFromDob, isAllowedOrigin, MIN_AGE_YEARS,
   SERVER_TOKEN_PACKS, serverPackById, tierForPrice, SUBSCRIPTION_TIERS,
-  createApp,
+  PURCHASABLE_TIERS, RETIRED_TIERS, isPurchasableTier,
+  createApp, MAX_SELECT_ROWS,
 } from './app'
 import { makeApp, makeDb } from './testHarness'
 import { TOKEN_PACKS } from '../src/lib/tokenPacks'
@@ -133,6 +134,59 @@ describe('TKO API — new-user journey (in-memory Postgres)', () => {
     const r = await request(app).post('/api/storage/soundboard').set('Authorization', `Bearer ${token}`).send({ name: 'boom.mp3' })
     expect(r.status).toBe(200); expect(r.body.path).toMatch(/^soundboard\/.+_boom\.mp3$/); expect(r.body.publicUrl).toBe('')
   })
+
+  it('/api/storage/chat-media authorizes channel and owned-post image targets', async () => {
+    const space = await request(app).post('/api/db').set('Authorization', `Bearer ${token}`).send({
+      table: 'chat_spaces', action: 'insert', single: true,
+      values: { kind: 'open', name: 'Image chat', owner_id: playerId },
+    })
+    expect(space.status).toBe(200)
+    const channel = await request(app).post('/api/db').set('Authorization', `Bearer ${token}`).send({
+      table: 'chat_channels', action: 'insert', single: true,
+      values: { space_id: space.body.data.id, name: 'photos', position: 0 },
+    })
+    expect(channel.status).toBe(200)
+    const post = await request(app).post('/api/db').set('Authorization', `Bearer ${token}`).send({
+      table: 'posts', action: 'insert', single: true,
+      values: { user_id: playerId, body: '' },
+    })
+    expect(post.status).toBe(200)
+
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input)
+      if (url.includes('metadata.google.internal')) {
+        return new Response(JSON.stringify({ access_token: 'test-token' }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        })
+      }
+      return new Response('{}', { status: 200 })
+    })
+    const png = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]).toString('base64')
+    try {
+      const channelImage = await request(app)
+        .post('/api/storage/chat-media')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ scope: 'channel', roomId: channel.body.data.id, data: png })
+      expect(channelImage.status).toBe(200)
+      expect(channelImage.body.path).toMatch(new RegExp(`^/storage/chat-media/${channel.body.data.id}/[0-9a-f-]+\\.png$`, 'i'))
+
+      const postImage = await request(app)
+        .post('/api/storage/chat-media')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ scope: 'post', roomId: post.body.data.id, data: png })
+      expect(postImage.status).toBe(200)
+      expect(postImage.body.path).toMatch(new RegExp(`^/storage/post-media/${post.body.data.id}/[0-9a-f-]+\\.png$`, 'i'))
+
+      const forgedPost = await request(app)
+        .post('/api/storage/chat-media')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ scope: 'post', roomId: randomUUID(), data: png })
+      expect(forgedPost.status).toBe(403)
+    } finally {
+      fetchSpy.mockRestore()
+    }
+  })
 })
 
 // ===========================================================================
@@ -165,6 +219,14 @@ describe('TKO API — /api/db row-level authorization', () => {
     alice = await signUp(app, 'alice@kc.gg', 'alice')
     bob = await signUp(app, 'bob@kc.gg', 'bob')
     host = await signUp(app, 'host@kc.gg', 'hostess')
+    // These legacy row-policy checks exercise cast ownership and blocking, not
+    // the reel-audience gate. Opt the fixtures into reuse explicitly so the
+    // default followers-of-followers privacy remains covered by its own suite.
+    for (const player of [alice, bob, host]) {
+      const privacy = await request(app).post('/api/privacy/reels')
+        .set('Authorization', `Bearer ${player.token}`).send({ value: 'anyone' })
+      expect(privacy.status).toBe(200)
+    }
     // Founder HOST code -> user_metadata.tko_host = true.
     const h = await request(app).post('/api/fn/redeem-code')
       .set('Authorization', `Bearer ${host.token}`).send({ code: 'TKO-HOST-K9F3QX' })
@@ -623,7 +685,8 @@ describe('TKO API — /api/db row-level authorization', () => {
 
   it('scopes the private pit meet-up to the two fighters', async () => {
     const t = await db(app, host, {
-      table: 'tournaments', action: 'insert', single: true, values: { name: 'King', created_by: host.id },
+      table: 'tournaments', action: 'insert', single: true,
+      values: { name: 'King', created_by: host.id, end_at: '2030-01-01T00:00:00.000Z' },
     })
     const tid = t.body.data.id
     const b = await db(app, host, {
@@ -655,7 +718,8 @@ describe('TKO API — /api/db row-level authorization', () => {
 
   it('a HOST can declare a battle winner; a fighter cannot', async () => {
     const t = await db(app, host, {
-      table: 'tournaments', action: 'insert', single: true, values: { name: 'King II', created_by: host.id },
+      table: 'tournaments', action: 'insert', single: true,
+      values: { name: 'King II', created_by: host.id, end_at: '2030-01-01T00:00:00.000Z' },
     })
     const tid = t.body.data.id
     const b = await db(app, host, {
@@ -713,7 +777,7 @@ describe('TKO API — /api/db row-level authorization', () => {
     expect(byHost.status).toBe(200)
   })
 
-  it('a clan officer CAN kick a member; a plain member cannot', async () => {
+  it('only clan managers assign membership roles while members can still leave', async () => {
     const leader = await signUp(app, 'leader@kc.gg', 'leader')
     const officer = await signUp(app, 'officer@kc.gg', 'officer')
     const grunt = await signUp(app, 'grunt@kc.gg', 'grunt')
@@ -746,6 +810,30 @@ describe('TKO API — /api/db row-level authorization', () => {
     expect(join.status).toBe(200)
     const gruntRow = join.body.data.id
 
+    // Owning a membership row permits leaving, not assigning yourself a role.
+    const updateSelfRole = await db(app, grunt, {
+      table: 'clan_members', action: 'update', single: true,
+      filters: [{ col: 'id', op: 'eq', val: gruntRow }],
+      values: { role: 'officer' },
+    })
+    expect(updateSelfRole.status).toBe(403)
+
+    // A real manager can change the same role, then restore the plain member.
+    const managerPromote = await db(app, leader, {
+      table: 'clan_members', action: 'update', single: true,
+      filters: [{ col: 'id', op: 'eq', val: gruntRow }],
+      values: { role: 'officer' },
+    })
+    expect(managerPromote.status).toBe(200)
+    expect(managerPromote.body.data.role).toBe('officer')
+    const managerRestore = await db(app, leader, {
+      table: 'clan_members', action: 'update', single: true,
+      filters: [{ col: 'id', op: 'eq', val: gruntRow }],
+      values: { role: 'member' },
+    })
+    expect(managerRestore.status).toBe(200)
+    expect(managerRestore.body.data.role).toBe('member')
+
     // A plain member cannot kick the officer...
     const badKick = await db(app, grunt, {
       table: 'clan_members', action: 'delete',
@@ -758,6 +846,98 @@ describe('TKO API — /api/db row-level authorization', () => {
       table: 'clan_members', action: 'delete', filters: [{ col: 'id', op: 'eq', val: gruntRow }],
     })
     expect(kick.status).toBe(200); expect(kick.body.count).toBe(1)
+
+    // A member can still remove their own clan membership.
+    const rejoin = await db(app, grunt, {
+      table: 'clan_members', action: 'insert', single: true,
+      values: { server_id: sid, user_id: grunt.id, role: 'member' },
+    })
+    expect(rejoin.status).toBe(200)
+    const leave = await db(app, grunt, {
+      table: 'clan_members', action: 'delete',
+      filters: [{ col: 'id', op: 'eq', val: rejoin.body.data.id }],
+    })
+    expect(leave.status).toBe(200)
+    expect(leave.body.count).toBe(1)
+
+    // The legacy board membership has the same ownership model. A self-join
+    // lands at the database default role even if the caller asks for owner;
+    // later self-promotion is refused, while the clan founder may assign it.
+    const boardJoin = await db(app, grunt, {
+      table: 'server_members', action: 'insert', single: true,
+      values: { server_id: sid, user_id: grunt.id, role: 'owner' },
+    })
+    expect(boardJoin.status).toBe(200)
+    expect(boardJoin.body.data.role).toBe('member')
+    const boardSelfPromote = await db(app, grunt, {
+      table: 'server_members', action: 'update', single: true,
+      filters: [{ col: 'id', op: 'eq', val: boardJoin.body.data.id }],
+      values: { role: 'owner' },
+    })
+    expect(boardSelfPromote.status).toBe(403)
+    const boardManagerPromote = await db(app, leader, {
+      table: 'server_members', action: 'update', single: true,
+      filters: [{ col: 'id', op: 'eq', val: boardJoin.body.data.id }],
+      values: { role: 'owner' },
+    })
+    expect(boardManagerPromote.status).toBe(200)
+    expect(boardManagerPromote.body.data.role).toBe('owner')
+    const boardLeave = await db(app, grunt, {
+      table: 'server_members', action: 'delete',
+      filters: [{ col: 'id', op: 'eq', val: boardJoin.body.data.id }],
+    })
+    expect(boardLeave.status).toBe(200)
+    expect(boardLeave.body.count).toBe(1)
+  })
+
+  it('only league managers assign membership roles while members can still leave', async () => {
+    const owner = await signUp(app, 'league-owner@kc.gg', 'leagueowner')
+    const member = await signUp(app, 'league-member@kc.gg', 'leaguemember')
+    const league = await db(app, owner, {
+      table: 'leagues', action: 'insert', single: true,
+      values: { slug: 'role-policy-league', name: 'Role Policy League', owner_id: owner.id },
+    })
+    expect(league.status).toBe(200)
+
+    const forgedJoin = await db(app, member, {
+      table: 'league_members', action: 'insert', single: true,
+      values: { league_id: league.body.data.id, user_id: member.id, role: 'owner' },
+    })
+    expect(forgedJoin.status).toBe(403)
+
+    const joined = await db(app, member, {
+      table: 'league_members', action: 'insert', single: true,
+      values: { league_id: league.body.data.id, user_id: member.id, role: 'member' },
+    })
+    expect(joined.status).toBe(200)
+
+    const selfPromote = await db(app, member, {
+      table: 'league_members', action: 'update', single: true,
+      filters: [{ col: 'id', op: 'eq', val: joined.body.data.id }],
+      values: { role: 'officer' },
+    })
+    expect(selfPromote.status).toBe(403)
+
+    const managerPromote = await db(app, owner, {
+      table: 'league_members', action: 'update', single: true,
+      filters: [{ col: 'id', op: 'eq', val: joined.body.data.id }],
+      values: { role: 'officer' },
+    })
+    expect(managerPromote.status).toBe(200)
+    expect(managerPromote.body.data.role).toBe('officer')
+
+    const managerRestore = await db(app, owner, {
+      table: 'league_members', action: 'update', single: true,
+      filters: [{ col: 'id', op: 'eq', val: joined.body.data.id }],
+      values: { role: 'member' },
+    })
+    expect(managerRestore.status).toBe(200)
+    const leave = await db(app, member, {
+      table: 'league_members', action: 'delete',
+      filters: [{ col: 'id', op: 'eq', val: joined.body.data.id }],
+    })
+    expect(leave.status).toBe(200)
+    expect(leave.body.count).toBe(1)
   })
 
   it('trigger-maintained and server-only tables refuse client writes', async () => {
@@ -819,6 +999,76 @@ describe('TKO API — /api/db row-level authorization', () => {
     const regs = await db(app, alice, { table: 'tournament_registrations', action: 'select' })
     expect(regs.status).toBe(200)
   })
+
+  it('creates one clan chat through the trusted member-only function', async () => {
+    const leader = await signUp(app, 'chat-leader@kc.gg', 'chatleader')
+    const member = await signUp(app, 'chat-member@kc.gg', 'chatmember')
+    const outsider = await signUp(app, 'chat-outsider@kc.gg', 'chatoutsider')
+    const clan = await db(app, leader, {
+      table: 'servers', action: 'insert', single: true,
+      values: { name: 'Chat Guard Clan', owner_id: leader.id, kind: 'clan' },
+    })
+    expect(clan.status).toBe(200)
+    const serverId = clan.body.data.id
+    const seat = await db(app, leader, {
+      table: 'clan_members', action: 'insert', single: true,
+      values: { server_id: serverId, user_id: member.id, role: 'member' },
+    })
+    expect(seat.status).toBe(200)
+
+    const refused = await request(app).post('/api/fn/clan-chat-space-ensure')
+      .set('Authorization', `Bearer ${outsider.token}`).send({ serverId })
+    expect(refused.status).toBe(403)
+
+    const first = await request(app).post('/api/fn/clan-chat-space-ensure')
+      .set('Authorization', `Bearer ${member.token}`).send({ serverId })
+    expect(first.status).toBe(200)
+    expect(first.body.space.kind).toBe('clan')
+    expect(first.body.space.clan_id).toBe(serverId)
+    expect(first.body.space.owner_id).toBe(leader.id)
+
+    const again = await request(app).post('/api/fn/clan-chat-space-ensure')
+      .set('Authorization', `Bearer ${leader.token}`).send({ serverId })
+    expect(again.status).toBe(200)
+    expect(again.body.space.id).toBe(first.body.space.id)
+
+    const spaces = await db(app, member, {
+      table: 'chat_spaces', action: 'select',
+      filters: [{ col: 'clan_id', op: 'eq', val: serverId }],
+    })
+    expect(spaces.body.data).toHaveLength(1)
+    const channels = await db(app, member, {
+      table: 'chat_channels', action: 'select',
+      filters: [{ col: 'space_id', op: 'eq', val: first.body.space.id }],
+    })
+    expect(channels.body.data.map((row: any) => row.name)).toEqual(['general'])
+  })
+
+  it('does not let an open chat owner turn their row into an official TKO or clan space', async () => {
+    const chatter = await signUp(app, 'space-owner@kc.gg', 'spaceowner')
+    const space = await db(app, chatter, {
+      table: 'chat_spaces', action: 'insert', single: true,
+      values: { kind: 'open', name: 'Ordinary Lounge', owner_id: chatter.id, clan_id: null },
+    })
+    expect(space.status).toBe(200)
+
+    const claimOfficial = await db(app, chatter, {
+      table: 'chat_spaces', action: 'update', single: true,
+      filters: [{ col: 'id', op: 'eq', val: space.body.data.id }],
+      values: { kind: 'tko' },
+    })
+    expect(claimOfficial.status).toBe(403)
+
+    // Ordinary owner edits still work; only the space's authority identity is fixed.
+    const rename = await db(app, chatter, {
+      table: 'chat_spaces', action: 'update', single: true,
+      filters: [{ col: 'id', op: 'eq', val: space.body.data.id }],
+      values: { name: 'Renamed Lounge' },
+    })
+    expect(rename.status).toBe(200)
+    expect(rename.body.data.name).toBe('Renamed Lounge')
+  })
+
 })
 
 // ===========================================================================
@@ -884,11 +1134,34 @@ const WEBHOOK_SECRET = 'whsec_stub_secret_for_tests'
 let stripeCalls: StripeCall[] = []
 let realFetch: typeof globalThis.fetch
 
+/**
+ * What `GET /subscriptions?customer=...` lists back. Mutable so a test can put
+ * the customer in a specific billing state (cancelled, trialing, past due)
+ * without a live Stripe.
+ */
+let stripeSubscriptionList: any[] = []
+
+/**
+ * Arm a ONE-SHOT failure for the next call to a path. Used to prove the server
+ * distinguishes "the operator never saved a Customer Portal configuration in the
+ * Stripe dashboard" from a generic Stripe error — that misconfiguration is the
+ * single most likely thing to break the cancel button in production.
+ */
+let stripeFailPath: string | null = null
+let stripeFailMessage = ''
+
 /** Canned responses for the handful of Stripe endpoints the server calls. */
 function stripeStubResponse(path: string): any {
   if (path === '/customers') return { id: 'cus_stub_1' }
   if (path === '/checkout/sessions') {
     return { id: 'cs_stub_1', url: 'https://checkout.stripe.com/c/pay/cs_stub_1' }
+  }
+  if (path.startsWith('/billing_portal/sessions')) {
+    return { id: 'bps_stub_1', url: 'https://billing.stripe.com/p/session/bps_stub_1' }
+  }
+  // The LIST (GET, with a query string) — distinct from the POST that creates one.
+  if (path.startsWith('/subscriptions?')) {
+    return { object: 'list', data: stripeSubscriptionList }
   }
   if (path === '/subscriptions') {
     return { id: 'sub_stub_1', status: 'active', current_period_end: Math.floor(Date.now() / 1000) + 2592000 }
@@ -902,6 +1175,11 @@ function installStripeStub() {
     const path = String(url).replace('https://api.stripe.com/v1', '')
     const params = new URLSearchParams(String(init?.body ?? ''))
     stripeCalls.push({ path, params })
+    if (stripeFailPath && path.startsWith(stripeFailPath)) {
+      const message = stripeFailMessage
+      stripeFailPath = null
+      return { ok: false, status: 400, json: async () => ({ error: { message } }) } as any
+    }
     const body = stripeStubResponse(path)
     return { ok: true, status: 200, json: async () => body } as any
   }) as typeof globalThis.fetch
@@ -964,6 +1242,8 @@ describe('TKO API — Stripe checkout + webhook fulfilment', () => {
   const app = makeApp()
   let buyer: Who
   let other: Who
+  /** Never checked out, so never got a Stripe customer — the free-tier case. */
+  let neverPaid: Who
 
   beforeAll(async () => {
     process.env.STRIPE_SECRET_KEY = 'sk_test_stub'
@@ -975,6 +1255,7 @@ describe('TKO API — Stripe checkout + webhook fulfilment', () => {
     installStripeStub()
     buyer = await signUp(app, 'stripe-buyer@kc.gg', 'stripebuyer')
     other = await signUp(app, 'stripe-other@kc.gg', 'stripeother')
+    neverPaid = await signUp(app, 'stripe-freetier@kc.gg', 'stripefreetier')
   })
 
   afterAll(() => {
@@ -1075,8 +1356,11 @@ describe('TKO API — Stripe checkout + webhook fulfilment', () => {
   })
 
   it('refuses a tier that has no price configured rather than guessing one', async () => {
+    // `supporter` is still on sale but has no STRIPE_PRICE_SUPPORTER in this
+    // block. (This probe used to use ad_free, which now fails one step earlier
+    // as `tier_retired` — see the retired-SKU block further down.)
     const r = await request(app).post('/api/checkout')
-      .set('Authorization', `Bearer ${buyer.token}`).send({ tier: 'ad_free' })
+      .set('Authorization', `Bearer ${buyer.token}`).send({ tier: 'supporter' })
     expect(r.status).toBe(400)
     expect(r.body.error).toBe('no_price')
   })
@@ -1090,6 +1374,145 @@ describe('TKO API — Stripe checkout + webhook fulfilment', () => {
     const session = stripeCalls.find((c) => c.path === '/checkout/sessions')!
     // The server's price for the tier, NOT the cheap one the client asked for.
     expect(session.params.get('line_items[0][price]')).toBe('price_stub_creator')
+  })
+
+  // ---- SELF-SERVE CANCELLATION: the Stripe Customer Portal -----------------
+  //
+  // The compliance failure this closes: a paid subscriber had NO way to cancel
+  // in the app. The FTC negative-option rule and the state auto-renewal statutes
+  // require cancelling to be at least as easy as signing up, so these tests
+  // assert the exit exists, is tied to the caller's OWN customer, and answers
+  // the never-paid case plainly instead of erroring at someone who owes nothing.
+
+  it('the billing portal REQUIRES authentication', async () => {
+    const r = await request(app).post('/api/billing/portal').send({})
+    expect(r.status).toBe(401)
+    expect(r.body.url).toBeUndefined()
+  })
+
+  it('opens a portal session for the CALLER\'S OWN Stripe customer', async () => {
+    stripeCalls = []
+    const r = await request(app).post('/api/billing/portal')
+      .set('Authorization', `Bearer ${buyer.token}`).send({})
+    expect(r.status).toBe(200)
+    expect(r.body.ok).toBe(true)
+    expect(r.body.url).toContain('billing.stripe.com')
+
+    const session = stripeCalls.find((c) => c.path === '/billing_portal/sessions')!
+    expect(session).toBeTruthy()
+    // The customer is read from OUR user record — never from the request body.
+    expect(session.params.get('customer')).toBe('cus_stub_1')
+    expect(session.params.get('return_url')).toContain('/upgrade')
+  })
+
+  it('honours an in-app returnTo but clamps anything that could redirect off-site', async () => {
+    stripeCalls = []
+    await request(app).post('/api/billing/portal')
+      .set('Authorization', `Bearer ${buyer.token}`).send({ returnTo: '/profile' })
+    expect(stripeCalls.find((c) => c.path === '/billing_portal/sessions')!
+      .params.get('return_url')).toContain('/profile')
+
+    for (const hostile of ['//evil.example/steal', 'https://evil.example', 'javascript:alert(1)', 'not-a-path']) {
+      stripeCalls = []
+      await request(app).post('/api/billing/portal')
+        .set('Authorization', `Bearer ${buyer.token}`).send({ returnTo: hostile })
+      const url = stripeCalls.find((c) => c.path === '/billing_portal/sessions')!.params.get('return_url')!
+      expect(url).not.toContain('evil.example')
+      expect(url).not.toContain('javascript:')
+      expect(url).toContain('/upgrade') // fell back to the safe default
+    }
+  })
+
+  it('answers plainly — not with an error — when the caller never paid', async () => {
+    stripeCalls = []
+    const r = await request(app).post('/api/billing/portal')
+      .set('Authorization', `Bearer ${neverPaid.token}`).send({})
+    // 200, because "you have no subscription" is an ANSWER, not a failure.
+    expect(r.status).toBe(200)
+    expect(r.body.ok).toBe(false)
+    expect(r.body.error).toBe('no_customer')
+    expect(String(r.body.detail)).toBeTruthy()
+    // And no Stripe call was made on behalf of a user with no customer.
+    expect(stripeCalls.some((c) => c.path.startsWith('/billing_portal'))).toBe(false)
+  })
+
+  it('names an unconfigured Customer Portal rather than a generic stripe_error', async () => {
+    // Exactly what Stripe replies when the dashboard has no saved portal config.
+    stripeFailPath = '/billing_portal/sessions'
+    stripeFailMessage = 'No configuration provided and your test mode default configuration has not been created.'
+    const r = await request(app).post('/api/billing/portal')
+      .set('Authorization', `Bearer ${buyer.token}`).send({})
+    expect(r.status).toBe(502)
+    expect(r.body.ok).toBe(false)
+    expect(r.body.error).toBe('portal_not_configured')
+    expect(String(r.body.detail)).toContain('configuration')
+  })
+
+  it('refuses the portal outright while Stripe is switched off', async () => {
+    const key = process.env.STRIPE_SECRET_KEY
+    delete process.env.STRIPE_SECRET_KEY
+    try {
+      const r = await request(app).post('/api/billing/portal')
+        .set('Authorization', `Bearer ${buyer.token}`).send({})
+      expect(r.status).toBe(503)
+      expect(r.body.error).toBe('stripe_not_configured')
+    } finally {
+      process.env.STRIPE_SECRET_KEY = key
+    }
+  })
+
+  // ---- what the manage-subscription panel reads ---------------------------
+  it('reports no billing account for a free user, without calling Stripe', async () => {
+    stripeCalls = []
+    const r = await request(app).get('/api/billing/subscription')
+      .set('Authorization', `Bearer ${neverPaid.token}`)
+    expect(r.status).toBe(200)
+    expect(r.body.hasBillingAccount).toBe(false)
+    expect(r.body.tier).toBe('')
+    expect(r.body.subscription).toBeNull()
+    expect(stripeCalls.some((c) => c.path.startsWith('/subscriptions'))).toBe(false)
+  })
+
+  it('surfaces a cancel-at-period-end so the UI stops saying "renews"', async () => {
+    const ends = Math.floor(Date.now() / 1000) + 86400 * 12
+    stripeSubscriptionList = [{
+      id: 'sub_stub_1', status: 'active', cancel_at_period_end: true,
+      current_period_end: ends, created: 1,
+      items: { data: [{ price: { id: 'price_stub_pro' } }] },
+    }]
+    const r = await request(app).get('/api/billing/subscription')
+      .set('Authorization', `Bearer ${buyer.token}`)
+    expect(r.status).toBe(200)
+    expect(r.body.hasBillingAccount).toBe(true)
+    expect(r.body.subscription.id).toBe('sub_stub_1')
+    expect(r.body.subscription.cancelAtPeriodEnd).toBe(true)
+    // Named from the PRICE, the thing Stripe actually bills.
+    expect(r.body.subscription.tier).toBe('pro')
+    expect(new Date(r.body.subscription.currentPeriodEnd).getTime())
+      .toBe(ends * 1000)
+    stripeSubscriptionList = []
+  })
+
+  it('prefers the LIVE plan over a stale cancelled one, and ignores creator subs', async () => {
+    stripeSubscriptionList = [
+      { id: 'sub_old', status: 'canceled', created: 10, items: { data: [{ price: { id: 'price_stub_pro' } }] } },
+      { id: 'sub_creator', status: 'active', created: 20, metadata: { kind: 'creator_order' }, items: { data: [{ price: { id: 'price_stub_creator' } }] } },
+      { id: 'sub_live', status: 'active', created: 5, items: { data: [{ price: { id: 'price_stub_creator' } }] } },
+    ]
+    const r = await request(app).get('/api/billing/subscription')
+      .set('Authorization', `Bearer ${buyer.token}`)
+    expect(r.body.subscription.id).toBe('sub_live')
+    stripeSubscriptionList = []
+  })
+
+  it('degrades to the local record when the Stripe list call fails', async () => {
+    stripeFailPath = '/subscriptions?'
+    stripeFailMessage = 'stripe is having a day'
+    const r = await request(app).get('/api/billing/subscription')
+      .set('Authorization', `Bearer ${buyer.token}`)
+    expect(r.status).toBe(200)          // never an error page over billing status
+    expect(r.body.hasBillingAccount).toBe(true)
+    expect(r.body.subscription).toBeNull()
   })
 
   // ---- webhook: signature --------------------------------------------------
@@ -1370,6 +1793,100 @@ describe('TKO API — Stripe checkout + webhook fulfilment', () => {
     expect(await tierOf(app, buyer)).toBe('')
   })
 
+  // ---- CANCELLING IN THE PORTAL REALLY ENDS ACCESS -------------------------
+  //
+  // A cancel button that leaves the tier granted forever is worse than no
+  // button — it takes the churn AND keeps the liability. These pin the two
+  // shapes Stripe actually sends when someone cancels in the Customer Portal.
+
+  it('a portal "cancel at period end" keeps the tier only until the period ends', async () => {
+    const ends = Math.floor(Date.now() / 1000) + 86400 * 12
+    // Cancel-at-period-end: status is STILL active, and cancel_at_period_end
+    // flips true. They paid for this month, so they keep it.
+    await sendEvent(app, {
+      id: 'evt_sub_cancel_at_period_end',
+      type: 'customer.subscription.updated',
+      data: {
+        object: {
+          id: 'sub_stub_1', status: 'active', cancel_at_period_end: true,
+          customer: 'cus_stub_1', current_period_end: ends,
+          items: { data: [{ price: { id: 'price_stub_pro' } }] },
+          metadata: { user_id: buyer.id },
+        },
+      },
+    })
+    expect(await tierOf(app, buyer)).toBe('pro')
+
+    // Then the period ends and Stripe deletes the subscription. NOW access goes.
+    await sendEvent(app, {
+      id: 'evt_sub_deleted_at_period_end',
+      type: 'customer.subscription.deleted',
+      data: { object: { id: 'sub_stub_1', customer: 'cus_stub_1', metadata: { user_id: buyer.id } } },
+    })
+    expect(await tierOf(app, buyer)).toBe('')
+  })
+
+  it('a REPLAYED cancellation stays cancelled (Stripe retries for three days)', async () => {
+    // Re-grant so a faulty replay would be VISIBLE as a re-granted tier.
+    await sendEvent(app, {
+      id: 'evt_sub_regrant_before_replay',
+      type: 'customer.subscription.updated',
+      data: {
+        object: {
+          id: 'sub_stub_1', status: 'active', customer: 'cus_stub_1',
+          current_period_end: Math.floor(Date.now() / 1000) + 2592000,
+          items: { data: [{ price: { id: 'price_stub_pro' } }] },
+          metadata: { user_id: buyer.id },
+        },
+      },
+    })
+    expect(await tierOf(app, buyer)).toBe('pro')
+
+    const cancellation = {
+      id: 'evt_sub_deleted_replayed',
+      type: 'customer.subscription.deleted',
+      data: { object: { id: 'sub_stub_1', customer: 'cus_stub_1', metadata: { user_id: buyer.id } } },
+    }
+    const first = await sendEvent(app, cancellation)
+    expect(first.status).toBe(200)
+    expect(first.body.duplicate).toBeUndefined() // did the work
+    expect(await tierOf(app, buyer)).toBe('')
+
+    // Stripe redelivers the identical, correctly-signed event. Twice.
+    for (const attempt of [1, 2]) {
+      expect(attempt).toBeGreaterThan(0)
+      const again = await sendEvent(app, cancellation)
+      expect(again.status).toBe(200)
+      expect(again.body.duplicate).toBe(true)
+      expect(await tierOf(app, buyer)).toBe('') // still Free — never re-granted
+    }
+  })
+
+  it('a cancellation resolves through the CUSTOMER alone, with no metadata', async () => {
+    // Re-grant, then cancel with a payload carrying none of our metadata — the
+    // shape a subscription created outside our checkout (or migrated) sends.
+    await sendEvent(app, {
+      id: 'evt_sub_regrant_no_meta',
+      type: 'customer.subscription.updated',
+      data: {
+        object: {
+          id: 'sub_stub_1', status: 'active', customer: 'cus_stub_1',
+          current_period_end: Math.floor(Date.now() / 1000) + 2592000,
+          items: { data: [{ price: { id: 'price_stub_pro' } }] },
+          metadata: { user_id: buyer.id },
+        },
+      },
+    })
+    expect(await tierOf(app, buyer)).toBe('pro')
+
+    await sendEvent(app, {
+      id: 'evt_sub_deleted_no_meta',
+      type: 'customer.subscription.deleted',
+      data: { object: { id: 'sub_stub_1', customer: 'cus_stub_1' } },
+    })
+    expect(await tierOf(app, buyer)).toBe('')
+  })
+
   // ---- receipts are private ------------------------------------------------
   it('a user cannot read somebody else\'s payment receipts, or forge one', async () => {
     const theirs = await db(app, other, { table: 'payments', action: 'select' })
@@ -1396,6 +1913,165 @@ describe('TKO API — Stripe checkout + webhook fulfilment', () => {
     expect(JSON.stringify(r.body)).not.toContain('sk_test')
     expect(JSON.stringify(r.body)).not.toContain('whsec')
     expect(JSON.stringify(r.body)).not.toContain('price_stub')
+  })
+})
+
+// ===========================================================================
+// RETIRING A SKU MUST NOT STRAND A SUBSCRIBER.
+//
+// `ad_free` ($1.99/mo) was retired in 2026-08. Retiring a SKU in OUR catalogue
+// cancels nothing in Stripe: those cards keep being charged until the operator
+// or the customer stops them. So the only safe shape is SUNSET, not delete —
+// the shop stops offering it, and every fulfilment path keeps honouring it.
+//
+// The failure this file exists to make impossible: `ad_free` disappears from
+// the ladder, `tierForPrice()` stops resolving its price, the renewal branches
+// silently no-op, the entitlement expires — and Stripe keeps taking $1.99/month
+// from someone who is now being shown ads. No error, no log, no support signal.
+// Charging for ads-off while serving ads is a refund and a consumer-protection
+// problem, not a bug report.
+//
+// Note this block CONFIGURES STRIPE_PRICE_AD_FREE, unlike the block above which
+// deliberately leaves it unset. A retired tier with a live price is exactly the
+// production state: the price object still exists in Stripe and is still
+// billing, which is why the sale has to be stopped in code rather than by
+// unsetting the env var.
+// ===========================================================================
+describe('TKO API — the retired $1.99 ad_free SKU: sold no more, honoured still', () => {
+  const app = makeApp()
+  let holder: Who
+
+  beforeAll(async () => {
+    process.env.STRIPE_SECRET_KEY = 'sk_test_stub'
+    process.env.STRIPE_WEBHOOK_SECRET = WEBHOOK_SECRET
+    process.env.STRIPE_PRICE_PRO = 'price_stub_pro'
+    // The retired price is LIVE — subscriptions on it are still billing.
+    process.env.STRIPE_PRICE_AD_FREE = 'price_stub_ad_free'
+    installStripeStub()
+    holder = await signUp(app, 'adfree-holder@kc.gg', 'adfreeholder')
+  })
+
+  afterAll(() => {
+    globalThis.fetch = realFetch
+    delete process.env.STRIPE_SECRET_KEY
+    delete process.env.STRIPE_WEBHOOK_SECRET
+    delete process.env.STRIPE_PRICE_PRO
+    delete process.env.STRIPE_PRICE_AD_FREE
+  })
+
+  // ---- the two ladders are different lists --------------------------------
+  it('keeps ad_free on the FULFILMENT ladder and drops it from the SHOP', () => {
+    expect(SUBSCRIPTION_TIERS).toContain('ad_free')
+    expect(RETIRED_TIERS).toContain('ad_free')
+    expect(PURCHASABLE_TIERS).not.toContain('ad_free')
+    expect(isPurchasableTier('ad_free')).toBe(false)
+  })
+
+  it('still sells every tier that was not retired, cheapest paid rung now $4.99 pro', () => {
+    expect(PURCHASABLE_TIERS).toEqual(['pro', 'supporter', 'creator'])
+    for (const t of PURCHASABLE_TIERS) expect(isPurchasableTier(t)).toBe(true)
+  })
+
+  it('never lets the shop offer something the server could not fulfil', () => {
+    for (const t of PURCHASABLE_TIERS) {
+      expect(SUBSCRIPTION_TIERS).toContain(t as (typeof SUBSCRIPTION_TIERS)[number])
+    }
+  })
+
+  // ---- the SELL surfaces are closed ---------------------------------------
+  it('refuses a NEW checkout on the retired tier without opening a Stripe session', async () => {
+    stripeCalls = []
+    const r = await request(app).post('/api/checkout')
+      .set('Authorization', `Bearer ${holder.token}`).send({ tier: 'ad_free' })
+    expect(r.status).toBe(400)
+    expect(r.body.error).toBe('tier_retired')
+    expect(r.body.url).toBeUndefined()
+    // Nothing was created in Stripe — the refusal happens before the money path.
+    expect(stripeCalls.some((c) => c.path === '/checkout/sessions')).toBe(false)
+  })
+
+  it('refuses to convert a trial onto the retired tier, so nobody is charged for it', async () => {
+    const r = await request(app).post('/api/trial/convert')
+      .set('Authorization', `Bearer ${holder.token}`).send({ tier: 'ad_free' })
+    expect(r.status).toBe(400)
+    expect(r.body.ok).toBe(false)
+    expect(r.body.error).toBe('tier_retired')
+  })
+
+  it('reports the retired tier as unbuyable even though its price IS configured', async () => {
+    const r = await request(app).get('/api/payments/config')
+    expect(r.status).toBe(200)
+    expect(r.body.configured).toBe(true)
+    // The key is still PRESENT — only false. canBuyTier() in src/lib/payments.ts
+    // reads exactly this, so the Upgrade page hides the rung with no client change.
+    expect(r.body.tiers).toHaveProperty('ad_free')
+    expect(r.body.tiers.ad_free).toBe(false)
+    expect(r.body.tiers.pro).toBe(true)
+  })
+
+  // ---- the HONOUR surfaces are open ---------------------------------------
+  it('still resolves the retired price back to its tier', () => {
+    // If this ever returns '', invoice.paid grants nothing and the subscriber's
+    // expiry quietly stops moving while Stripe keeps charging them.
+    expect(tierForPrice('price_stub_ad_free')).toBe('ad_free')
+  })
+
+  it('still fulfils an IN-FLIGHT checkout that completes after retirement', async () => {
+    const r = await sendEvent(app, {
+      id: 'evt_adfree_session_1',
+      type: 'checkout.session.completed',
+      data: {
+        object: {
+          id: 'cs_adfree_1', mode: 'subscription', payment_status: 'paid',
+          amount_total: 199, currency: 'usd', customer: 'cus_stub_1',
+          subscription: 'sub_adfree_1',
+          metadata: { user_id: holder.id, tier: 'ad_free' },
+        },
+      },
+    })
+    expect(r.status).toBe(200)
+    expect(await tierOf(app, holder)).toBe('ad_free')
+  })
+
+  it('STILL RENEWS an existing subscriber every billing period', async () => {
+    const until = Math.floor(Date.now() / 1000) + 2592000
+    await sendEvent(app, {
+      id: 'evt_adfree_sub_updated_1',
+      type: 'customer.subscription.updated',
+      data: {
+        object: {
+          id: 'sub_adfree_1', status: 'active', customer: 'cus_stub_1',
+          current_period_end: until,
+          items: { data: [{ price: { id: 'price_stub_ad_free' } }] },
+          metadata: { user_id: holder.id },
+        },
+      },
+    })
+    expect(await tierOf(app, holder)).toBe('ad_free')
+
+    // And the renewal INVOICE — the branch with no metadata fallback, which is
+    // the one that goes silent first if the tier is dropped from the ladder.
+    await sendEvent(app, {
+      id: 'evt_adfree_invoice_paid_1',
+      type: 'invoice.paid',
+      data: {
+        object: {
+          id: 'in_adfree_1', customer: 'cus_stub_1', subscription: 'sub_adfree_1',
+          amount_paid: 199, currency: 'usd',
+          lines: { data: [{ price: { id: 'price_stub_ad_free' }, period: { end: until } }] },
+        },
+      },
+    })
+    expect(await tierOf(app, holder)).toBe('ad_free')
+  })
+
+  it('still lapses them when they actually cancel — retirement is not a lock-in', async () => {
+    await sendEvent(app, {
+      id: 'evt_adfree_sub_deleted_1',
+      type: 'customer.subscription.deleted',
+      data: { object: { id: 'sub_adfree_1', customer: 'cus_stub_1', metadata: { user_id: holder.id } } },
+    })
+    expect(await tierOf(app, holder)).toBe('')
   })
 })
 
@@ -1664,7 +2340,7 @@ describe('tournament brackets advance trusted winners and player art slots', () 
       table: 'tournaments',
       action: 'insert',
       single: true,
-      values: { name: 'TKO Bracket Test', created_by: host.id },
+      values: { name: 'TKO Bracket Test', created_by: host.id, end_at: '2030-01-01T00:00:00.000Z' },
     })
     expect(tournament.status).toBe(200)
     const tournamentId = tournament.body.data.id
@@ -1911,7 +2587,7 @@ describe('economy — King prize artifacts persist', () => {
 
     const t = await db(app, host, {
       table: 'tournaments', action: 'insert', single: true,
-      values: { name: 'TKO King S1', created_by: host.id },
+      values: { name: 'TKO King S1', created_by: host.id, end_at: '2030-01-01T00:00:00.000Z' },
     })
     tid = t.body.data.id
     // A 2-entrant bracket: one round, and winning it IS the final.
@@ -1996,7 +2672,8 @@ describe('economy — King prize artifacts persist', () => {
       await signUp(app, 'e2@kc.gg', 'e2'),
     ]
     const t = await db(app, host, {
-      table: 'tournaments', action: 'insert', single: true, values: { name: 'King S2', created_by: host.id },
+      table: 'tournaments', action: 'insert', single: true,
+      values: { name: 'King S2', created_by: host.id, end_at: '2030-01-01T00:00:00.000Z' },
     })
     const t2 = t.body.data.id
     for (const who of [champ, loser, ...extras]) {
@@ -2059,7 +2736,8 @@ describe('economy — Oracle predictions resolve server-side', () => {
       .set('Authorization', `Bearer ${host.token}`).send({ code: 'TKO-HOST-M4R7PZ' }).expect(200)
 
     const t = await db(app, host, {
-      table: 'tournaments', action: 'insert', single: true, values: { name: 'Weekly Cup', created_by: host.id },
+      table: 'tournaments', action: 'insert', single: true,
+      values: { name: 'Weekly Cup', created_by: host.id, end_at: '2030-01-01T00:00:00.000Z' },
     })
     tid = t.body.data.id
     winnerId = host.id // the eventual champion
@@ -2075,7 +2753,8 @@ describe('economy — Oracle predictions resolve server-side', () => {
 
     // Free tier => 1 open prediction. A second tournament is refused.
     const t2 = await db(app, host, {
-      table: 'tournaments', action: 'insert', single: true, values: { name: 'Other Cup', created_by: host.id },
+      table: 'tournaments', action: 'insert', single: true,
+      values: { name: 'Other Cup', created_by: host.id, end_at: '2030-01-01T00:00:00.000Z' },
     })
     const over = await fn(app, seer, 'prediction-make', { tournamentId: t2.body.data.id, winnerId, label: 'host' })
     expect(over.body.ok).toBe(false)
@@ -2247,5 +2926,138 @@ describe('TKO API — CORS origin policy', () => {
 
     const bad = await request(app).get('/api/health').set('Origin', 'https://evil.example')
     expect(bad.headers['access-control-allow-origin']).toBeUndefined()
+  })
+})
+
+// ===========================================================================
+// PROFILE READINESS — the signup wave (operator audit 2026-08-04).
+//
+// "Many new players are signing up soon." These pin the three ways that used to
+// go wrong under load: an identity collision escaping as an exception instead of
+// an HTTP answer, the same email registering twice under different casing, and
+// a bare select meaning "the whole table".
+// ===========================================================================
+describe('TKO API — signup under load', () => {
+  const app = makeApp()
+
+  it('refuses a second account for the same email in a different casing', async () => {
+    const first = await request(app).post('/api/auth/signup')
+      .send({ email: 'Casey@kc.gg', password: 'password123', username: 'casey', date_of_birth: ADULT_DOB })
+    expect(first.status).toBe(200)
+
+    const second = await request(app).post('/api/auth/signup')
+      .send({ email: 'casey@KC.gg', password: 'password123', username: 'casey2', date_of_birth: ADULT_DOB })
+    expect(second.status).toBe(409)
+    expect(second.body.error).toMatch(/already registered/i)
+  })
+
+  it('lets that player log in with either casing of their email', async () => {
+    const exact = await request(app).post('/api/auth/login')
+      .send({ email: 'Casey@kc.gg', password: 'password123' })
+    expect(exact.status).toBe(200)
+
+    const lower = await request(app).post('/api/auth/login')
+      .send({ email: 'casey@kc.gg', password: 'password123' })
+    expect(lower.status).toBe(200)
+    expect(lower.body.user.id).toBe(exact.body.user.id)
+  })
+
+  it('gives two players who want the SAME handle two working accounts', async () => {
+    const a = await request(app).post('/api/auth/signup')
+      .send({ email: 'ninja1@kc.gg', password: 'password123', username: 'ninja', date_of_birth: ADULT_DOB })
+    const b = await request(app).post('/api/auth/signup')
+      .send({ email: 'ninja2@kc.gg', password: 'password123', username: 'ninja', date_of_birth: ADULT_DOB })
+    expect(a.status).toBe(200)
+    expect(b.status).toBe(200)
+    expect(a.body.user.id).not.toBe(b.body.user.id)
+
+    // Both must end up with a REAL profile row and a distinct handle — a player
+    // with no username is invisible in Discover.
+    for (const who of [a, b]) {
+      const me = await request(app).get('/api/auth/me').set('Authorization', `Bearer ${who.body.token}`)
+      expect(me.status).toBe(200)
+      expect(me.body.user.user_metadata.username).toBeTruthy()
+    }
+    // Read the rows one at a time: the in-memory engine does not honour the
+    // `= ANY($1)` form this API builds for an `in` filter on a uuid column.
+    const names: string[] = []
+    for (const who of [a, b]) {
+      const row = await request(app).post('/api/db').send({
+        table: 'profiles', action: 'select', columns: 'id, username', single: true,
+        filters: [{ col: 'id', op: 'eq', val: who.body.user.id }],
+      })
+      expect(row.status).toBe(200)
+      expect(row.body.data?.username).toBeTruthy()
+      names.push(String(row.body.data.username).toLowerCase())
+    }
+    expect(new Set(names).size).toBe(2)
+  })
+
+  it('answers a duplicate signup instead of hanging or dying', async () => {
+    // Five simultaneous attempts on one email: exactly one account, four clean
+    // 409s. Before the fix the losers escaped as unhandled rejections — no
+    // response at all, and a dead process on Node >= 15.
+    const attempts = await Promise.all(
+      [0, 1, 2, 3, 4].map(() => request(app).post('/api/auth/signup')
+        .send({ email: 'stampede@kc.gg', password: 'password123', username: 'stampede', date_of_birth: ADULT_DOB })),
+    )
+    const created = attempts.filter((r) => r.status === 200)
+    expect(created).toHaveLength(1)
+    for (const r of attempts) expect([200, 409]).toContain(r.status)
+  })
+})
+
+describe('TKO API — /api/db read bounds', () => {
+  const app = makeApp()
+  let owner: Who
+
+  it('sets up a player with several rows', async () => {
+    owner = await signUp(app, 'bounds@kc.gg', 'bounds')
+    for (let i = 0; i < 5; i++) {
+      const r = await db(app, owner, {
+        table: 'reels', action: 'insert', values: { title: `reel ${i}`, clip_ids: [] },
+      })
+      expect(r.status).toBe(200)
+    }
+  })
+
+  it('a head:true count returns the count WITHOUT shipping the rows', async () => {
+    const r = await db(app, owner, {
+      table: 'reels', action: 'select', columns: '*', count: 'exact', head: true,
+      filters: [{ col: 'user_id', op: 'eq', val: owner.id }],
+    })
+    expect(r.status).toBe(200)
+    expect(r.body.count).toBe(5)
+    // The rows are what the profile page used to download just to render a
+    // "N followers" label.
+    expect(r.body.data).toBeNull()
+  })
+
+  it('still returns rows for the same read without head', async () => {
+    const r = await db(app, owner, {
+      table: 'reels', action: 'select', columns: '*', count: 'exact',
+      filters: [{ col: 'user_id', op: 'eq', val: owner.id }],
+    })
+    expect(r.status).toBe(200)
+    expect(r.body.count).toBe(5)
+    expect(r.body.data).toHaveLength(5)
+  })
+
+  it('caps an unbounded select, and clamps a client limit above the ceiling', async () => {
+    // MAX_SELECT_ROWS is far above anything the app asks for, so a normal read
+    // is unaffected; what matters is that the SQL is never limit-less.
+    const all = await request(app).post('/api/db').send({ table: 'reels', action: 'select', columns: '*' })
+    expect(all.status).toBe(200)
+    expect(all.body.data.length).toBeLessThanOrEqual(MAX_SELECT_ROWS)
+
+    const greedy = await request(app).post('/api/db')
+      .send({ table: 'reels', action: 'select', columns: '*', limit: MAX_SELECT_ROWS * 10 })
+    expect(greedy.status).toBe(200)
+    expect(greedy.body.data.length).toBeLessThanOrEqual(MAX_SELECT_ROWS)
+
+    // An explicit small limit is still honoured exactly.
+    const two = await request(app).post('/api/db')
+      .send({ table: 'reels', action: 'select', columns: '*', limit: 2 })
+    expect(two.body.data).toHaveLength(2)
   })
 })

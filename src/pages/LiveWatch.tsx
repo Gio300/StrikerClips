@@ -2,12 +2,13 @@ import { useEffect, useState } from 'react'
 import { Link, useParams, useSearchParams } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
 import { ShareButton } from '@/components/ShareButton'
-import { OracleVote } from '@/components/OracleVote'
-import { OracleBet } from '@/components/OracleBet'
+import { canonicalShareUrl } from '@/lib/canonicalUrl'
+import { OracleLivePanel } from '@/components/OracleLivePanel'
 import { AdSlot } from '@/components/AdSlot'
 import { LiveControlLayout } from '@/components/LiveControlLayout'
 import { TournamentBracket } from '@/components/TournamentBracket'
 import type { LayoutPreset } from '@/components/LiveControlLayout'
+import { useAuth } from '@/hooks/useAuth'
 
 /**
  * LiveWatch — a single stream, playing inline, on its own shareable page.
@@ -26,20 +27,21 @@ type StreamRow = {
   user_id?: string
   tournament_id?: string | null
   show_bracket?: boolean | null
+  background_url?: string | null
   /** Stored placement preset from the go-live setup (feature: layout presets). */
   layout?: LayoutPreset | null
 }
 
 /**
- * CollapsibleOracle — keeps the Oracle call ALWAYS mounted on a live stream, but
- * lets the viewer tuck it away with a small slide tab. The open/closed choice is
- * remembered per stream for the session (sessionStorage), so it stays how they
- * left it as they move around, then resets on a fresh visit.
+ * CollapsibleOracle keeps the optional Oracle call behind a small slide tab. It
+ * starts closed so a healthy stream never opens with an optional Oracle network
+ * error. The panel mounts only after the viewer opens it, and that choice is
+ * remembered per stream for the session.
  */
-function CollapsibleOracle({ streamId, children }: { streamId: string; children: React.ReactNode }) {
+export function CollapsibleOracle({ streamId, hostControls = false, children }: { streamId: string; hostControls?: boolean; children: React.ReactNode }) {
   const key = `tko_oracle_open:${streamId}`
   const [open, setOpen] = useState<boolean>(() => {
-    try { return sessionStorage.getItem(key) !== '0' } catch { return true }
+    try { return sessionStorage.getItem(key) === '1' } catch { return false }
   })
   function toggle() {
     setOpen((o) => {
@@ -60,19 +62,17 @@ function CollapsibleOracle({ streamId, children }: { streamId: string; children:
           <path d="m6 9 6 6 6-6" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
         Oracle
-        <span className="ml-auto text-[10px] font-medium text-purple-300/70">{open ? 'Tap to hide' : 'Tap to call it'}</span>
+        <span className="ml-auto text-[10px] font-medium text-purple-300/70">
+          {hostControls ? `Host controls - ${open ? 'Hide' : 'Show'}` : open ? 'Tap to hide' : 'Tap to call it'}
+        </span>
       </button>
-      <div
-        className="transition-all duration-300 ease-in-out"
-        style={{ maxHeight: open ? '520px' : '0px', opacity: open ? 1 : 0 }}
-      >
-        <div className="p-2">{children}</div>
-      </div>
+      {open && <div className="border-t border-purple-500/20 p-2">{children}</div>}
     </div>
   )
 }
 
 export function LiveWatch() {
+  const { user } = useAuth()
   const { id } = useParams()
   const [params] = useSearchParams()
   const [stream, setStream] = useState<StreamRow | null>(null)
@@ -136,8 +136,8 @@ export function LiveWatch() {
   // on a device where the stream row doesn't exist (no backend / no profile).
   const q = `?u=${encodeURIComponent(stream.youtube_url)}${stream.title ? `&t=${encodeURIComponent(stream.title)}` : ''}`
   const shareUrl = stream.id !== 'direct'
-    ? `https://tko.cam/watch/${stream.id}${q}`
-    : `https://tko.cam/watch${q}`
+    ? canonicalShareUrl(`/watch/${stream.id}${q}`)
+    : canonicalShareUrl(`/watch${q}`)
 
   return (
     <div className="p-3 sm:p-6 max-w-6xl mx-auto">
@@ -147,6 +147,7 @@ export function LiveWatch() {
         streamId={stream.id}
         youtubeUrl={stream.youtube_url}
         title={stream.title}
+        backgroundUrl={stream.background_url}
         hostId={stream.user_id}
         enableChat={stream.id !== 'direct'}
         layout={stream.layout ?? 'auto'}
@@ -169,13 +170,8 @@ export function LiveWatch() {
                   </div>
                 </details>
               )}
-              <CollapsibleOracle streamId={stream.id}>
-              <div className="space-y-2">
-                <OracleVote matchRef={`live:${stream.id}`} title="Call this match" />
-                {/* Oracle BET slip — self-hides unless the stream is genuinely
-                    LIVE and hosted by a host-tier user (server-verified). */}
-                <OracleBet streamId={stream.id} matchRef={`live:${stream.id}`} title="Bet this match" />
-              </div>
+              <CollapsibleOracle streamId={stream.id} hostControls={!!user && user.id === stream.user_id}>
+                <OracleLivePanel streamId={stream.id} />
               </CollapsibleOracle>
             </div>
           ) : null

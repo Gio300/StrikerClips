@@ -15,6 +15,7 @@ import { useAuth } from '@/hooks/useAuth'
 import { BRAND } from '@/lib/brand'
 import { AdSlot } from '@/components/AdSlot'
 import { LiveNowStrip } from '@/components/LiveNowStrip'
+import { useLeagueTheme } from '@/components/LeagueThemeProvider'
 import { resolveLayout } from '@/lib/reelLayout'
 import type { Reel, ReelLayout } from '@/types/database'
 
@@ -24,6 +25,9 @@ type HomeReel = Reel & {
 
 export function Landing() {
   const { user } = useAuth()
+  const { league } = useLeagueTheme()
+  const brandName = league?.name || 'TKO'
+  const brandDomain = league?.domain || BRAND.domain
   const [reels, setReels] = useState<HomeReel[]>([])
   const [streams, setStreams] = useState<{ id: string; youtube_url: string; title: string | null }[]>([])
   const [loading, setLoading] = useState(true)
@@ -59,7 +63,7 @@ export function Landing() {
     <div className="page-shell animate-fade-in">
       <header className="mb-5 flex flex-col gap-4 border-b border-dark-border pb-5 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <p className="mb-1 text-xs font-semibold uppercase text-kunai">TKO home</p>
+          <p className="mb-1 text-xs font-semibold uppercase text-kunai">{brandName} home</p>
           <h1 className="text-2xl font-bold text-white sm:text-3xl">
             {user ? 'Your arena is ready.' : 'Watch the play. Build the replay.'}
           </h1>
@@ -70,7 +74,7 @@ export function Landing() {
         <div className="flex flex-wrap gap-2">
           <Link to={user ? '/highlight/create' : '/signup'} className="btn-primary">
             <Clapperboard size={17} />
-            {user ? 'Create reel' : 'Join TKO'}
+            {user ? 'Create reel' : `Join ${brandName}`}
           </Link>
           <Link to="/live" className="btn-ghost">
             <Radio size={17} />
@@ -79,18 +83,18 @@ export function Landing() {
         </div>
       </header>
 
-      <nav className="mb-7 grid grid-cols-2 gap-2 lg:grid-cols-4" aria-label="TKO quick actions">
+      <nav className="mb-7 grid grid-cols-2 gap-2 lg:grid-cols-4" aria-label={`${brandName} quick actions`}>
         <QuickAction to="/create" icon={Video} title="Create" detail="Pick what you want to make" />
         <QuickAction to="/tournaments" icon={Trophy} title="Compete" detail="Find or run a bracket" />
         <QuickAction to="/conquest" icon={Swords} title="Conquest" detail="Fight for clan territory" />
-        <QuickAction to="/rankings" icon={Crown} title="Rankings" detail="Track your power level" />
+        <QuickAction to="/discover" icon={Crown} title="Players" detail="Find people to battle with" />
       </nav>
 
       <LiveNowStrip placement="front_page" />
 
       {streams.length > 0 && (
         <section className="mb-8">
-          <SectionHeader title="Community live" detail="Active feeds from across TKO." to="/live" />
+          <SectionHeader title="Community live" detail={`Active feeds from across ${brandName}.`} to="/live" />
           <div className="grid gap-3 md:grid-cols-2">
             {streams.slice(0, 2).map((stream) => {
               const videoId = stream.youtube_url?.match(/(?:v=|youtu\.be\/)([a-zA-Z0-9_-]{11})/)?.[1]
@@ -167,7 +171,7 @@ export function Landing() {
 
       <footer className="border-t border-dark-border py-6">
         <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-gray-500">
-          <span>© {new Date().getFullYear()} {BRAND.domain}</span>
+          <span>© {new Date().getFullYear()} {brandDomain}</span>
           <Link to="/terms" className="hover:text-white">Terms</Link>
           <Link to="/privacy" className="hover:text-white">Privacy</Link>
           <Link to="/data-deletion" className="hover:text-white">Data deletion</Link>

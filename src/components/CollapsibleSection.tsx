@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 
 /**
  * CollapsibleSection — a tappable header row that expands/collapses its children.
@@ -56,6 +56,8 @@ export type CollapsibleSectionProps = {
   count?: number | string
   /** Seeds the first-ever open state; the viewer's toggle then persists. */
   defaultOpen?: boolean
+  /** Opens the section for a deep-link or other one-time reveal request. */
+  openRequested?: boolean
   /** Optional right-aligned hint text, shown before the chevron. */
   hint?: ReactNode
   children: ReactNode
@@ -67,12 +69,17 @@ export function CollapsibleSection({
   label,
   count,
   defaultOpen = false,
+  openRequested = false,
   hint,
   children,
   className = '',
 }: CollapsibleSectionProps) {
-  const [open, setOpen] = useState<boolean>(() => readStored(id, defaultOpen))
+  const [open, setOpen] = useState<boolean>(() => openRequested || readStored(id, defaultOpen))
   const bodyId = `section-${id}`
+
+  useEffect(() => {
+    if (openRequested) setOpen(true)
+  }, [openRequested])
 
   function toggle() {
     setOpen((prev) => {
@@ -93,13 +100,20 @@ export function CollapsibleSection({
         aria-controls={bodyId}
         className="w-full flex items-center gap-2 px-4 py-3.5 text-left select-none hover:bg-dark-elevated/50 transition-colors"
       >
-        <span className="font-semibold text-[15px] text-white">{label}</span>
+        {/* INK RULE (palette v3): these were text-white / text-gray-*, which
+            silently assumed a DARK card. The League Studio's board is LIGHT, so
+            the section labels rendered white-on-white and every panel looked
+            unlabeled. The ink slots follow the surface, so one markup reads on
+            either family. Same for the chevron: the hardcoded amber was ~2:1 on
+            a white card, and the class beside it (text-chakra) was always the
+            documented intent. */}
+        <span className="font-semibold text-[15px] text-ink">{label}</span>
         {showCount && (
-          <span className="inline-flex items-center justify-center min-w-[1.25rem] h-5 px-1.5 rounded-full bg-dark-elevated text-xs text-gray-300 tabular-nums">
+          <span className="inline-flex items-center justify-center min-w-[1.25rem] h-5 px-1.5 rounded-full bg-dark-elevated text-xs text-ink-muted tabular-nums">
             {count}
           </span>
         )}
-        {hint && <span className="ml-auto text-xs text-gray-500 truncate">{hint}</span>}
+        {hint && <span className="ml-auto text-xs text-ink-muted/80 truncate">{hint}</span>}
         <svg
           width="18"
           height="18"
@@ -107,7 +121,6 @@ export function CollapsibleSection({
           fill="none"
           aria-hidden="true"
           className={`${hint ? '' : 'ml-auto'} shrink-0 text-chakra transition-transform duration-300 ${open ? 'rotate-0' : '-rotate-90'}`}
-          style={{ color: '#f59e0b' }}
         >
           <path d="M6 9l6 6 6-6" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
         </svg>

@@ -1,0 +1,93 @@
+# AWS Amplify custom response headers.
+#
+# WHY THIS FILE EXISTS (2026-08-08). A league's install prompt kept showing
+# "TKO" instead of the league name on a real phone, while every check from this
+# machine said the manifest was correct. Both were true: Amplify serves through
+# CloudFront with
+#
+#     Cache-Control: public, max-age=0, s-maxage=31536000
+#
+# so each EDGE may hold an object for a YEAR. The origin had the re-branded
+# manifest; the edge the phone happened to reach still had the pre-rebrand one.
+# A rebrand that takes a year to reach some users has not shipped.
+#
+# DEPLOY.md already says this about version.json, sw.js and the HTML shell:
+# "Do not put a CDN cache in front of those three or already-installed testers
+# stop seeing new builds." The manifest and its icons belong on that list for
+# exactly the same reason -- they are IDENTITY, and identity changes when a
+# league rebrands or a new league launches.
+#
+# Content-hashed assets under /assets/* are deliberately left alone: their names
+# change when their bytes do, so a long edge TTL there is correct and is what
+# keeps the site fast.
+#
+# THE HOLE THIS FILE STILL HAD, measured 2026-08-08 from four CloudFront POPs
+# (PHX50, YTO50, DUB56, BNE50, JNB51 all agreed on the manifest -- that part is
+# genuinely fixed). But '/index.html' matches ONE request path: the bare '/'.
+# Amplify's SPA rewrite serves the same index.html for every unmatched route,
+# and the header rule is keyed to the REQUEST path, so every deep link measured
+# live still came back with the inherited default:
+#
+#     GET /            -> no-cache, must-revalidate      (correct)
+#     GET /app/        -> s-maxage=31536000              <-- a YEAR
+#     GET /tournaments -> s-maxage=31536000              <-- a YEAR
+#     GET /login       -> s-maxage=31536000              <-- a YEAR
+#
+# That is the HTML SHELL, the exact thing DEPLOY.md says must never sit behind a
+# CDN cache: it names the hashed JS/CSS, and (because league_pwa.py rewrites its
+# <head>) it carries <title>, apple-mobile-web-app-title and the
+# <link rel="manifest"> -- the whole iOS "Add to Home Screen" identity. A phone
+# that arrives on a shared tournament link rather than the bare domain can get a
+# year-old shell: an old build, and on iOS an old NAME and an old icon.
+#
+# So the broad rule goes FIRST and the narrow ones override it. Amplify applies
+# every matching pattern and the LAST value for a header key wins. Ordered this
+# way the failure mode if that precedence is ever wrong is that /assets/** also
+# revalidates -- slower, never stale. The reverse ordering would put a year back
+# on the shell, which is this bug. Cheap direction to be wrong in.
+customHeaders:
+  - pattern: '/**'
+    headers:
+      # The HTML shell, via the SPA rewrite, on every route that is not a real
+      # file. Overridden below for content-hashed assets.
+      - key: 'Cache-Control'
+        value: 'no-cache, must-revalidate'
+  - pattern: '/assets/**'
+    headers:
+      # Content-hashed: the filename changes when the bytes do, so a year at the
+      # edge is correct and is what keeps the site fast. This must stay AFTER
+      # '/**' or the shell rule above would swallow it.
+      - key: 'Cache-Control'
+        value: 'public, max-age=31536000, immutable'
+  - pattern: '/leagues/**'
+    headers:
+      # The per-request manifest (server/app.ts + src/lib/pwaManifest.ts) names
+      # icons here -- leagues/<slug>/icon-192.png -- and iOS reads
+      # leagues/<slug>/icon-180.png. Same identity rule as /icons/**; this path
+      # was measured live still inheriting s-maxage=31536000.
+      - key: 'Cache-Control'
+        value: 'public, max-age=0, s-maxage=60, must-revalidate'
+  - pattern: '/manifest.json'
+    headers:
+      - key: 'Cache-Control'
+        value: 'public, max-age=0, s-maxage=60, must-revalidate'
+  - pattern: '/icons/**'
+    headers:
+      # The install icon is identity too -- a stale one puts TKO's mark on a
+      # league's home screen even when the name is right.
+      - key: 'Cache-Control'
+        value: 'public, max-age=0, s-maxage=60, must-revalidate'
+  - pattern: '/version.json'
+    headers:
+      # The update prompt compares this to the running build. Cached, installed
+      # users simply stop being told there is a new version.
+      - key: 'Cache-Control'
+        value: 'no-store, must-revalidate'
+  - pattern: '/sw.js'
+    headers:
+      - key: 'Cache-Control'
+        value: 'no-store, must-revalidate'
+  - pattern: '/index.html'
+    headers:
+      - key: 'Cache-Control'
+        value: 'no-cache, must-revalidate'

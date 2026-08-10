@@ -16,6 +16,8 @@
  * helper below is unit-testable outside a browser.
  */
 
+import { writeAuthToken } from './authTokenStorage'
+
 /** The slice of the backend client this module actually uses. */
 export type AccountClient = {
   functions: { invoke: (name: string, opts?: { body?: unknown }) => Promise<{ data: unknown; error: { message?: string } | null }> }
@@ -70,7 +72,7 @@ export async function deleteAccount(client: AccountClient): Promise<DeleteAccoun
     try { await client.auth.signOut() } catch { /* the session is gone either way */ }
     // Belt and braces: drop the raw token the real shim keeps, in case signOut
     // above failed against a backend that no longer recognises us.
-    try { localStorage.removeItem('kc_token') } catch { /* noop */ }
+    await writeAuthToken(null)
     return result
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : 'Network error' }
